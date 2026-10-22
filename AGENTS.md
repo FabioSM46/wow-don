@@ -462,12 +462,13 @@ Se un gate fallisce, l'implementazione non è finita.
 | ------------ | ---- |
 | `detect`     | Controlli di privacy sull'albero e sui commit della PR, poi classifica i file cambiati con `scripts/changed-areas.sh` |
 | `backend`    | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` (con le librerie di sistema di Tauri) |
+| `backend-windows` | `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` su `windows-latest` (D23); stesso selettore di `backend` |
 | `frontend`   | `pnpm install --frozen-lockfile`, `pnpm build` |
 | `automation` | Tutta la suite `scripts/test/*.test.sh` più `test_deepseek_review.py` |
 | `ci-gate`    | L'unico check stabile: verifica che ogni job selezionato abbia avuto successo e ogni salto fosse autorizzato |
 
 Su una PR verso una base diversa da `main`, `detect` seleziona i job dal diff: `src-tauri/**`
-attiva `backend`, `src/**` e i file di toolchain del frontend attivano `frontend`,
+attiva `backend` e `backend-windows`, `src/**` e i file di toolchain del frontend attivano `frontend`,
 `package.json`/`pnpm-lock.yaml` attivano entrambi, `ci.yml` attiva tutto, la documentazione non
 attiva niente. `automation` gira sempre. Un percorso non riconosciuto o un diff illeggibile
 attivano tutto (fallimento aperto). Su una PR verso `main` gira tutto.
@@ -479,6 +480,16 @@ Due trappole:
 2. **`cancel-in-progress` produce job CANCELLED, che `pr-status-json` conta come falliti.** In
    `ci.yml` la cancellazione vale solo per eventi `pull_request`, dove la run cancellata
    appartiene sempre a un commit che non è più la testa.
+
+### Rilascio
+
+`.github/workflows/release.yml` parte con un tag `v*`, accettato **solo su un commit già in
+`main`** (quindi passato da una PR con `ci-gate` verde): il job `verify` lo controlla prima di
+costruire. Poi costruisce il `.deb` su `ubuntu-latest` e l'installer NSIS su `windows-latest` (D24)
+e crea una **release in bozza** con i due pacchetti; se la bozza esiste già ne sostituisce i
+pacchetti, mentre una release già pubblicata non viene mai toccata.
+La pubblicazione resta umana. Solo il job che crea la bozza ha `contents: write`. L'installer non
+è firmato: Windows mostra l'avviso di SmartScreen finché non si decide come firmarlo.
 
 Le action sono fissate per SHA completo con l'etichetta della release, e il checkout non
 conserva le credenziali (`scripts/test/actions-hardening.test.sh`). Il toolchain Rust è fissato

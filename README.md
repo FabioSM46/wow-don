@@ -171,6 +171,12 @@ Il branch di integrazione è `develop` (branch predefinito); `main` riceve solo 
 lavoro passa da issue → PR verso `develop` → CI e review automatica DeepSeek → merge. Le regole
 per gli agenti AI e i dettagli della pipeline sono in [AGENTS.md](AGENTS.md).
 
+## Rilascio
+
+Un tag `v<versione>` su un commit di `main` avvia `.github/workflows/release.yml`, che costruisce il `.deb` e
+l'installer per Windows e li allega a una release di GitHub in bozza. La release si
+pubblica a mano dopo averla controllata.
+
 ## Documentazione
 
 - [Contesto](docs/context.md)

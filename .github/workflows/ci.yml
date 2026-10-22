@@ -133,6 +133,34 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+  # The same backend on Windows (D23). No system packages are needed there, and
+  # formatting is platform-independent, so `cargo fmt --check` stays on Linux only.
+  # Selected by the same `backend` selector as the Linux job.
+  backend-windows:
+    needs: detect
+    if: ${{ !cancelled() && needs.detect.outputs.backend != 'false' }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Build
+        run: cargo build --locked
+      - name: Test
+        run: cargo test --locked
+
   # React/TypeScript frontend gates: `pnpm build` is `tsc && vite build`, so it is
   # the type-check and the bundle in one.
   frontend:
@@ -197,7 +225,7 @@ jobs:
   # always created after the whole matrix reaches a terminal state.
   ci_gate:
     name: ci-gate
-    needs: [detect, backend, frontend, automation]
+    needs: [detect, backend, backend-windows, frontend, automation]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -206,6 +234,7 @@ jobs:
       DETECT_RESULT: ${{ needs.detect.result }}
       BACKEND_SELECTED: ${{ needs.detect.outputs.backend }}
       BACKEND_RESULT: ${{ needs.backend.result }}
+      BACKEND_WINDOWS_RESULT: ${{ needs.backend-windows.result }}
       FRONTEND_SELECTED: ${{ needs.detect.outputs.frontend }}
       FRONTEND_RESULT: ${{ needs.frontend.result }}
       HELPERS_SELECTED: ${{ needs.detect.outputs.helpers }}
