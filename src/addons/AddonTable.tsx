@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   api,
@@ -27,12 +27,10 @@ type Props = { installation: Installation };
  * controllata non si richiama CurseForge.
  */
 const updatesCache = new Map<string, AddonUpdate[]>();
-
-type Check =
-  | { state: "idle" }
-  | { state: "checking" }
-  | { state: "error"; message: string }
-  | { state: "done"; updates: Map<string, AddonUpdate> };
+/** Installazioni con un controllo automatico già partito, per non chiamare CurseForge due volte. */
+const autoChecked = new Set<string>();
+/** L'ultimo errore del controllo per installazione, per mostrarlo anche tornandoci. */
+const errorCache = new Map<string, string>();
 
 function byFolder(updates: AddonUpdate[]): Map<string, AddonUpdate> {
   return new Map(updates.map((update) => [update.folder, update]));
@@ -56,36 +54,49 @@ export function AddonTable({ installation }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<Sort>(defaultSort);
-  const [check, setCheck] = useState<Check>({ state: "idle" });
+  // L'ultimo risultato valido resta visibile anche durante un nuovo controllo, così la tabella
+  // e il filtro "Solo con aggiornamenti" non si svuotano mentre si aspetta.
+  const [updates, setUpdates] = useState<Map<string, AddonUpdate> | undefined>();
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  // Il componente non si rimonta cambiando installazione: ogni risposta, automatica o dal
+  // pulsante, si applica solo se l'installazione è ancora quella per cui è partita.
+  const currentId = useRef(installation.id);
+  currentId.current = installation.id;
 
-  const runCheck = useCallback(
-    (cancelled: () => boolean = () => false) => {
-      setCheck({ state: "checking" });
-      api
-        .checkUpdates(installation.id)
-        .then((updates) => {
-          updatesCache.set(installation.id, updates);
-          if (!cancelled()) setCheck({ state: "done", updates: byFolder(updates) });
-        })
-        .catch((err) => {
-          if (!cancelled()) setCheck({ state: "error", message: errorMessage(err) });
-        });
-    },
-    [installation.id],
-  );
+  const runCheck = useCallback(() => {
+    const id = installation.id;
+    setChecking(true);
+    setCheckError(null);
+    api
+      .checkUpdates(id)
+      .then((result) => {
+        updatesCache.set(id, result);
+        errorCache.delete(id);
+        if (currentId.current !== id) return;
+        setUpdates(byFolder(result));
+        setChecking(false);
+      })
+      .catch((err) => {
+        errorCache.set(id, errorMessage(err));
+        if (currentId.current !== id) return;
+        setCheckError(errorMessage(err));
+        setChecking(false);
+        // Senza nessun risultato il filtro non ha dati su cui agire: lo si toglie.
+        if (!updatesCache.has(id)) setFilters((f) => ({ ...f, onlyUpdates: false }));
+      });
+  }, [installation.id]);
 
   // Primo accesso nella sessione: controllo automatico; poi solo con il pulsante.
   useEffect(() => {
     const cached = updatesCache.get(installation.id);
-    if (cached) {
-      setCheck({ state: "done", updates: byFolder(cached) });
-      return;
+    setUpdates(cached ? byFolder(cached) : undefined);
+    setChecking(false);
+    setCheckError(errorCache.get(installation.id) ?? null);
+    if (!cached && !autoChecked.has(installation.id)) {
+      autoChecked.add(installation.id);
+      runCheck();
     }
-    let current = true;
-    runCheck(() => !current);
-    return () => {
-      current = false;
-    };
   }, [installation.id, runCheck]);
 
   useEffect(() => {
@@ -104,7 +115,6 @@ export function AddonTable({ installation }: Props) {
 
   const addons = load.state === "ready" ? load.addons : [];
   const authors = useMemo(() => authorsOf(addons), [addons]);
-  const updates = check.state === "done" ? check.updates : undefined;
   const visible = useMemo(
     () => visibleAddons(addons, filters, sort, updates),
     [addons, filters, sort, updates],
@@ -146,16 +156,16 @@ export function AddonTable({ installation }: Props) {
           <button
             className="button secondary"
             onClick={() => runCheck()}
-            disabled={check.state === "checking"}
+            disabled={checking}
           >
-            {check.state === "checking" ? "Controllo in corso…" : "Controlla aggiornamenti"}
+            {checking ? "Controllo in corso…" : "Controlla aggiornamenti"}
           </button>
         </div>
       </header>
 
-      {check.state === "error" && (
+      {checkError && (
         <p className="message error" role="alert">
-          {check.message}
+          {checkError}
         </p>
       )}
 
@@ -259,7 +269,7 @@ export function AddonTable({ installation }: Props) {
                       <ProjectCell update={updates?.get(addon.folder)} />
                       <UpdateCell
                         update={updates?.get(addon.folder)}
-                        checking={check.state === "checking"}
+                        checking={checking}
                       />
                     </tr>
                   ))}
