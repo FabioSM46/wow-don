@@ -32,7 +32,7 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | `addons::fingerprint` | Calcola i fingerprint di CurseForge (MurmurHash2 seme 1 senza spaziatura, sui file inclusi da `.toc` e `.xml`) per riconoscere gli addon installati | Esiste |
 | `sources` | Trait comune per le fonti (`search`, `versions`, `download`) | Da fare (oggi solo il modulo `curseforge`) |
 | `sources::curseforge` | Client per `https://api.curseforge.com/v1` con header `x-api-key`: fingerprint, mod, tipi di versione del gioco | Esiste |
-| `updates` | Abbina gli addon ai progetti CurseForge e trova il file Release più recente per la versione del gioco (`check_updates`) | Esiste (Retail e Classic Era; altri flavor da confermare) |
+| `updates` | Abbina gli addon ai progetti CurseForge e trova il file Release più recente per la versione del gioco (`check_updates`) | Esiste (Retail, Classic Era, Classic, Anniversary, WoW Forever; id verificati sull'API) |
 | `install` | Download, estrazione zip, sostituzione atomica delle cartelle | Da fare |
 | `store` | Stato locale: addon installati, fonte, versione, versione del gioco forzata | Esiste per le installazioni (`installations.json`, D22) |
 

@@ -15,18 +15,42 @@ use crate::sources::curseforge::{
     RELEASE_TYPE_RELEASE, Transport,
 };
 
-/// Tipo di versione del gioco di CurseForge (`gameVersionTypeId`) per il flavor di
-/// un'installazione.
+/// Tipi di versione del gioco di CurseForge (`gameVersionTypeId`), verificati il 2026-10-22 con
+/// il test `live_version_types` di `sources::curseforge` sull'API reale.
+pub const RETAIL: u32 = 517;
+pub const CLASSIC_ERA: u32 = 67408;
+/// "WoW Mists of Pandaria Classic". **Cambia con l'espansione**: quando la Classic progressiva
+/// passa all'espansione successiva, questo id va aggiornato con il tipo nuovo (il test
+/// `the_progressive_classic_is_mists` lo rende visibile nel diff).
+pub const CLASSIC_PROGRESSIVE: u32 = 79434;
+/// "WoW Burning Crusade Classic". L'elenco dei tipi di CurseForge non ha un tipo per la Classic
+/// Anniversary, e i `.toc` dell'Anniversary usano il suffisso `_TBC` (warcraft.wiki.gg, "TOC
+/// format": "Burning Crusade Classic and Classic Anniversary Edition"): gli addon Anniversary
+/// sono pubblicati sotto questo tipo. Se CurseForge aggiungerà un tipo dedicato, va cambiato.
+pub const ANNIVERSARY: u32 = 73246;
+/// "WoW Forever".
+pub const FOREVER: u32 = 88568;
+
+/// Tipo di versione del gioco per il flavor di un'installazione.
 ///
-/// Da confermare con il test `live_version_types` di `sources::curseforge`, che stampa i tipi
-/// reali: 517 (Retail) e 67408 (Classic Era) sono gli id usati dai client noti. Tutti gli altri
-/// flavor (`classic`, `anniversary`, `classic_beta`, ma anche PTR e beta, che hanno client e
-/// file propri) restano senza tipo finché l'id non è confermato: meglio un errore chiaro che
-/// un aggiornamento per la versione sbagliata.
+/// - `_retail_` → Retail; `_classic_era_` → Classic Era;
+/// - `_classic_` → la Classic progressiva attuale (Mists of Pandaria);
+/// - `_anniversary_` → Burning Crusade Classic (vedi [`ANNIVERSARY`]);
+/// - `_classic_beta_` → WoW Forever: è il client che usa quella cartella nell'installazione
+///   reale descritta in `docs/architecture.md`. Se un'altra beta di Classic tornasse a usarla,
+///   questa riga andrebbe rivista.
+///
+/// PTR, beta di Retail e Titan Reforged (81212) restano senza tipo finché non si sa con
+/// certezza quale cartella usano: meglio un errore chiaro che un aggiornamento per la versione
+/// sbagliata. Un seguito possibile è leggere il prodotto installato da `.build.info` invece di
+/// dedurlo dal nome della cartella.
 pub fn version_type_for(flavor: &str) -> Option<u32> {
     match flavor.trim_matches('_').to_ascii_lowercase().as_str() {
-        "retail" => Some(517),
-        "classic_era" => Some(67408),
+        "retail" => Some(RETAIL),
+        "classic_era" => Some(CLASSIC_ERA),
+        "classic" => Some(CLASSIC_PROGRESSIVE),
+        "anniversary" => Some(ANNIVERSARY),
+        "classic_beta" => Some(FOREVER),
         _ => None,
     }
 }
@@ -44,7 +68,7 @@ impl From<&File> for FileSummary {
         Self {
             id: file.id,
             name: if file.display_name.is_empty() {
-                file.file_name.clone()
+                file.file_name.clone().unwrap_or_default()
             } else {
                 file.display_name.clone()
             },
@@ -193,8 +217,7 @@ mod tests {
     use crate::addons::toc::TocInfo;
     use crate::sources::curseforge::{FileModule, ModLinks, SortableGameVersion};
 
-    const RETAIL: u32 = 517;
-    const ERA: u32 = 67408;
+    const ERA: u32 = CLASSIC_ERA;
 
     fn addon(folder: &str, fingerprint: Option<u32>) -> InstalledAddon {
         InstalledAddon {
@@ -212,7 +235,7 @@ mod tests {
             id,
             mod_id: 1,
             display_name: format!("File {id}"),
-            file_name: format!("file-{id}.zip"),
+            file_name: Some(format!("file-{id}.zip")),
             file_date: date.to_owned(),
             release_type,
             game_versions: Vec::new(),
@@ -349,13 +372,22 @@ mod tests {
         assert_eq!(result[0].project.as_ref().unwrap().id, 3);
     }
 
+    /// Fissa l'espansione attuale della Classic progressiva: quando cambia, questo test va
+    /// aggiornato insieme a `CLASSIC_PROGRESSIVE`, e il cambio si vede nel diff.
+    #[test]
+    fn the_progressive_classic_is_mists() {
+        assert_eq!(CLASSIC_PROGRESSIVE, 79434);
+    }
+
     #[test]
     fn version_types_by_flavor() {
         assert_eq!(version_type_for("retail"), Some(RETAIL));
         assert_eq!(version_type_for("_retail_"), Some(RETAIL));
         assert_eq!(version_type_for("classic_era"), Some(ERA));
-        assert_eq!(version_type_for("classic_beta"), None);
-        assert_eq!(version_type_for("anniversary"), None);
+        assert_eq!(version_type_for("classic"), Some(CLASSIC_PROGRESSIVE));
+        assert_eq!(version_type_for("anniversary"), Some(ANNIVERSARY));
+        assert_eq!(version_type_for("classic_beta"), Some(FOREVER));
+        assert_eq!(version_type_for("forever"), None);
         assert_eq!(version_type_for("ptr"), None);
         assert_eq!(version_type_for("beta"), None);
     }
