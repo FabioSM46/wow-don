@@ -27,7 +27,7 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | `config` | Legge `CURSEFORGE_API_KEY` dall'ambiente / `.env` | Esiste |
 | `commands` | Comandi Tauri esposti al frontend | Esiste (`app_status`) |
 | `installations` | Trova e gestisce le installazioni di WoW, anche dentro prefissi Wine | Esiste (aggiunta manuale e validazione; scoperta automatica da fare) |
-| `addons::toc` | Legge i file `.toc` in `Interface/AddOns` (titolo, versione, `## Interface`) | Da fare |
+| `addons::toc` | Legge i file `.toc` in `Interface/AddOns` (titolo, versione, `## Interface`) e sceglie il `.toc` giusto per il flavor dell'installazione | Esiste (parser e scelta del file; usato dalla scansione) |
 | `addons::fingerprint` | Calcola i fingerprint (MurmurHash2) per riconoscere gli addon installati | Da fare |
 | `sources` | Trait comune per le fonti (`search`, `versions`, `download`) | Da fare |
 | `sources::curseforge` | Client per `https://api.curseforge.com/v1` con header `x-api-key` | Da fare |
