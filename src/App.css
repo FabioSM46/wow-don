@@ -66,12 +66,12 @@ h2 {
   min-height: 100vh;
 }
 
-/* Intestazione, contenuto e piè di pagina condividono la stessa colonna. */
+/* Intestazione, contenuto e piè di pagina condividono la stessa colonna, larga quanto la
+   finestra: a schermo intero la tabella usa tutto lo spazio. */
 .app-header,
 .app-main,
 .app-footer {
   width: 100%;
-  max-width: 1200px;
   margin: 0 auto;
   padding-left: 32px;
   padding-right: 32px;
@@ -292,6 +292,7 @@ button:focus-visible {
 }
 
 .table-wrap {
+  container-type: inline-size;
   overflow-x: auto;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -306,6 +307,8 @@ button:focus-visible {
 
 .addon-table th,
 .addon-table td {
+  /* Un testo lungo senza spazi va a capo invece di allargare la tabella oltre la finestra. */
+  overflow-wrap: anywhere;
   padding: 8px 14px;
   text-align: left;
   vertical-align: top;
@@ -370,12 +373,28 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+/* Più versioni dell'interfaccia vanno a capo dopo la virgola invece di allargare la tabella. */
+.mono.interface {
+  white-space: normal;
+}
+
+/* Testo lungo su una riga sola, accorciato con "…": il testo intero è nel suggerimento. */
+.clip {
+  display: block;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Aggiornamenti */
 
 .section-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .button.secondary {
@@ -448,5 +467,19 @@ button:focus-visible {
 
 .sub-title::before {
   content: "└ ";
+}
+
+/* Tabella stretta (finestra piccola): meno spazio tra le colonne, così le intestazioni,
+   che non vanno a capo, stanno nella larghezza invece di far comparire la barra in basso. */
+@container (max-width: 960px) {
+  .addon-table th,
+  .addon-table td {
+    padding-left: 7px;
+    padding-right: 7px;
+  }
+
+  .addon-table th {
+    letter-spacing: 0.02em;
+  }
 }
 

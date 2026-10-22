@@ -127,6 +127,25 @@ export function AddonTable({ installation }: Props) {
     };
   }, [installation.id]);
 
+  // Rilegge `Interface/AddOns` senza svuotare la tabella né perdere filtri e righe aperte:
+  // serve dopo aver installato o tolto addon fuori dall'app.
+  const [rescanning, setRescanning] = useState(false);
+  function rescan() {
+    const id = installation.id;
+    setRescanning(true);
+    api
+      .listAddons(id)
+      .then((addons) => {
+        if (currentId.current === id) setLoad({ state: "ready", addons });
+      })
+      .catch((err) => {
+        if (currentId.current === id) setLoad({ state: "error", message: errorMessage(err) });
+      })
+      .finally(() => {
+        if (currentId.current === id) setRescanning(false);
+      });
+  }
+
   const addons = load.state === "ready" ? load.addons : [];
   // Un addon fatto di più cartelle è una riga sola: conteggi e filtri contano i gruppi.
   const groups = useMemo(() => groupAddons(addons, updates), [addons, updates]);
@@ -169,6 +188,14 @@ export function AddonTable({ installation }: Props) {
               {updateCount > 0 && ` · ${updateCount} da aggiornare`}
             </span>
           )}
+          <button
+            className="button secondary"
+            onClick={rescan}
+            disabled={rescanning || load.state === "loading"}
+            title="Rilegge la cartella Interface/AddOns"
+          >
+            {rescanning ? "Lettura…" : "Rileggi addon"}
+          </button>
           <button
             className="button secondary"
             onClick={() => runCheck()}
@@ -316,8 +343,12 @@ export function AddonTable({ installation }: Props) {
                             )}
                           </td>
                           <td>{addon.version ?? "—"}</td>
-                          <td>{addon.author ?? "—"}</td>
-                          <td className="mono">
+                          <td>
+                            <span className="clip" title={addon.author ?? undefined}>
+                              {addon.author ?? "—"}
+                            </span>
+                          </td>
+                          <td className="mono interface">
                             {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
                           </td>
                           <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
@@ -340,8 +371,12 @@ export function AddonTable({ installation }: Props) {
                               </td>
                               <td className="mono">{other.folder}</td>
                               <td>{other.version ?? "—"}</td>
-                              <td>{other.author ?? "—"}</td>
-                              <td className="mono">
+                              <td>
+                                <span className="clip" title={other.author ?? undefined}>
+                                  {other.author ?? "—"}
+                                </span>
+                              </td>
+                              <td className="mono interface">
                                 {other.interface.length > 0 ? other.interface.join(", ") : "—"}
                               </td>
                               <td className="nowrap">{formatModified(other.modifiedMs)}</td>
