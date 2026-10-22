@@ -12,7 +12,8 @@
 //!
 //! Scritto da zero da questa descrizione, senza codice di altri progetti.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -261,6 +262,11 @@ fn resolve(dir: &str, name: &str, files: &FileIndex) -> Option<String> {
 }
 
 /// Indice di tutti i file sotto `addon_dir`, con percorsi relativi alla cartella `AddOns`.
+///
+/// I link simbolici a cartelle **non** si seguono: un ciclo (`Foo/loop -> Foo`) bloccherebbe
+/// la scansione e un link verso l'esterno farebbe leggere file fuori dall'addon. La cartella
+/// dell'addon stessa può essere un link (addon in sviluppo collegati in `AddOns`): si parte
+/// da lì. Un link a un file conta come il file.
 fn index_files(addon_dir: &Path, folder: &str) -> FileIndex {
     let mut index = FileIndex::new();
     let mut stack = vec![(addon_dir.to_path_buf(), folder.to_owned())];
@@ -273,12 +279,17 @@ fn index_files(addon_dir: &Path, folder: &str) -> FileIndex {
                 continue;
             };
             let child = format!("{relative}/{name}");
-            match fs::metadata(entry.path()) {
-                Ok(meta) if meta.is_dir() => stack.push((entry.path(), child)),
-                Ok(_) => {
+            let Ok(link_meta) = fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            if link_meta.is_dir() {
+                stack.push((entry.path(), child));
+            } else if link_meta.file_type().is_symlink() {
+                if fs::metadata(entry.path()).is_ok_and(|target| target.is_file()) {
                     index.insert(child.to_lowercase(), child);
                 }
-                Err(_) => {}
+            } else {
+                index.insert(child.to_lowercase(), child);
             }
         }
     }
@@ -287,21 +298,39 @@ fn index_files(addon_dir: &Path, folder: &str) -> FileIndex {
 
 /// Il fingerprint della cartella di un addon. `addon_dir` è la cartella in `AddOns`; il suo
 /// nome è quello dell'addon. Solo lettura.
+///
+/// `None` se nessun file entra nel calcolo (cartella vuota, o solo file che il calcolo non
+/// conosce): l'hash di un insieme vuoto sarebbe la stessa costante per tutte queste cartelle e
+/// potrebbe corrispondere per sbaglio a qualcosa su CurseForge.
+///
+/// Costo: legge per intero ogni file che entra nel calcolo, una volta sola. Va bene alla
+/// cadenza attuale (una scansione quando si apre o si aggiorna un'installazione); se un
+/// giorno la scansione diventasse frequente, conviene una cache per cartella.
 pub fn folder_fingerprint(addon_dir: &Path) -> Option<u32> {
     let folder = addon_dir.file_name()?.to_str()?;
     let addons_dir = addon_dir.parent()?;
     let files = index_files(addon_dir, folder);
-    let read = |relative: &str| {
-        fs::read(addons_dir.join(relative))
-            .ok()
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    // I `.toc` e gli `.xml` si leggono per trovare le inclusioni e di nuovo per l'hash: i byte
+    // letti la prima volta si riusano.
+    let cache: RefCell<HashMap<String, Option<Vec<u8>>>> = RefCell::new(HashMap::new());
+    let bytes_of = |relative: &str| {
+        cache
+            .borrow_mut()
+            .entry(relative.to_owned())
+            .or_insert_with(|| fs::read(addons_dir.join(relative)).ok())
+            .clone()
     };
-    let selected = select_files(folder, &files, read);
-    let hashes = selected
+    let selected = select_files(folder, &files, |relative| {
+        bytes_of(relative).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    });
+    let hashes: Vec<u32> = selected
         .iter()
-        .filter_map(|relative| fs::read(addons_dir.join(relative)).ok())
+        .filter_map(|relative| bytes_of(relative))
         .map(|bytes| curse_hash(&bytes))
         .collect();
+    if hashes.is_empty() {
+        return None;
+    }
     Some(combine(hashes))
 }
 
@@ -462,6 +491,49 @@ mod tests {
             xml_include_in_line(r#"<Script file="a.lua"/><Script file="../b.lua"/>"#).as_deref(),
             Some("a.lua")
         );
+    }
+
+    #[test]
+    fn a_folder_with_nothing_to_count_has_no_fingerprint() {
+        let tmp = TempDir::new();
+        let dir = tmp.path().join("Interface/AddOns/Foo");
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(folder_fingerprint(&dir), None);
+        fs::write(dir.join("Foo_Standard.toc"), "## Title: Foo\n").unwrap();
+        fs::write(dir.join("readme.txt"), "x").unwrap();
+        assert_eq!(folder_fingerprint(&dir), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_links_are_not_followed() {
+        let tmp = TempDir::new();
+        let dir = tmp.path().join("Interface/AddOns/Foo");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.lua"), "x").unwrap();
+        // Un ciclo e un link verso l'esterno: nessuno dei due deve essere attraversato.
+        std::os::unix::fs::symlink(&dir, dir.join("loop")).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("ext")).unwrap();
+        fs::write(
+            dir.join("Foo.toc"),
+            "Foo.lua\next/secret.lua\nloop/Foo.lua\n",
+        )
+        .unwrap();
+        fs::write(dir.join("Foo.lua"), "print('a')\n").unwrap();
+
+        let index = index_files(&dir, "Foo");
+        assert!(
+            index
+                .keys()
+                .all(|k| !k.contains("secret") && !k.contains("loop"))
+        );
+        let expected = combine(vec![
+            curse_hash(b"Foo.lua\next/secret.lua\nloop/Foo.lua\n"),
+            curse_hash(b"print('a')\n"),
+        ]);
+        assert_eq!(folder_fingerprint(&dir), Some(expected));
     }
 
     #[test]
