@@ -483,8 +483,11 @@ Due trappole:
 
 ### Rilascio
 
-`.github/workflows/release.yml` parte con un tag `v*`: costruisce il `.deb` su `ubuntu-latest` e
-l'installer NSIS su `windows-latest` (D24), poi crea una **release in bozza** con i due pacchetti.
+`.github/workflows/release.yml` parte con un tag `v*`, accettato **solo su un commit già in
+`main`** (quindi passato da una PR con `ci-gate` verde): il job `verify` lo controlla prima di
+costruire. Poi costruisce il `.deb` su `ubuntu-latest` e l'installer NSIS su `windows-latest` (D24)
+e crea una **release in bozza** con i due pacchetti; se la bozza esiste già ne sostituisce i
+pacchetti, mentre una release già pubblicata non viene mai toccata.
 La pubblicazione resta umana. Solo il job che crea la bozza ha `contents: write`. L'installer non
 è firmato: Windows mostra l'avviso di SmartScreen finché non si decide come firmarlo.
 
