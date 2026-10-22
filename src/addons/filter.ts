@@ -113,19 +113,23 @@ function pickMain(group: InstalledAddon[]): InstalledAddon {
   )[0];
 }
 
-/** Lo stato di aggiornamento del gruppo: quello della principale, o di un'altra cartella riconosciuta. */
+/**
+ * Lo stato di aggiornamento del gruppo. Riguarda il **progetto**, non una cartella: le
+ * cartelle di un progetto arrivano dallo stesso file pubblicato. Vince un aggiornamento
+ * disponibile in una cartella qualsiasi, poi uno stato con progetto, poi quello della
+ * principale.
+ */
 export function groupUpdate(
   group: AddonGroup,
   updates?: Map<string, AddonUpdate>,
 ): AddonUpdate | undefined {
   if (!updates) return undefined;
-  const main = updates.get(group.main.folder);
-  if (main?.project) return main;
-  for (const other of group.others) {
-    const update = updates.get(other.folder);
-    if (update?.project) return update;
-  }
-  return main;
+  const all = [group.main, ...group.others].map((a) => updates.get(a.folder));
+  return (
+    all.find((u) => u?.status === "updateAvailable") ??
+    all.find((u) => u?.project) ??
+    updates.get(group.main.folder)
+  );
 }
 
 /** Il titolo da mostrare: quello del `.toc`, altrimenti il nome della cartella. */
@@ -197,7 +201,7 @@ export function matchesGroup(
   updates?: Map<string, AddonUpdate>,
 ): boolean {
   const update = groupUpdate(group, updates);
-  if (filters.onlyErrors && ![group.main, ...group.others].some((a) => a.error !== null)) {
+  if (filters.onlyErrors && ![group.main, ...group.others].some((a) => Boolean(a.error))) {
     return false;
   }
   const withoutErrorFilter = { ...filters, onlyErrors: false, query: "" };
@@ -210,20 +214,21 @@ export function matchesGroup(
   );
 }
 
+/** Filtra e ordina gruppi già calcolati con `groupAddons`: conteggio e righe usano gli stessi. */
 export function visibleGroups(
-  addons: InstalledAddon[],
+  groups: AddonGroup[],
   filters: Filters,
   sort: Sort,
   updates?: Map<string, AddonUpdate>,
 ): AddonGroup[] {
-  const groups = groupAddons(addons, updates).filter((g) => matchesGroup(g, filters, updates));
+  const filtered = groups.filter((g) => matchesGroup(g, filters, updates));
   const order = new Map(
     sortAddons(
-      groups.map((g) => g.main),
+      filtered.map((g) => g.main),
       sort,
     ).map((main, index) => [main.folder, index]),
   );
-  return groups.sort((a, b) => order.get(a.main.folder)! - order.get(b.main.folder)!);
+  return filtered.sort((a, b) => order.get(a.main.folder)! - order.get(b.main.folder)!);
 }
 
 /** Clic su un'intestazione: stessa colonna inverte la direzione, colonna nuova parte da quella naturale. */

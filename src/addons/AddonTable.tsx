@@ -132,8 +132,8 @@ export function AddonTable({ installation }: Props) {
   const groups = useMemo(() => groupAddons(addons, updates), [addons, updates]);
   const authors = useMemo(() => authorsOf(groups.map((g) => g.main)), [groups]);
   const visible = useMemo(
-    () => visibleGroups(addons, filters, sort, updates),
-    [addons, filters, sort, updates],
+    () => visibleGroups(groups, filters, sort, updates),
+    [groups, filters, sort, updates],
   );
   const updateCount = groups.filter(
     (g) => groupUpdate(g, updates)?.status === "updateAvailable",
@@ -306,7 +306,14 @@ export function AddonTable({ installation }: Props) {
                           </td>
                           <td className="mono">
                             {addon.folder}
-                            {hasOthers && <span className="more-folders">+{others.length}</span>}
+                            {hasOthers && (
+                              <span
+                                className="more-folders"
+                                aria-label={`e altre ${others.length} cartelle: ${others.map((o) => o.folder).join(", ")}`}
+                              >
+                                +{others.length}
+                              </span>
+                            )}
                           </td>
                           <td>{addon.version ?? "—"}</td>
                           <td>{addon.author ?? "—"}</td>
@@ -391,15 +398,26 @@ function UpdateCell({ update, checking }: { update?: AddonUpdate; checking: bool
   switch (update.status) {
     case "updateAvailable":
       return (
-        <td className="update-available" title={update.latest.date}>
+        <td className="update-available" title={installedTitle(update, update.latest.date)}>
           {update.latest.name}
         </td>
       );
     case "upToDate":
-      return <td className="muted">Aggiornato</td>;
+      return (
+        <td className="muted" title={installedTitle(update)}>
+          Aggiornato
+        </td>
+      );
     case "error":
       return <td className="error">{update.message}</td>;
     case "notMatched":
       return <td />;
   }
+}
+
+/** Lo stato riguarda il progetto: il suggerimento dice quale file del progetto è installato. */
+function installedTitle(update: AddonUpdate, latestDate?: string): string | undefined {
+  const installed = update.installedFile ? `Installato: ${update.installedFile.name}` : undefined;
+  const latest = latestDate ? `Nuovo file del ${latestDate.slice(0, 10)}` : undefined;
+  return [installed, latest].filter(Boolean).join("\n") || undefined;
 }
