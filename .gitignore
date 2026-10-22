@@ -28,3 +28,4 @@ dist-ssr
 
 # Bytecode Python dei test del reviewer
 __pycache__/
+*.py[cod]

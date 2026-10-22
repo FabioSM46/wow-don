@@ -62,8 +62,10 @@ La UI deve essere **minimale e moderna** (decisione D20 in `docs/decisions.md`).
   (font di sistema), al massimo due pesi e pochi corpi. Niente gradienti, ombre pesanti, bordi
   doppi, icone decorative o animazioni che non comunicano uno stato.
 - **Colore con parsimonia.** Una palette neutra con un solo colore d'accento; il colore segnala
-  stato (errore, avviso, selezione), non abbellisce. Chiaro e scuro sono entrambi obbligatori,
-  con le variabili CSS già in `src/App.css`.
+  stato (errore, avviso, selezione), non abbellisce. Chiaro e scuro sono entrambi obbligatori:
+  oggi `src/App.css` cambia solo testo e sfondo con `prefers-color-scheme`; i colori nuovi vanno
+  definiti come variabili CSS in `:root`, con i valori del tema scuro nel blocco
+  `prefers-color-scheme: dark`, invece di essere scritti nei singoli componenti.
 - **I dati in primo piano.** Ricerca, filtri e ordinamento sono il punto di forza dell'app (D4):
   la casella di ricerca è sempre visibile, i filtri sono compatti, le tabelle sono dense ma
   leggibili.
