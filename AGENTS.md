@@ -80,13 +80,17 @@ artifact. Per questo valgono già adesso le regole di un repository pubblico.
 percorso della macchina, indirizzo di rete privato), copiate in ciascuno e tenute uguali da
 `scripts/test/commit-privacy.test.sh`:
 
-- `bash scripts/check-publication-privacy.sh` legge il contenuto dei file tracciati;
+- `bash scripts/check-publication-privacy.sh` legge il contenuto dei file nell'indice (quello che
+  un push pubblica, non la cartella di lavoro); con `<base> <head>` legge anche l'albero di ogni
+  commit del range, perché un dato aggiunto in un commit e tolto in quello dopo lascia pulita la
+  punta ma resta nella storia pubblicata; con `--all-history` legge ogni commit raggiungibile;
 - `bash scripts/check-commit-privacy.sh <base> <head>` legge autore, committer e messaggio di ogni
   commit che il branch aggiunge;
 - `bash scripts/check-body-privacy.sh` legge un corpo di issue o PR da stdin. Usalo prima di
   pubblicare: `bash scripts/check-body-privacy.sh < corpo.md`.
 
-Esegui i primi due prima di ogni push: la CI li esegue nel job `detect` e una violazione blocca la
+Esegui i primi due prima di ogni push, entrambi con il range del branch
+(`"origin/$BASE_BRANCH" HEAD`): la CI li esegue nel job `detect` sul range della PR, e una violazione blocca la
 PR anche con tutto il resto verde. Le diagnostiche nominano solo posizione e categoria, mai il
 valore trovato; quando un controllo fallisce, togli il dato prima di continuare invece di
 ristamparlo in un altro messaggio.
@@ -99,8 +103,11 @@ un run verde significa "niente è pubblicato ora", mai "niente è mai stato pubb
 superficie che una macchina scrive più spesso: un agente che scrive il corpo di una PR trascrive
 quello che ha appena fatto, e l'ha fatto in una cartella con un nome.
 
-**Prima di rendere pubblico il repository**: esegui `check-publication-privacy.sh` sull'albero e
-`check-commit-privacy.sh` su tutta la storia, rileggi a mano titoli e corpi di issue e PR già
+**Prima di rendere pubblico il repository**: esegui `check-publication-privacy.sh --all-history`
+e `check-commit-privacy.sh` su tutta la storia. Gli script riconoscono solo le tre categorie
+(email, percorsi, indirizzi di rete privati) e i file `.env`: non sono uno scanner di segreti.
+Chiavi API e token con altre forme non li vedono, quindi passa anche uno scanner dedicato
+(per esempio gitleaks) su tutta la storia. Poi rileggi a mano titoli e corpi di issue e PR già
 aperte, controlla i secret e verifica che i ruleset siano ancora attivi dopo il cambio di
 visibilità.
 
@@ -108,7 +115,6 @@ visibilità.
 
 - **Niente segreti nel codice**: chiavi, token e credenziali stanno nei GitHub Secrets o in file
   locali ignorati, mai in git, nei log, nelle issue o nelle PR.
-
 - **Commit**: mai committare senza richiesta esplicita; stile conventional commit (`feat:`,
   `fix:`, `refactor:`, `docs:`, `ci:`).
 - **Prima leggere, poi scrivere**: cerca i pattern esistenti prima di implementare.

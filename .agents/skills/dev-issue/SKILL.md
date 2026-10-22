@@ -272,8 +272,8 @@ La formattazione è il gate saltato più spesso e quello che arrossa più spesso
 - [ ] Nessuna stampa di debug nel codice di produzione
 - [ ] Nessun segreto, token o chiave nel codice o nei test
 - [ ] Chiave API solo nel backend, mai nel frontend né nei log
-- [ ] Privacy di pubblicazione pulita: `check-publication-privacy.sh` sull'albero e
-      `check-commit-privacy.sh` sui commit del branch
+- [ ] Privacy di pubblicazione pulita: `check-publication-privacy.sh` sull'indice e su ogni
+      commit del branch, `check-commit-privacy.sh` su autore e messaggi dei commit del branch
 
 ### Passo 7: commit, poi misura quello che il reviewer dovrà leggere
 
@@ -328,15 +328,15 @@ verificabile.
 
 ### Passo 8: push e PR
 
-Prima del push i due controlli di privacy: il contenuto tracciato e i commit che il branch
-aggiunge (autore, committer e messaggio). Prima di creare la PR, il corpo. Un controllo fallito
+Prima del push i due controlli di privacy: il contenuto (l'indice e ogni commit che il branch
+aggiunge, uno per uno) e i metadati dei commit (autore, committer e messaggio). Prima di creare la PR, il corpo. Un controllo fallito
 blocca la pubblicazione anche con tutti i gate verdi: togli il dato prima di continuare, senza
 ristamparlo in un altro messaggio. Il corpo di una PR descrive quello che hai appena fatto, e
 l'hai fatto in una cartella con un nome: scrivi `<worktree>` o `<repo-root>`, mai il percorso.
 
 ```bash
 # Dal worktree, con il commit del Passo 7 già fatto:
-bash scripts/check-publication-privacy.sh
+bash scripts/check-publication-privacy.sh "origin/$BASE_BRANCH" HEAD
 bash scripts/check-commit-privacy.sh "origin/$BASE_BRANCH" HEAD
 git push -u origin HEAD
 

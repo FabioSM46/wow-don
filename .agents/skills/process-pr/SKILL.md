@@ -153,7 +153,7 @@ if ! git merge-base --is-ancestor "$BASE_HEAD" HEAD; then
   # Esegui tutti i gate coinvolti, poi:
   git add -A
   git commit -m "fix: reconcile ${BASE_BRANCH} on PR #<pr-number>"
-  bash scripts/check-publication-privacy.sh
+  bash scripts/check-publication-privacy.sh "origin/$BASE_BRANCH" HEAD
   bash scripts/check-commit-privacy.sh "origin/$BASE_BRANCH" HEAD
   git push origin HEAD
   REMOTE_HEAD=$(git rev-parse HEAD)
@@ -355,7 +355,7 @@ if git diff --cached --quiet; then
   echo "No source changes to commit"
 else
   git commit -m "fix: address feedback on PR #<pr-number>"
-  bash scripts/check-publication-privacy.sh
+  bash scripts/check-publication-privacy.sh "origin/$BASE_BRANCH" HEAD
   bash scripts/check-commit-privacy.sh "origin/$BASE_BRANCH" HEAD
   git fetch origin "$BRANCH"
   [ "$(git rev-parse "origin/$BRANCH")" = "$REMOTE_HEAD" ] || {

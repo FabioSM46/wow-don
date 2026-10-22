@@ -7,8 +7,8 @@ pubblicato resterebbe leggibile per sempre. Mai un indirizzo email reale, dati p
 utente o percorso della macchina, hostname privato, segreto o credenziale in un file tracciato,
 commit, branch, PR, review, log della CI o artifact. Usa l'indirizzo `noreply` di GitHub, valori
 di esempio riservati e segnaposto come `<repo-root>`. Prima di ogni push esegui
-`bash scripts/check-publication-privacy.sh` sull'albero e
-`bash scripts/check-commit-privacy.sh <base> <head>` sui commit che il branch aggiunge; prima di
+`bash scripts/check-publication-privacy.sh <base> <head>` sul contenuto (indice e ogni commit
+del branch) e `bash scripts/check-commit-privacy.sh <base> <head>` su autore e messaggi; prima di
 pubblicare un corpo di issue o PR, `bash scripts/check-body-privacy.sh`.
 
 La chiave CurseForge sta solo in `.env` (ignorato da git) e nel backend Rust. Gli agenti non

@@ -8,40 +8,50 @@
 # scripts/test/commit-privacy.test.sh pins the set to each other, so widening a pattern
 # here without widening it there fails until they agree. Changing anything below is
 # therefore a change to every surface at once — which is the intent.
+#
+# What is scanned is what a push publishes, never the working tree:
+#
+#   (no arguments)            the index — the tree the next commit or push carries;
+#   <base> <head>             the index, and then every commit in <base>..<head>, one
+#                             tree at a time. A value added in one commit and removed in a
+#                             later one leaves a clean tip and is still published with the
+#                             history; only a per-commit scan can see it;
+#   --all-history             every commit reachable from any ref. Run it once before the
+#                             repository's visibility changes.
+#
+# A finding inside a commit is reported as `<short-sha> <path>:<line>`.
 
 set -euo pipefail
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
-mapfile -d '' tracked_files < <(git ls-files -z)
-if [ "${#tracked_files[@]}" -eq 0 ]; then
-  echo "publication privacy: no tracked files found" >&2
-  exit 2
-fi
+commits=()
+case "$#" in
+  0) ;;
+  1)
+    if [ "$1" != "--all-history" ]; then
+      echo "usage: check-publication-privacy.sh [<base> <head> | --all-history]" >&2
+      exit 2
+    fi
+    mapfile -t commits < <(git rev-list --all)
+    ;;
+  2)
+    for rev in "$1" "$2"; do
+      if ! git rev-parse --verify --quiet "${rev}^{commit}" >/dev/null; then
+        echo "publication privacy: cannot resolve commit range endpoint" >&2
+        exit 2
+      fi
+    done
+    mapfile -t commits < <(git rev-list "$1..$2")
+    ;;
+  *)
+    echo "usage: check-publication-privacy.sh [<base> <head> | --all-history]" >&2
+    exit 2
+    ;;
+esac
 
 violations=0
-scannable_files=()
-for path in "${tracked_files[@]}"; do
-  basename=${path##*/}
-  case "$basename" in
-    .env)
-      echo "publication privacy: ${path} is a tracked secret-bearing environment file" >&2
-      violations=$((violations + 1))
-      ;;
-    .env.*)
-      if [ "$basename" = ".env.example" ]; then
-        scannable_files+=("$path")
-      else
-        echo "publication privacy: ${path} is a tracked secret-bearing environment file" >&2
-        violations=$((violations + 1))
-      fi
-      ;;
-    *)
-      scannable_files+=("$path")
-      ;;
-  esac
-done
 
 is_approved_email() {
   local email=${1,,}
@@ -139,34 +149,6 @@ is_misattributed_noreply() {
 }
 
 email_pattern='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
-while IFS= read -r match; do
-  path=${match%%:*}
-  remainder=${match#*:}
-  line=${remainder%%:*}
-  content=${remainder#*:}
-  while IFS= read -r email; do
-    if ! is_approved_email "$email"; then
-      echo "publication privacy: ${path}:${line} contains a non-public email address" >&2
-      violations=$((violations + 1))
-    fi
-  done < <(grep -Eo "$email_pattern" <<< "$content" || true)
-done < <(git grep -I -n -E "$email_pattern" -- "${scannable_files[@]}" || true)
-
-# Its own pass, for the reason given beside the pattern: a login carrying a bracket is not
-# extracted by the address pattern above, so a second test inside that loop would have been
-# reached only by the addresses that were never the problem.
-while IFS= read -r match; do
-  path=${match%%:*}
-  remainder=${match#*:}
-  line=${remainder%%:*}
-  content=${remainder#*:}
-  while IFS= read -r noreply; do
-    if is_misattributed_noreply "$noreply"; then
-      echo "publication privacy: ${path}:${line} contains a misattributed GitHub account id" >&2
-      violations=$((violations + 1))
-    fi
-  done < <(grep -Eo "$github_noreply_extract_pattern" <<< "$content" || true)
-done < <(git grep -I -n -E "$github_noreply_extract_pattern" -- "${scannable_files[@]}" || true)
 
 slash=/
 backslash='\'
@@ -178,28 +160,144 @@ private_path_prefixes=(
   "C:${backslash}Users${backslash}"
 )
 
-for prefix in "${private_path_prefixes[@]}"; do
+
+private_network_pattern='(^|[^0-9])(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})([^0-9]|$)'
+
+# report <where> <path> <line> <category> — where is empty for the index, a short sha for
+# a commit. Only the location and the category are printed, never the value.
+report() {
+  local where="$1" path="$2" line="$3" category="$4"
+  echo "publication privacy: ${where:+${where} }${path}:${line} ${category}" >&2
+  violations=$((violations + 1))
+}
+
+# grep_scannable <git-grep-args>... — exit 1 from git grep means "no match"; anything
+# above it is a failed scan, and a failed scan must never read as a clean tree. Called
+# through command substitution, so `exit` here ends the substitution and `set -e` ends
+# the script with the same status.
+grep_scannable() {
+  local out rc=0
+  out=$(git grep "${grep_opts[@]}" "$@" "${grep_rev[@]}" -- "${scannable_files[@]}") || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "publication privacy: git grep failed (exit ${rc}); refusing to report a clean scan" >&2
+    exit 2
+  fi
+  printf '%s\n' "$out"
+}
+
+# scan_target <target> — target is `--cached` (the index) or a commit sha.
+scan_target() {
+  local target="$1" where="" prefix_out matches path basename match remainder line content email noreply prefix
+  local -a files=() scannable_files=()
+  if [ "$target" = "--cached" ]; then
+    mapfile -d '' files < <(git ls-files -z)
+    if [ "${#files[@]}" -eq 0 ]; then
+      echo "publication privacy: no tracked files found" >&2
+      exit 2
+    fi
+  else
+    where=$(git rev-parse --short "$target")
+    mapfile -d '' files < <(git ls-tree -r -z --name-only "$target")
+    [ "${#files[@]}" -gt 0 ] || return 0
+  fi
+  # `git grep <sha>` prefixes every match with `<sha>:`; the index prints none.
+  local -a grep_opts=() grep_rev=()
+  prefix_out=""
+  if [ "$target" = "--cached" ]; then
+    grep_opts=(--cached)
+  else
+    grep_rev=("$target")
+    prefix_out="${target}:"
+  fi
+
+  for path in "${files[@]}"; do
+    basename=${path##*/}
+    case "$basename" in
+      .env)
+        report "$where" "$path" "-" "is a tracked secret-bearing environment file"
+        ;;
+      .env.*)
+        if [ "$basename" = ".env.example" ]; then
+          scannable_files+=("$path")
+        else
+          report "$where" "$path" "-" "is a tracked secret-bearing environment file"
+        fi
+        ;;
+      *)
+        scannable_files+=("$path")
+        ;;
+    esac
+  done
+  [ "${#scannable_files[@]}" -gt 0 ] || return 0
+
+  matches=$(grep_scannable -I -n -E "$email_pattern")
   while IFS= read -r match; do
+    [ -n "$match" ] || continue
+    match=${match#"$prefix_out"}
     path=${match%%:*}
     remainder=${match#*:}
     line=${remainder%%:*}
-    echo "publication privacy: ${path}:${line} contains a workstation-specific path" >&2
-    violations=$((violations + 1))
-  done < <(git grep -I -n -F "$prefix" -- "${scannable_files[@]}" || true)
-done
+    content=${remainder#*:}
+    while IFS= read -r email; do
+      if ! is_approved_email "$email"; then
+        report "$where" "$path" "$line" "contains a non-public email address"
+      fi
+    done < <(grep -Eo "$email_pattern" <<< "$content" || true)
+  done <<< "$matches"
 
-private_network_pattern='(^|[^0-9])(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})([^0-9]|$)'
-while IFS= read -r match; do
-  path=${match%%:*}
-  remainder=${match#*:}
-  line=${remainder%%:*}
-  echo "publication privacy: ${path}:${line} contains a private-network address" >&2
-  violations=$((violations + 1))
-done < <(git grep -I -n -E "$private_network_pattern" -- "${scannable_files[@]}" || true)
+  # Its own pass, for the reason given beside the pattern: a login carrying a bracket is not
+  # extracted by the address pattern above, so a second test inside that loop would have been
+  # reached only by the addresses that were never the problem.
+  matches=$(grep_scannable -I -n -E "$github_noreply_extract_pattern")
+  while IFS= read -r match; do
+    [ -n "$match" ] || continue
+    match=${match#"$prefix_out"}
+    path=${match%%:*}
+    remainder=${match#*:}
+    line=${remainder%%:*}
+    content=${remainder#*:}
+    while IFS= read -r noreply; do
+      if is_misattributed_noreply "$noreply"; then
+        report "$where" "$path" "$line" "contains a misattributed GitHub account id"
+      fi
+    done < <(grep -Eo "$github_noreply_extract_pattern" <<< "$content" || true)
+  done <<< "$matches"
+
+  for prefix in "${private_path_prefixes[@]}"; do
+    matches=$(grep_scannable -I -n -F "$prefix")
+    while IFS= read -r match; do
+      [ -n "$match" ] || continue
+      match=${match#"$prefix_out"}
+      path=${match%%:*}
+      remainder=${match#*:}
+      line=${remainder%%:*}
+      report "$where" "$path" "$line" "contains a workstation-specific path"
+    done <<< "$matches"
+  done
+
+  matches=$(grep_scannable -I -n -E "$private_network_pattern")
+  while IFS= read -r match; do
+    [ -n "$match" ] || continue
+    match=${match#"$prefix_out"}
+    path=${match%%:*}
+    remainder=${match#*:}
+    line=${remainder%%:*}
+    report "$where" "$path" "$line" "contains a private-network address"
+  done <<< "$matches"
+}
+
+scan_target --cached
+for commit in "${commits[@]}"; do
+  scan_target "$commit"
+done
 
 if [ "$violations" -ne 0 ]; then
   echo "publication privacy: rejected ${violations} private-data occurrence(s)" >&2
   exit 1
 fi
 
-echo "publication privacy — tracked content contains only approved public identities and synthetic paths"
+if [ "${#commits[@]}" -gt 0 ]; then
+  echo "publication privacy — the index and ${#commits[@]} commit(s) contain only approved public identities and synthetic paths"
+else
+  echo "publication privacy — tracked content contains only approved public identities and synthetic paths"
+fi

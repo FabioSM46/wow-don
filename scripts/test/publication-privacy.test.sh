@@ -123,4 +123,84 @@ printf 'Co-authored-by: FabioSM46 <124870035+FabioSM46@users.noreply.github.com>
 git -C "$TEST_ROOT" add correct.txt
 (cd "$TEST_ROOT" && bash scripts/check-publication-privacy.sh >/dev/null)
 
-echo "publication privacy — safe placeholders pass, private values fail without leaking, and a noreply address carrying another account's id is refused"
+
+# ── What a push publishes, not what the working tree shows ───────────────────────────
+commit_fixture() {
+  git -C "$TEST_ROOT" -c user.name=fixture -c user.email=fixture@example.invalid \
+    commit -q --no-verify -m "$1"
+}
+expect_rejection() {
+  local label="$1" expected_line="$2"
+  shift 2
+  set +e
+  local out status
+  out=$(cd "$TEST_ROOT" && bash scripts/check-publication-privacy.sh "$@" 2>&1)
+  status=$?
+  set -e
+  if [ "$status" -ne 1 ]; then
+    echo "expected ${label} to exit 1, got $status" >&2
+    exit 1
+  fi
+  grep -Fq "$expected_line" <<< "$out" || { echo "missing diagnostic for ${label}" >&2; exit 1; }
+  if grep -Fq "$unsafe_email" <<< "$out"; then
+    echo "privacy failure: the rejected email reached the diagnostic (${label})" >&2
+    exit 1
+  fi
+}
+
+commit_fixture "clean base"
+base_sha=$(git -C "$TEST_ROOT" rev-parse HEAD)
+
+# Committed, then deleted from the working tree without staging the deletion: the push
+# still carries the blob, so the scan must still see it.
+printf 'contact=%s\n' "$unsafe_email" > "$TEST_ROOT/staged.txt"
+git -C "$TEST_ROOT" add staged.txt
+commit_fixture "add contact"
+rm "$TEST_ROOT/staged.txt"
+expect_rejection "a committed value missing from the working tree" \
+  'staged.txt:1 contains a non-public email address'
+
+# Added in one commit and removed in the next: the tip is clean, the history is not.
+git -C "$TEST_ROOT" rm -q --cached staged.txt
+commit_fixture "remove contact"
+(cd "$TEST_ROOT" && bash scripts/check-publication-privacy.sh >/dev/null)
+added_sha=$(git -C "$TEST_ROOT" rev-parse --short HEAD~1)
+expect_rejection "a value added and removed inside the range" \
+  "${added_sha} staged.txt:1 contains a non-public email address" "$base_sha" HEAD
+expect_rejection "the same value across the whole history" \
+  "${added_sha} staged.txt:1 contains a non-public email address" --all-history
+
+set +e
+(cd "$TEST_ROOT" && bash scripts/check-publication-privacy.sh "$base_sha" >/dev/null 2>&1)
+usage_status=$?
+(cd "$TEST_ROOT" && bash scripts/check-publication-privacy.sh "$base_sha" no-such-ref >/dev/null 2>&1)
+range_status=$?
+set -e
+[ "$usage_status" -eq 2 ] || { echo "expected a lone range endpoint to exit 2, got $usage_status" >&2; exit 1; }
+[ "$range_status" -eq 2 ] || { echo "expected an unresolvable endpoint to exit 2, got $range_status" >&2; exit 1; }
+
+# A scan that could not run is not a clean scan. Stub `git grep` to fail the way a bad
+# argument does and require a non-zero exit instead of a green line.
+STUB_DIR="$TEST_ROOT/stub-bin"
+mkdir -p "$STUB_DIR"
+REAL_GIT=$(command -v git)
+cat > "$STUB_DIR/git" <<STUB
+#!/usr/bin/env bash
+[ "\$1" = grep ] && { echo "fatal: stubbed grep failure" >&2; exit 128; }
+exec "$REAL_GIT" "\$@"
+STUB
+chmod +x "$STUB_DIR/git"
+set +e
+grep_out=$(cd "$TEST_ROOT" && PATH="$STUB_DIR:$PATH" bash scripts/check-publication-privacy.sh 2>&1)
+grep_status=$?
+set -e
+if [ "$grep_status" -ne 2 ]; then
+  echo "expected a failed git grep to exit 2, got $grep_status" >&2
+  exit 1
+fi
+if grep -Fq 'contain only approved public identities' <<< "$grep_out"; then
+  echo "a failed git grep still printed the clean verdict" >&2
+  exit 1
+fi
+
+echo "publication privacy — safe placeholders pass, private values fail without leaking, and a noreply address carrying another account's id is refused; the index and every commit in a range are scanned, and a failed scan fails closed"

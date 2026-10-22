@@ -49,8 +49,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # The tree AND every commit the PR adds: a value added in one commit and removed in a
+      # later one leaves a clean tip and is still published with the history.
       - name: Reject publication privacy leaks
-        run: bash scripts/check-publication-privacy.sh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/check-publication-privacy.sh "$BASE_SHA" "$HEAD_SHA"
       - name: Reject commit privacy leaks
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
