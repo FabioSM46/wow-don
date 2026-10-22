@@ -24,9 +24,17 @@ pub struct InstalledAddon {
     pub error: Option<String>,
 }
 
-/// Legge gli addon di `<installazione>/Interface/AddOns`. Se la cartella non c'è, non ci sono
-/// addon. L'ordine è stabile: per nome della cartella, senza distinguere maiuscole e minuscole.
+/// Legge gli addon di `<installazione>/Interface/AddOns`. Se manca `Interface/AddOns` non ci
+/// sono addon; se manca la cartella dell'installazione è un errore, perché "zero addon"
+/// nasconderebbe un gioco spostato o un disco non montato. Una voce che non si legge resta in
+/// lista con un errore. L'ordine è stabile: per nome della cartella, senza distinguere
+/// maiuscole e minuscole.
 pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<InstalledAddon>, String> {
+    if !installation_dir.is_dir() {
+        return Err(
+            "La cartella dell'installazione non esiste più o non è raggiungibile.".to_owned(),
+        );
+    }
     let addons_dir = installation_dir.join("Interface").join("AddOns");
     let entries = match fs::read_dir(&addons_dir) {
         Ok(entries) => entries,
@@ -40,14 +48,32 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
     };
 
     let mut addons = Vec::new();
-    for entry in entries.flatten() {
+    let mut unreadable = 0;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                // Senza la voce non si conosce nemmeno il nome: resta un segnaposto visibile.
+                unreadable += 1;
+                addons.push(unreadable_entry(
+                    format!("(voce non leggibile {unreadable})"),
+                    &error,
+                ));
+                continue;
+            }
+        };
         let folder = entry.file_name().to_string_lossy().into_owned();
         if folder.starts_with('.') {
             continue;
         }
-        // `metadata` segue i link simbolici: un addon collegato da un'altra cartella conta.
-        let Ok(metadata) = fs::metadata(entry.path()) else {
-            continue;
+        // `metadata` segue i link simbolici: un addon collegato da un'altra cartella conta,
+        // e un collegamento rotto resta in lista con il suo errore.
+        let metadata = match fs::metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                addons.push(unreadable_entry(folder, &error));
+                continue;
+            }
         };
         if !metadata.is_dir() {
             continue;
@@ -66,6 +92,16 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
             .then_with(|| a.folder.cmp(&b.folder))
     });
     Ok(addons)
+}
+
+fn unreadable_entry(folder: String, error: &std::io::Error) -> InstalledAddon {
+    InstalledAddon {
+        folder,
+        toc_file: None,
+        toc: TocInfo::default(),
+        modified_ms: None,
+        error: Some(format!("Cartella non leggibile ({}).", error.kind())),
+    }
 }
 
 fn read_addon(
@@ -145,6 +181,70 @@ mod tests {
     fn a_missing_addons_folder_means_no_addons() {
         let tmp = TempDir::new();
         assert_eq!(scan_addons(tmp.path(), "retail").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn a_missing_installation_folder_is_an_error() {
+        let tmp = TempDir::new();
+        let gone = tmp.path().join("_retail_");
+        assert!(
+            scan_addons(&gone, "retail")
+                .unwrap_err()
+                .contains("non esiste")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_link_stays_in_the_list_with_an_error() {
+        let tmp = TempDir::new();
+        let addons_dir = tmp.path().join("Interface/AddOns");
+        fs::create_dir_all(&addons_dir).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("missing"), addons_dir.join("Linked")).unwrap();
+
+        let addons = scan_addons(tmp.path(), "retail").unwrap();
+        assert_eq!(addons.len(), 1);
+        assert_eq!(addons[0].folder, "Linked");
+        assert!(
+            addons[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("non leggibile")
+        );
+    }
+
+    #[test]
+    fn the_payload_uses_camel_case_throughout() {
+        let addon = InstalledAddon {
+            folder: "Foo".to_owned(),
+            toc_file: Some("Foo.toc".to_owned()),
+            toc: toc::parse_toc("## Title: Foo\n## OptionalDeps: Bar\n## X-Wago-ID: x\n"),
+            modified_ms: Some(1),
+            error: None,
+        };
+        let json = serde_json::to_value(&addon).unwrap();
+        let keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
+        for key in [
+            "folder",
+            "tocFile",
+            "modifiedMs",
+            "error",
+            "title",
+            "interface",
+            "version",
+            "author",
+            "notes",
+            "dependencies",
+            "optionalDeps",
+            "loadOnDemand",
+            "curseProjectId",
+            "wagoId",
+            "wowiId",
+        ] {
+            assert!(keys.contains(&key.to_owned()), "missing {key} in {keys:?}");
+        }
+        assert_eq!(keys.len(), 15, "unexpected keys: {keys:?}");
     }
 
     #[test]

@@ -66,5 +66,6 @@ pub async fn list_addons(
         scan::scan_addons(&installation.path, &installation.flavor)
     })
     .await
-    .map_err(|_| "La lettura degli addon si è interrotta.".to_owned())?
+    // L'errore di Tauri dice se il compito è andato in panic o è stato annullato.
+    .map_err(|error| format!("La lettura degli addon si è interrotta ({error})."))?
 }
