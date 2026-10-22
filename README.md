@@ -1,8 +1,10 @@
 # WoW-don
 
-Gestore di addon per World of Warcraft pensato per Linux, dove il gioco gira dentro
-un prefisso Wine (Lutris, Battle.net). App desktop nativa scritta in Rust con
-interfaccia Tauri, alternativa più leggera e più comoda a WowUp-CF.
+Gestore di addon per World of Warcraft per **Linux e Windows**. Su Linux gestisce il
+gioco dentro un prefisso Wine (Lutris, Battle.net), su Windows l'installazione
+normale. App desktop nativa scritta in Rust con interfaccia Tauri, alternativa più
+leggera e più comoda a WowUp-CF. Si distribuisce come pacchetto `.deb` su Linux e
+come installer su Windows.
 
 ## Stato
 
@@ -122,7 +124,10 @@ La struttura prevista dei moduli del backend è in
 | jq    | qualunque recente               | script della pipeline, `scripts/test/` |
 | python3 | 3.12 consigliato              | test del reviewer DeepSeek |
 
-Librerie di sistema per Tauri su Linux. Su Ubuntu/Debian:
+Su **Windows** servono Microsoft C++ Build Tools (carico di lavoro "Sviluppo di
+applicazioni desktop con C++") e WebView2, già presente su Windows 10 e 11.
+
+Su **Linux** servono le librerie di sistema per Tauri. Su Ubuntu/Debian:
 
   ```bash
   sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
@@ -145,8 +150,13 @@ radice del repo; in alternativa basta esportare `CURSEFORGE_API_KEY` nell'ambien
 ```bash
 pnpm install          # dipendenze del frontend
 pnpm tauri dev        # avvia l'app in sviluppo con hot reload
-pnpm tauri build      # build di release e pacchetti
+pnpm tauri build      # build di release e pacchetto della piattaforma corrente
 ```
+
+`pnpm tauri build` produce il pacchetto della piattaforma su cui gira: su Linux il
+`.deb` (`wow-don_<versione>_amd64.deb`) in `src-tauri/target/release/bundle/deb/`, su Windows l'installer
+`*-setup.exe` in `src-tauri/target/release/bundle/nsis/`. Un pacchetto per Windows si
+costruisce su Windows (o sul runner Windows della CI), non da Linux.
 
 Controlli rapidi:
 

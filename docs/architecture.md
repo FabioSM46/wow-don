@@ -27,7 +27,7 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | `config` | Legge `CURSEFORGE_API_KEY` dall'ambiente / `.env` | Esiste |
 | `commands` | Comandi Tauri esposti al frontend | Esiste (`app_status`) |
 | `installations` | Trova e gestisce le installazioni di WoW, anche dentro prefissi Wine | Esiste (aggiunta manuale e validazione; scoperta automatica da fare) |
-| `addons::toc` | Legge i file `.toc` in `Interface/AddOns` (titolo, versione, `## Interface`) | Da fare |
+| `addons::toc` | Legge i file `.toc` in `Interface/AddOns` (titolo, versione, `## Interface`) e sceglie il `.toc` giusto per il flavor dell'installazione | Esiste (parser e scelta del file; usato dalla scansione) |
 | `addons::fingerprint` | Calcola i fingerprint (MurmurHash2) per riconoscere gli addon installati | Da fare |
 | `sources` | Trait comune per le fonti (`search`, `versions`, `download`) | Da fare |
 | `sources::curseforge` | Client per `https://api.curseforge.com/v1` con header `x-api-key` | Da fare |
@@ -46,9 +46,20 @@ Dettagli da verificare sulla documentazione ufficiale prima di implementarli: le
 normalizzazioni dei file per il fingerprint e gli ID delle versioni del gioco. Il
 codice di WowUp (open source) è un buon riferimento.
 
-## Installazioni di WoW su Linux
+## Installazioni di WoW
 
-Esempio reale: Battle.net su Lutris con prefisso in `~/Games/battlenet`:
+L'app gira su Linux e su Windows (D23). Su Windows il gioco sta nella cartella scelta
+da Battle.net, di solito:
+
+```
+C:\Program Files (x86)\World of Warcraft\
+├── _retail_\
+├── _classic_era_\
+└── Data\
+```
+
+Su Linux il gioco gira dentro un prefisso Wine. Esempio reale: Battle.net su Lutris
+con prefisso in `~/Games/battlenet`:
 
 ```
 ~/Games/battlenet/drive_c/Program Files (x86)/World of Warcraft/
@@ -67,5 +78,7 @@ installazioni a mano e, più avanti, cercarle nei prefissi Lutris noti.
 
 - La chiave non è mai inviata al frontend né scritta nei log.
 - In produzione la chiave verrà dalla config utente (formato e posizione di D22).
+- Su Windows `canonicalize` restituisce percorsi con prefisso `\\?\`, da togliere
+  prima di mostrarli o salvarli.
 - Gli zip scaricati si estraggono in una cartella temporanea e si controlla che i
   percorsi non escano dalla cartella `AddOns` prima di spostarli.
