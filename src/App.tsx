@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage, type AppStatus, type Installation } from "./api";
+import { AddonTable } from "./addons/AddonTable";
 import { Installations } from "./installations/Installations";
 import "./App.css";
 
@@ -23,6 +24,8 @@ function App() {
       })
       .catch((err) => setError(errorMessage(err)));
   }, []);
+
+  const active = installations?.find((installation) => installation.id === activeId) ?? null;
 
   function changeInstallations(list: Installation[]) {
     setInstallations(list);
@@ -52,6 +55,7 @@ function App() {
             onChange={changeInstallations}
           />
         )}
+        {active && <AddonTable installation={active} />}
       </main>
 
       {status && (

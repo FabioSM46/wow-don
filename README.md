@@ -8,9 +8,10 @@ come installer su Windows.
 
 ## Stato
 
-**Fase M0: scaffolding.** C'è lo scheletro dell'app Tauri, che si avvia e mostra se
-la chiave API di CurseForge è configurata. La gestione degli addon non è ancora
-implementata. Il piano è in [docs/roadmap.md](docs/roadmap.md).
+**Fase M1: addon installati.** Si aggiungono a mano le installazioni di WoW (cartelle
+`_<flavor>_`, anche dentro prefissi Wine) e si vede la lista degli addon installati,
+letta dai file `.toc`, con ricerca, filtri e ordinamento. CurseForge, aggiornamenti e
+installazione arrivano con M2 e M3. Il piano è in [docs/roadmap.md](docs/roadmap.md).
 
 ## Perché
 

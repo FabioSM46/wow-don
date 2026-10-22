@@ -8,7 +8,7 @@ Ultimo aggiornamento: 2026-10-22.
 - Lettura della chiave CurseForge da `.env`.
 - Documentazione: contesto, decisioni, architettura, roadmap.
 
-## M1 — Addon installati
+## M1 — Addon installati (fatto)
 
 - Aggiungere un'installazione di WoW a mano (percorso della cartella `_<flavor>_`).
 - Leggere `Interface/AddOns` e i file `.toc`.
