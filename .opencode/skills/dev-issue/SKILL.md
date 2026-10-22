@@ -211,6 +211,8 @@ Poi implementa:
    percorsi di produzione.
 7. Modifiche chirurgiche: modifica file esistenti quando puoi, creane di nuovi solo se serve.
 8. Gli addon con `allowModDistribution = false` non si scaricano in automatico.
+9. Ogni modifica in `src/` segue la sezione "Interfaccia: minimale e moderna" di `AGENTS.md`;
+   la PR dice in una riga come la rispetta.
 
 ### Passo 6: gate di qualità (OBBLIGATORI)
 
