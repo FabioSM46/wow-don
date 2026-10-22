@@ -1,40 +1,69 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { api, errorMessage, type AppStatus, type Installation } from "./api";
+import { Installations } from "./installations/Installations";
 import "./App.css";
-
-type AppStatus = {
-  version: string;
-  curseforgeKeyConfigured: boolean;
-};
 
 function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
+  const [installations, setInstallations] = useState<Installation[] | null>(null);
+  // L'installazione attiva vale solo per la sessione.
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<AppStatus>("app_status")
+    api
+      .appStatus()
       .then(setStatus)
-      .catch((err) => setError(String(err)));
+      .catch((err) => setError(errorMessage(err)));
+    api
+      .listInstallations()
+      .then((list) => {
+        setInstallations(list);
+        setActiveId(list[0]?.id ?? null);
+      })
+      .catch((err) => setError(errorMessage(err)));
   }, []);
 
-  return (
-    <main className="container">
-      <h1>WoW-don</h1>
-      <p className="subtitle">Gestore di addon per World of Warcraft su Linux</p>
+  function changeInstallations(list: Installation[]) {
+    setInstallations(list);
+    if (!list.some((installation) => installation.id === activeId)) {
+      setActiveId(list[0]?.id ?? null);
+    }
+  }
 
-      {error && <p className="status error">{error}</p>}
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1>WoW-don</h1>
+      </header>
+
+      <main className="app-main">
+        {error && (
+          <p className="message error" role="alert">
+            {error}
+          </p>
+        )}
+        {installations === null && !error && <p className="muted">Caricamento…</p>}
+        {installations !== null && (
+          <Installations
+            installations={installations}
+            activeId={activeId}
+            onSelect={setActiveId}
+            onChange={changeInstallations}
+          />
+        )}
+      </main>
+
       {status && (
-        <ul className="status">
-          <li>Versione: {status.version}</li>
-          <li>
-            Chiave CurseForge:{" "}
-            {status.curseforgeKeyConfigured
-              ? "configurata"
-              : "mancante (imposta CURSEFORGE_API_KEY in .env)"}
-          </li>
-        </ul>
+        <footer className="app-footer">
+          <span>v{status.version}</span>
+          <span>
+            CurseForge:{" "}
+            {status.curseforgeKeyConfigured ? "chiave configurata" : "chiave mancante"}
+          </span>
+        </footer>
       )}
-    </main>
+    </div>
   );
 }
 
