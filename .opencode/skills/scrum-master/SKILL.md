@@ -350,6 +350,10 @@ eredita invece di rifare la stima, e la decisione la prende chi è più lontano 
 - **Dimensiona ogni issue rispetto al limite di 90,000 caratteri prima di assegnarla a una
   milestone.**
 - Nel dubbio sullo scope, chiedi.
+- **Ogni corpo di issue e ogni commento passa da `bash scripts/check-body-privacy.sh` prima di
+  essere pubblicato** (per esempio `bash scripts/check-body-privacy.sh < /tmp/issue-<numero>.md`):
+  niente email reali, percorsi della propria macchina o indirizzi di rete privati. Nei riferimenti
+  al codice usa percorsi relativi al repository.
 - Le issue di cerimonia (label `ceremony`) sono escluse da tutti i report.
 
 ## Riferimenti
