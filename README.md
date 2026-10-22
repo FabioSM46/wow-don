@@ -149,7 +149,9 @@ CurseForge contengono `$`, e senza apici (o con apici doppi) il lettore di `.env
 tratta come variabili da sostituire: la chiave arriva rovinata e CurseForge la rifiuta.
 
 `.env` è in `.gitignore` e non va mai committato. In debug l'app lo legge dalla
-radice del repo; in alternativa basta esportare `CURSEFORGE_API_KEY` nell'ambiente.
+radice del repo; in alternativa puoi esportare la chiave nell'ambiente, sempre tra
+apici singoli perché anche la shell sostituirebbe i `$`:
+`export CURSEFORGE_API_KEY='$2a$10$...'`.
 
 ### Comandi
 
