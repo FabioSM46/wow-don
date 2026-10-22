@@ -6,6 +6,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 
+use super::fingerprint;
 use super::toc::{self, TocInfo};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -20,6 +21,8 @@ pub struct InstalledAddon {
     pub toc: TocInfo,
     /// Data di modifica della cartella, in millisecondi Unix.
     pub modified_ms: Option<u64>,
+    /// Fingerprint di CurseForge della cartella (vedi `addons::fingerprint`).
+    pub fingerprint: Option<u32>,
     /// Perché l'addon non si è potuto leggere: l'addon resta in lista invece di sparire.
     pub error: Option<String>,
 }
@@ -100,6 +103,7 @@ fn unreadable_entry(folder: String, error: &std::io::Error) -> InstalledAddon {
         toc_file: None,
         toc: TocInfo::default(),
         modified_ms: None,
+        fingerprint: None,
         error: Some(format!("Cartella non leggibile ({}).", error.kind())),
     }
 }
@@ -115,6 +119,7 @@ fn read_addon(
         toc_file: None,
         toc: TocInfo::default(),
         modified_ms,
+        fingerprint: None,
         error: None,
     };
     let file_names: Vec<String> = match fs::read_dir(dir) {
@@ -127,6 +132,9 @@ fn read_addon(
             return addon;
         }
     };
+    // Il fingerprint serve anche quando il `.toc` per questo flavor manca: CurseForge
+    // riconosce la cartella dai suoi file, non dal flavor.
+    addon.fingerprint = fingerprint::folder_fingerprint(dir);
     let Some(toc_file) = toc::select_toc(&addon.folder, &file_names, flavor) else {
         addon.error = Some("Nessun file .toc per questa versione del gioco.".to_owned());
         return addon;
@@ -224,6 +232,7 @@ mod tests {
             toc_file: Some("Foo.toc".to_owned()),
             toc: toc::parse_toc("## Title: Foo\n## OptionalDeps: Bar\n## X-Wago-ID: x\n"),
             modified_ms: Some(1),
+            fingerprint: Some(7),
             error: None,
         };
         let json = serde_json::to_value(&addon).unwrap();
@@ -232,6 +241,7 @@ mod tests {
             "folder",
             "tocFile",
             "modifiedMs",
+            "fingerprint",
             "error",
             "title",
             "interface",
@@ -247,7 +257,7 @@ mod tests {
         ] {
             assert!(keys.contains(&key.to_owned()), "missing {key} in {keys:?}");
         }
-        assert_eq!(keys.len(), 15, "unexpected keys: {keys:?}");
+        assert_eq!(keys.len(), 16, "unexpected keys: {keys:?}");
     }
 
     #[test]
@@ -282,6 +292,8 @@ mod tests {
                 .iter()
                 .all(|a| a.error.is_none() && a.modified_ms.is_some())
         );
+        assert!(addons.iter().all(|a| a.fingerprint.is_some()));
+        assert_ne!(addons[0].fingerprint, addons[1].fingerprint);
     }
 
     #[test]
