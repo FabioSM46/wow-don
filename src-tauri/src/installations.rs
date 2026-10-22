@@ -119,8 +119,8 @@ pub fn validate(path: &Path) -> Result<Installation, String> {
         );
     }
     Installation::from_canonical(canonical).ok_or_else(|| {
-        "La cartella deve essere una cartella `_<flavor>_` di World of Warcraft, \
-         per esempio `_retail_` o `_classic_era_`."
+        "La cartella deve essere una cartella _<flavor>_ di World of Warcraft, \
+         per esempio _retail_ o _classic_era_."
             .to_owned()
     })
 }
