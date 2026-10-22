@@ -47,6 +47,7 @@ sostituisce e si annota quella vecchia come superata.
 | D16 | Frontend React + TypeScript con Vite e pnpm | Template ufficiale Tauri; React già usato negli altri progetti | Proposta |
 | D17 | Rust edition 2024 | Default del template | Proposta |
 | D21 | Selettore di cartelle con il plugin ufficiale `tauri-plugin-dialog` | Percorsi lunghi dentro i prefissi Wine; approvato nella specifica di M1 (issue #5) | Confermata |
+| D22 | Lo stato locale è in JSON nella cartella di configurazione dell'app risolta da Tauri (`app_config_dir()`, su Linux `~/.config/com.fabiosm46.wowdon/`), con scrittura atomica; le installazioni stanno in `installations.json` | Nessuna nuova dipendenza (`serde_json` c'è già); percorso standard della piattaforma. Chiude A1 | Confermata |
 
 ## Processo
 
@@ -59,7 +60,7 @@ sostituisce e si annota quella vecchia come superata.
 
 | # | Domanda |
 | --- | --- |
-| A1 | Formato della config utente (posizione in `~/.config/wow-don/`, TOML o JSON) |
+| A1 | ~~Formato della config utente (posizione in `~/.config/wow-don/`, TOML o JSON)~~ Risolta da D22 |
 | A2 | Libreria per la tabella degli addon nel frontend |
 | A3 | ~~Formato di distribuzione su Linux (AppImage, .deb, Flatpak)~~ Risolta da D24 |
 | A4 | Licenza, se il progetto diventa pubblico |
