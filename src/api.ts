@@ -14,11 +14,31 @@ export type Installation = {
   name: string;
 };
 
+export type InstalledAddon = {
+  folder: string;
+  tocFile: string | null;
+  title: string | null;
+  interface: number[];
+  version: string | null;
+  author: string | null;
+  notes: string | null;
+  dependencies: string[];
+  optionalDeps: string[];
+  loadOnDemand: boolean;
+  curseProjectId: string | null;
+  wagoId: string | null;
+  wowiId: string | null;
+  modifiedMs: number | null;
+  error: string | null;
+};
+
 export const api = {
   appStatus: () => invoke<AppStatus>("app_status"),
   listInstallations: () => invoke<Installation[]>("list_installations"),
   addInstallation: (path: string) => invoke<Installation>("add_installation", { path }),
   removeInstallation: (id: string) => invoke<void>("remove_installation", { id }),
+  listAddons: (installationId: string) =>
+    invoke<InstalledAddon[]>("list_addons", { installationId }),
 };
 
 /** I comandi rifiutano con il messaggio del backend; qualunque altra cosa diventa testo. */

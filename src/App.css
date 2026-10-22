@@ -71,7 +71,7 @@ h2 {
 .app-main,
 .app-footer {
   width: 100%;
-  max-width: 960px;
+  max-width: 1200px;
   margin: 0 auto;
   padding-left: 32px;
   padding-right: 32px;
@@ -238,3 +238,135 @@ button:focus-visible {
   font-size: 0.9rem;
   white-space: nowrap;
 }
+
+/* Addon */
+
+.addons {
+  margin-top: 40px;
+}
+
+.count {
+  font-size: 0.85rem;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+
+.search,
+.select {
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+}
+
+.search {
+  flex: 1;
+  min-width: 220px;
+}
+
+.search:focus,
+.select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toggle input {
+  accent-color: var(--accent);
+}
+
+.table-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.addon-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.addon-table th,
+.addon-table td {
+  padding: 8px 14px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.addon-table th {
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.addon-table tbody tr + tr td {
+  border-top: 1px solid var(--border);
+}
+
+.addon-table tbody tr:hover {
+  background: var(--hover);
+}
+
+.sort {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.sort-mark {
+  display: inline-block;
+  width: 1em;
+  color: var(--accent);
+}
+
+.addon-title {
+  font-weight: 500;
+}
+
+.addon-error {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--danger);
+}
+
+.has-error .addon-title {
+  color: var(--muted);
+}
+
+.mono {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
