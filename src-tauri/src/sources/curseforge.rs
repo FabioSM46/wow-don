@@ -316,7 +316,12 @@ impl<T: Transport> CurseForgeClient<T> {
     pub fn new(transport: T, key: Option<String>) -> Self {
         Self {
             transport,
-            key: key.filter(|k| !k.trim().is_empty()).map(ApiKey::new),
+            // Ripulita dagli spazi: un header con spazi ai bordi verrebbe rifiutato dal
+            // trasporto e l'errore sembrerebbe un problema di rete.
+            key: key
+                .map(|k| k.trim().to_owned())
+                .filter(|k| !k.is_empty())
+                .map(ApiKey::new),
         }
     }
 
@@ -590,6 +595,52 @@ mod tests {
             CurseForgeError::MissingKey
                 .to_string()
                 .contains("CURSEFORGE_API_KEY")
+        );
+    }
+
+    #[test]
+    fn the_key_is_trimmed_before_use() {
+        let client = CurseForgeClient::new(
+            Fake::new(Ok((200, r#"{"data": []}"#))),
+            Some(format!("  {KEY} \n")),
+        );
+        client.version_types().unwrap();
+        assert_eq!(client.transport.seen.lock().unwrap()[0].1, KEY);
+    }
+
+    /// Prova che TLS e indirizzo funzionano davvero, senza chiave: una chiave inventata deve
+    /// essere rifiutata da CurseForge (401/403), non fallire per rete o certificati.
+    ///
+    /// `cargo test --manifest-path src-tauri/Cargo.toml live_tls_reaches_curseforge -- --ignored`
+    #[test]
+    #[ignore = "usa la rete"]
+    fn live_tls_reaches_curseforge() {
+        let client = CurseForgeClient::new(
+            ReqwestTransport::new().unwrap(),
+            Some("not-a-real-key".to_owned()),
+        );
+        assert_eq!(client.version_types(), Err(CurseForgeError::KeyRejected));
+    }
+
+    /// Prova `POST /v1/fingerprints/1` con la chiave reale. Un fingerprint inventato non deve
+    /// corrispondere a niente, ma la richiesta deve riuscire (non 404).
+    ///
+    /// `cargo test --manifest-path src-tauri/Cargo.toml live_fingerprint_matches -- --ignored --nocapture`
+    #[test]
+    #[ignore = "usa la rete e la chiave CurseForge reale"]
+    fn live_fingerprint_matches() {
+        let config = crate::config::Config::load();
+        let client = CurseForgeClient::new(
+            ReqwestTransport::new().unwrap(),
+            config.curseforge_api_key.clone(),
+        );
+        let result = client
+            .match_fingerprints(&[1])
+            .expect("richiesta a CurseForge");
+        println!(
+            "exact: {}, unmatched: {:?}",
+            result.exact_matches.len(),
+            result.unmatched_fingerprints
         );
     }
 
