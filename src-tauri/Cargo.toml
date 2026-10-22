@@ -24,6 +24,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dotenvy = "0.15"
 tauri-plugin-dialog = "2"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "blocking"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -2,6 +2,7 @@ mod addons;
 mod commands;
 mod config;
 mod installations;
+mod sources;
 mod store;
 #[cfg(test)]
 mod test_support;
