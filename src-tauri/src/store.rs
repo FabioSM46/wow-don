@@ -4,6 +4,12 @@
 //! Tauri. Si scrive in modo atomico: file temporaneo nella stessa cartella, poi `rename`.
 //! Un file mancante vuol dire nessuna installazione; un file illeggibile blocca le
 //! modifiche invece di essere sovrascritto, così non si perde quello che c'era.
+//!
+//! Su disco si salvano solo i percorsi: id, flavor e nome si ricalcolano a ogni lettura,
+//! così seguono sempre il codice attuale. Prima di ogni modifica il file si rilegge, per non
+//! cancellare quello che un'altra istanza dell'app ha scritto nel frattempo. Due modifiche
+//! davvero simultanee da due istanze possono ancora perdersene una: non c'è un lock sul file,
+//! e l'app non impedisce di aprire due istanze.
 
 use std::fs;
 use std::io::Write;
@@ -19,7 +25,7 @@ const FORMAT_VERSION: u32 = 1;
 #[derive(Debug, Serialize, Deserialize)]
 struct StoredInstallations {
     version: u32,
-    installations: Vec<Installation>,
+    paths: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -52,7 +58,7 @@ impl InstallationStore {
     }
 
     pub fn add(&mut self, path: &Path) -> Result<Installation, String> {
-        self.check_loaded()?;
+        self.reload()?;
         let installation = installations::validate(path)?;
         if self
             .installations
@@ -68,7 +74,7 @@ impl InstallationStore {
     }
 
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
-        self.check_loaded()?;
+        self.reload()?;
         if !self.installations.iter().any(|existing| existing.id == id) {
             return Err("Installazione non trovata.".to_owned());
         }
@@ -79,6 +85,13 @@ impl InstallationStore {
             .cloned()
             .collect();
         self.save(next)
+    }
+
+    /// Rilegge il file prima di una modifica. Se non si legge, la modifica non avviene.
+    fn reload(&mut self) -> Result<(), String> {
+        self.check_loaded()?;
+        self.installations = read(&self.file)?;
+        Ok(())
     }
 
     fn check_loaded(&self) -> Result<(), String> {
@@ -92,11 +105,11 @@ impl InstallationStore {
     fn save(&mut self, installations: Vec<Installation>) -> Result<(), String> {
         let stored = StoredInstallations {
             version: FORMAT_VERSION,
-            installations,
+            paths: installations.iter().map(|i| i.path.clone()).collect(),
         };
         write_atomically(&self.file, &stored)
             .map_err(|error| format!("Impossibile salvare le installazioni ({}).", error.kind()))?;
-        self.installations = stored.installations;
+        self.installations = installations;
         Ok(())
     }
 }
@@ -121,7 +134,17 @@ fn read(file: &Path) -> Result<Vec<Installation>, String> {
             stored.version
         ));
     }
-    Ok(stored.installations)
+    stored
+        .paths
+        .into_iter()
+        .map(|path| {
+            Installation::from_canonical(path).ok_or_else(|| {
+                format!(
+                    "{INSTALLATIONS_FILE} contiene un percorso che non è una cartella `_<flavor>_`."
+                )
+            })
+        })
+        .collect()
 }
 
 fn write_atomically(file: &Path, stored: &StoredInstallations) -> std::io::Result<()> {
@@ -184,6 +207,53 @@ mod tests {
     }
 
     #[test]
+    fn only_paths_are_stored_and_derived_fields_are_recomputed() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLATIONS_FILE);
+        let retail = game_dir(tmp.path(), "_retail_");
+        let mut store = InstallationStore::load(file.clone());
+        let added = store.add(&retail).unwrap();
+
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["version"], 1);
+        assert_eq!(saved["paths"].as_array().unwrap().len(), 1);
+        assert!(saved.get("installations").is_none());
+
+        let reloaded = InstallationStore::load(file).list().unwrap();
+        assert_eq!(reloaded, [added]);
+    }
+
+    #[test]
+    fn a_change_made_by_another_instance_is_not_lost() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLATIONS_FILE);
+        let retail = game_dir(tmp.path(), "_retail_");
+        let era = game_dir(tmp.path(), "_classic_era_");
+
+        let mut first = InstallationStore::load(file.clone());
+        let mut second = InstallationStore::load(file.clone());
+        first.add(&retail).unwrap();
+        second.add(&era).unwrap();
+
+        let flavors: Vec<_> = InstallationStore::load(file)
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|i| i.flavor)
+            .collect();
+        assert_eq!(flavors, ["retail", "classic_era"]);
+    }
+
+    #[test]
+    fn a_stored_path_that_is_not_a_flavor_folder_is_reported() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLATIONS_FILE);
+        fs::write(&file, br#"{"version": 1, "paths": ["games/Interface"]}"#).unwrap();
+        let store = InstallationStore::load(file);
+        assert!(store.list().unwrap_err().contains("_<flavor>_"));
+    }
+
+    #[test]
     fn duplicates_are_rejected() {
         let tmp = TempDir::new();
         let retail = game_dir(tmp.path(), "_retail_");
@@ -232,7 +302,7 @@ mod tests {
     fn an_unknown_format_version_is_reported() {
         let tmp = TempDir::new();
         let file = tmp.path().join(INSTALLATIONS_FILE);
-        fs::write(&file, br#"{"version": 99, "installations": []}"#).unwrap();
+        fs::write(&file, br#"{"version": 99, "paths": []}"#).unwrap();
         let store = InstallationStore::load(file);
         assert!(store.list().unwrap_err().contains("versione"));
     }
