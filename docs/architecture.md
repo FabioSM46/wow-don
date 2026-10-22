@@ -30,8 +30,8 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | `addons::toc` | Legge i file `.toc` in `Interface/AddOns` (titolo, versione, `## Interface`) e sceglie il `.toc` giusto per il flavor dell'installazione | Esiste |
 | `addons::scan` | Legge le cartelle di `Interface/AddOns` e il loro `.toc`, senza modificare niente | Esiste |
 | `addons::fingerprint` | Calcola i fingerprint (MurmurHash2) per riconoscere gli addon installati | Da fare |
-| `sources` | Trait comune per le fonti (`search`, `versions`, `download`) | Da fare |
-| `sources::curseforge` | Client per `https://api.curseforge.com/v1` con header `x-api-key` | Da fare |
+| `sources` | Trait comune per le fonti (`search`, `versions`, `download`) | Da fare (oggi solo il modulo `curseforge`) |
+| `sources::curseforge` | Client per `https://api.curseforge.com/v1` con header `x-api-key`: fingerprint, mod, tipi di versione del gioco | Esiste (client; uso nel controllo aggiornamenti da fare) |
 | `install` | Download, estrazione zip, sostituzione atomica delle cartelle | Da fare |
 | `store` | Stato locale: addon installati, fonte, versione, versione del gioco forzata | Esiste per le installazioni (`installations.json`, D22) |
 
@@ -39,7 +39,8 @@ mostra dati e chiama comandi, non conosce la chiave API.
 
 - `GET /v1/mods/search` (con `gameId = 1` per WoW): ricerca e filtri.
 - `GET /v1/mods/{modId}` e `GET /v1/mods/{modId}/files`: dettagli e versioni.
-- `POST /v1/fingerprints`: riconosce gli addon installati dagli hash dei file.
+- `POST /v1/fingerprints/1`: riconosce gli addon installati dai fingerprint delle cartelle.
+- `GET /v1/games/1/version-types`: tipi di versione del gioco (Retail, Classic, …).
 - Le versioni del gioco (Retail, Classic, beta) si leggono dall'API, non si scrivono
   a mano.
 
