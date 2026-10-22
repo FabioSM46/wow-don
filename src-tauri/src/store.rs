@@ -140,7 +140,7 @@ fn read(file: &Path) -> Result<Vec<Installation>, String> {
         .map(|path| {
             Installation::from_canonical(path).ok_or_else(|| {
                 format!(
-                    "{INSTALLATIONS_FILE} contiene un percorso che non è una cartella `_<flavor>_`."
+                    "{INSTALLATIONS_FILE} contiene un percorso che non è una cartella _<flavor>_."
                 )
             })
         })
