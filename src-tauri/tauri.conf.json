@@ -25,7 +25,6 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "nsis"],
     "linux": {
       "deb": {
         "section": "games",
