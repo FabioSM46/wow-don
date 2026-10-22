@@ -28,6 +28,7 @@ pub fn run() {
             commands::list_installations,
             commands::add_installation,
             commands::remove_installation,
+            commands::list_addons,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
