@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   api,
@@ -56,6 +56,17 @@ export function AddonTable({ installation }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<Sort>(defaultSort);
+  // Gruppi aperti (per cartella principale): le altre cartelle compaiono sotto la riga.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  function toggle(folder: string) {
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      if (next.has(folder)) next.delete(folder);
+      else next.add(folder);
+      return next;
+    });
+  }
   // L'ultimo risultato valido resta visibile anche durante un nuovo controllo, così la tabella
   // e il filtro "Solo con aggiornamenti" non si svuotano mentre si aspetta.
   const [updates, setUpdates] = useState<Map<string, AddonUpdate> | undefined>();
@@ -106,6 +117,7 @@ export function AddonTable({ installation }: Props) {
     let current = true;
     setLoad({ state: "loading" });
     setFilters(defaultFilters);
+    setExpanded(new Set());
     api
       .listAddons(installation.id)
       .then((addons) => current && setLoad({ state: "ready", addons }))
@@ -258,34 +270,79 @@ export function AddonTable({ installation }: Props) {
                   {visible.map(({ main: addon, others }) => {
                     const error = addon.error ?? others.find((o) => o.error)?.error ?? null;
                     const update = groupUpdate({ main: addon, others }, updates);
+                    const hasOthers = others.length > 0;
+                    const open = hasOthers && expanded.has(addon.folder);
+                    const classes = [
+                      error ? "has-error" : "",
+                      hasOthers ? "expandable" : "",
+                      open ? "open" : "",
+                    ].join(" ");
                     return (
-                      <tr key={addon.folder} className={error ? "has-error" : undefined}>
-                        <td>
-                          <span className="addon-title" title={addon.notes ?? undefined}>
-                            {displayTitle(addon)}
-                          </span>
-                          {error && <span className="addon-error">{error}</span>}
-                        </td>
-                        <td className="mono">
-                          {addon.folder}
-                          {others.length > 0 && (
-                            <span
-                              className="more-folders"
-                              title={[addon.folder, ...others.map((o) => o.folder)].join("\n")}
-                            >
-                              +{others.length}
+                      <Fragment key={addon.folder}>
+                        <tr
+                          className={classes.trim() || undefined}
+                          onClick={hasOthers ? () => toggle(addon.folder) : undefined}
+                        >
+                          <td>
+                            {hasOthers ? (
+                              <button
+                                className="chevron"
+                                aria-expanded={open}
+                                aria-label={`${open ? "Nascondi" : "Mostra"} le cartelle di ${displayTitle(addon)}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggle(addon.folder);
+                                }}
+                              >
+                                {open ? "▾" : "▸"}
+                              </button>
+                            ) : (
+                              <span className="chevron-space" />
+                            )}
+                            <span className="addon-title" title={addon.notes ?? undefined}>
+                              {displayTitle(addon)}
                             </span>
-                          )}
-                        </td>
-                        <td>{addon.version ?? "—"}</td>
-                        <td>{addon.author ?? "—"}</td>
-                        <td className="mono">
-                          {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
-                        </td>
-                        <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
-                        <ProjectCell update={update} />
-                        <UpdateCell update={update} checking={checking} />
-                      </tr>
+                            {error && <span className="addon-error">{error}</span>}
+                          </td>
+                          <td className="mono">
+                            {addon.folder}
+                            {hasOthers && <span className="more-folders">+{others.length}</span>}
+                          </td>
+                          <td>{addon.version ?? "—"}</td>
+                          <td>{addon.author ?? "—"}</td>
+                          <td className="mono">
+                            {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
+                          </td>
+                          <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
+                          <ProjectCell update={update} />
+                          <UpdateCell update={update} checking={checking} />
+                        </tr>
+                        {open &&
+                          others.map((other) => (
+                            <tr
+                              key={other.folder}
+                              className={other.error ? "sub-row has-error" : "sub-row"}
+                            >
+                              <td>
+                                <span className="sub-title" title={other.notes ?? undefined}>
+                                  {displayTitle(other)}
+                                </span>
+                                {other.error && (
+                                  <span className="addon-error">{other.error}</span>
+                                )}
+                              </td>
+                              <td className="mono">{other.folder}</td>
+                              <td>{other.version ?? "—"}</td>
+                              <td>{other.author ?? "—"}</td>
+                              <td className="mono">
+                                {other.interface.length > 0 ? other.interface.join(", ") : "—"}
+                              </td>
+                              <td className="nowrap">{formatModified(other.modifiedMs)}</td>
+                              <td />
+                              <td />
+                            </tr>
+                          ))}
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -304,7 +361,14 @@ function ProjectCell({ update }: { update?: AddonUpdate }) {
   return (
     <td>
       {project.url ? (
-        <button className="link inline" onClick={() => openUrl(project.url!)}>
+        <button
+          className="link inline"
+          onClick={(event) => {
+            // Il link non apre e chiude la riga del gruppo.
+            event.stopPropagation();
+            void openUrl(project.url!);
+          }}
+        >
           {project.name || `#${project.id}`}
         </button>
       ) : (
