@@ -144,7 +144,8 @@ pub fn strip_ui_escapes(text: &str) -> String {
 }
 
 /// Suffissi dei `.toc` da cercare per un flavor, dal più specifico al più generico, prima del
-/// file senza suffisso. Il flavor è il nome della cartella `_<flavor>_` dell'installazione.
+/// file senza suffisso. Il flavor è quello dell'installazione (`classic_era`); si accetta anche
+/// il nome della cartella (`_classic_era_`) e le maiuscole non contano.
 ///
 /// Il gioco cerca prima il suffisso del tipo di gioco, poi quello della famiglia (`Mainline`
 /// o `Classic`), poi il file senza suffisso. La cartella `_classic_` ospita la Classic a
@@ -158,7 +159,7 @@ pub fn toc_suffixes(flavor: &str) -> &'static [&'static str] {
     const CLASSIC_PROGRESSION: &[&str] = &["Mists", "Classic"];
     const ANNIVERSARY: &[&str] = &["TBC", "Classic"];
 
-    match flavor {
+    match normalize_flavor(flavor).as_str() {
         "classic_beta" | "forever" => FOREVER,
         "anniversary" => ANNIVERSARY,
         f if f.starts_with("classic_era") => CLASSIC_ERA,
@@ -167,11 +168,17 @@ pub fn toc_suffixes(flavor: &str) -> &'static [&'static str] {
     }
 }
 
+/// `_Classic_Era_` → `classic_era`: chi chiama può passare il flavor o il nome della cartella.
+fn normalize_flavor(flavor: &str) -> String {
+    flavor.trim_matches('_').to_ascii_lowercase()
+}
+
 /// Suffissi con il trattino usati dai client più vecchi e ancora presenti in molti addon.
 /// La pagina del wiki documenta solo il separatore `_`: questi valgono come ripiego, dopo
 /// tutti i suffissi con `_` e prima del file senza suffisso.
 fn legacy_suffixes(flavor: &str) -> &'static [&'static str] {
-    match toc_suffixes(flavor).last() {
+    let flavor = normalize_flavor(flavor);
+    match toc_suffixes(&flavor).last() {
         Some(&"Classic") if flavor == "anniversary" => &["BCC", "Classic"],
         Some(&"Classic") if flavor.starts_with("classic_era") => &["Classic"],
         Some(&"Classic") => &["WOTLKC", "Classic"],
@@ -350,6 +357,33 @@ mod tests {
             select_toc("Foo", &files, "classic_beta"),
             Some("Foo_Mainline.toc")
         );
+    }
+
+    #[test]
+    fn the_folder_name_works_as_well_as_the_flavor() {
+        let files = names(&[
+            "Foo.toc",
+            "Foo_Mainline.toc",
+            "Foo_Vanilla.toc",
+            "Foo-BCC.toc",
+        ]);
+        assert_eq!(
+            select_toc("Foo", &files, "_classic_era_"),
+            Some("Foo_Vanilla.toc")
+        );
+        assert_eq!(
+            select_toc("Foo", &files, "Classic_Era"),
+            Some("Foo_Vanilla.toc")
+        );
+        assert_eq!(
+            select_toc("Foo", &files, "_retail_"),
+            Some("Foo_Mainline.toc")
+        );
+        assert_eq!(
+            select_toc("Foo", &files, "_anniversary_"),
+            Some("Foo-BCC.toc")
+        );
+        assert_eq!(toc_suffixes("_classic_"), toc_suffixes("classic"));
     }
 
     #[test]
