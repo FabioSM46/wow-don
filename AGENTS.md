@@ -1,8 +1,9 @@
 # WoW-don — Tauri 2 (Rust + React)
 
-Gestore di addon per World of Warcraft su Linux, dove il gioco gira dentro un prefisso Wine.
-App desktop nativa: backend **Rust** con **Tauri 2**, frontend **React + TypeScript** (Vite,
-pnpm). Contesto, decisioni, architettura e roadmap sono in `docs/`.
+Gestore di addon per World of Warcraft per **Linux e Windows**: su Linux il gioco gira dentro
+un prefisso Wine, su Windows è installato normalmente. App desktop nativa: backend **Rust**
+con **Tauri 2**, frontend **React + TypeScript** (Vite, pnpm). Contesto, decisioni,
+architettura e roadmap sono in `docs/`.
 
 ## Struttura del repository
 
@@ -50,6 +51,27 @@ quando "funziona".
 1. Prima il backend: tipi serializzati (`serde`) e comando Tauri.
 2. Poi il frontend, contro il comportamento reale del comando.
 3. Esegui i gate di entrambe le aree prima di aprire la PR.
+
+### Piattaforme: Linux e Windows
+
+L'app deve funzionare su **Linux e Windows** (D23) e si distribuisce come **`.deb`** su Linux
+e come **installer NSIS** su Windows, mai come versione portable (D24). Ogni modifica deve
+valere su entrambe:
+
+- **Percorsi solo con `Path`/`PathBuf`** e `join`: mai separatori scritti a mano, mai
+  confronti tra percorsi come stringhe. Le cartelle di config e dati si chiedono a Tauri
+  (`app.path()`), mai `~` o `%APPDATA%` scritti nel codice.
+- **Maiuscole e minuscole**: Windows (e il gioco sotto Wine) non le distingue nei nomi dei
+  file, Linux sì. I confronti sui nomi dei file del gioco (`.toc`, cartelle `_<flavor>_`) si
+  fanno senza distinguere maiuscole e minuscole quando il gioco fa lo stesso.
+- **`canonicalize` su Windows** restituisce percorsi `\\?\C:\...`: vanno mostrati e salvati
+  senza quel prefisso.
+- **Niente comandi di shell o strumenti di una sola piattaforma** (`sh`, `xdg-open`,
+  `cmd`): per aprire file e link c'è il plugin `opener`.
+- **I test girano su entrambe**: niente percorsi assoluti Unix nei test che toccano il disco;
+  si costruiscono sotto una cartella temporanea.
+- Le funzioni solo per una piattaforma stanno dietro `#[cfg(target_os = "...")]`, con un
+  comportamento definito anche per l'altra. Le funzioni legate a Wine e Lutris sono solo Linux.
 
 ### Interfaccia: minimale e moderna
 

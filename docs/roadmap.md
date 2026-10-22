@@ -42,4 +42,5 @@ Ultimo aggiornamento: 2026-10-22.
 
 - Altre fonti: GitHub releases, WoWInterface, Wago.
 - Scoperta automatica dei prefissi Lutris.
-- Pacchetti per Linux.
+- Pacchetti di rilascio: `.deb` per Linux e installer NSIS per Windows (D24), costruiti
+  dalla CI.

@@ -4,8 +4,8 @@ Ultimo aggiornamento: 2026-10-22.
 
 ## L'idea
 
-Un gestore di addon per World of Warcraft pensato prima di tutto per Linux, dove il
-gioco gira dentro un prefisso Wine (Lutris, Battle.net). Lo spunto è WoW Forever
+Un gestore di addon per World of Warcraft per Linux e Windows. Su Linux il gioco gira
+dentro un prefisso Wine (Lutris, Battle.net), ed è il caso da cui nasce il progetto. Lo spunto è WoW Forever
 beta, giocato su Linux con Battle.net sotto Lutris e WowUp-CF come gestore addon.
 
 ## Perché un altro gestore
