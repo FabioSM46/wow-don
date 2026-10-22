@@ -19,13 +19,14 @@ use crate::sources::curseforge::{
 /// un'installazione.
 ///
 /// Da confermare con il test `live_version_types` di `sources::curseforge`, che stampa i tipi
-/// reali: 517 (Retail) e 67408 (Classic Era) sono gli id usati dai client noti. Gli altri
-/// flavor (`classic`, `anniversary`, `classic_beta`) restano senza tipo finché l'id non è
-/// confermato: meglio un errore chiaro che un aggiornamento per la versione sbagliata.
+/// reali: 517 (Retail) e 67408 (Classic Era) sono gli id usati dai client noti. Tutti gli altri
+/// flavor (`classic`, `anniversary`, `classic_beta`, ma anche PTR e beta, che hanno client e
+/// file propri) restano senza tipo finché l'id non è confermato: meglio un errore chiaro che
+/// un aggiornamento per la versione sbagliata.
 pub fn version_type_for(flavor: &str) -> Option<u32> {
     match flavor.trim_matches('_').to_ascii_lowercase().as_str() {
-        "retail" | "ptr" | "xptr" | "beta" => Some(517),
-        "classic_era" | "classic_era_ptr" => Some(67408),
+        "retail" => Some(517),
+        "classic_era" => Some(67408),
         _ => None,
     }
 }
@@ -355,6 +356,8 @@ mod tests {
         assert_eq!(version_type_for("classic_era"), Some(ERA));
         assert_eq!(version_type_for("classic_beta"), None);
         assert_eq!(version_type_for("anniversary"), None);
+        assert_eq!(version_type_for("ptr"), None);
+        assert_eq!(version_type_for("beta"), None);
     }
 
     #[test]
