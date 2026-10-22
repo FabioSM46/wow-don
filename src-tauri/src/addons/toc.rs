@@ -7,9 +7,6 @@
 //!
 //! Qui non c'è I/O: il parser riceve il testo, la scelta del file riceve i nomi dei file.
 
-// Usato dalla scansione di `Interface/AddOns` (issue #4).
-#![allow(dead_code)]
-
 use serde::Serialize;
 
 /// Il gioco ignora quello che supera i 1024 caratteri di una riga.
