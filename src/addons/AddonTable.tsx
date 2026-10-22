@@ -112,9 +112,41 @@ export function AddonTable({ installation }: Props) {
     }
   }, [installation.id, runCheck]);
 
+  // Rilegge `Interface/AddOns` senza svuotare la tabella né perdere filtri e righe aperte:
+  // serve dopo aver installato o tolto addon fuori dall'app.
+  const [rescanning, setRescanning] = useState(false);
+  const [rescanError, setRescanError] = useState<string | null>(null);
+  function rescan() {
+    const id = installation.id;
+    setRescanning(true);
+    setRescanError(null);
+    api
+      .listAddons(id)
+      .then((addons) => {
+        if (currentId.current !== id) return;
+        setLoad({ state: "ready", addons });
+        // Gli stati di aggiornamento si riferivano alla lista di prima: si ricontrolla.
+        runCheck();
+      })
+      .catch((err) => {
+        if (currentId.current !== id) return;
+        // Un errore di lettura non toglie la tabella già mostrata: lo si segnala sopra.
+        setLoad((previous) =>
+          previous.state === "ready" ? previous : { state: "error", message: errorMessage(err) },
+        );
+        setRescanError(errorMessage(err));
+      })
+      .finally(() => {
+        if (currentId.current === id) setRescanning(false);
+      });
+  }
+
   useEffect(() => {
     // Cambiando installazione in fretta, una risposta vecchia non deve sovrascrivere la nuova.
     let current = true;
+    // Una rilettura partita per l'installazione precedente non vale più per questa.
+    setRescanning(false);
+    setRescanError(null);
     setLoad({ state: "loading" });
     setFilters(defaultFilters);
     setExpanded(new Set());
@@ -171,6 +203,14 @@ export function AddonTable({ installation }: Props) {
           )}
           <button
             className="button secondary"
+            onClick={rescan}
+            disabled={rescanning || load.state === "loading"}
+            title="Rilegge la cartella Interface/AddOns"
+          >
+            {rescanning ? "Lettura…" : "Rileggi addon"}
+          </button>
+          <button
+            className="button secondary"
             onClick={() => runCheck()}
             disabled={checking}
           >
@@ -182,6 +222,11 @@ export function AddonTable({ installation }: Props) {
       {checkError && (
         <p className="message error" role="alert">
           {checkError}
+        </p>
+      )}
+      {rescanError && (
+        <p className="message error" role="alert">
+          {rescanError}
         </p>
       )}
 
@@ -316,8 +361,12 @@ export function AddonTable({ installation }: Props) {
                             )}
                           </td>
                           <td>{addon.version ?? "—"}</td>
-                          <td>{addon.author ?? "—"}</td>
-                          <td className="mono">
+                          <td>
+                            <span className="clip" title={addon.author ?? undefined}>
+                              {addon.author ?? "—"}
+                            </span>
+                          </td>
+                          <td className="mono interface">
                             {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
                           </td>
                           <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
@@ -340,8 +389,12 @@ export function AddonTable({ installation }: Props) {
                               </td>
                               <td className="mono">{other.folder}</td>
                               <td>{other.version ?? "—"}</td>
-                              <td>{other.author ?? "—"}</td>
-                              <td className="mono">
+                              <td>
+                                <span className="clip" title={other.author ?? undefined}>
+                                  {other.author ?? "—"}
+                                </span>
+                              </td>
+                              <td className="mono interface">
                                 {other.interface.length > 0 ? other.interface.join(", ") : "—"}
                               </td>
                               <td className="nowrap">{formatModified(other.modifiedMs)}</td>
