@@ -162,7 +162,10 @@ mod tests {
         let mut stack = vec![root.to_path_buf()];
         while let Some(dir) = stack.pop() {
             for entry in fs::read_dir(&dir).unwrap().flatten() {
-                let meta = entry.metadata().unwrap();
+                // `fs::metadata` e non `DirEntry::metadata`: su Windows la seconda restituisce
+                // i dati memorizzati quando si è letta la cartella padre, che possono essere
+                // vecchi, e il confronto fallirebbe senza che niente sia cambiato.
+                let meta = fs::metadata(entry.path()).unwrap();
                 out.push((
                     entry.path().to_string_lossy().into_owned(),
                     meta.len(),
@@ -332,18 +335,33 @@ mod tests {
         assert_eq!(folders, ["Real"]);
     }
 
-    #[test]
-    fn the_order_is_stable_by_folder_name() {
-        let tmp = TempDir::new();
-        for folder in ["zeta", "Alpha", "beta", "alpha"] {
-            addon(tmp.path(), folder, &[]);
-        }
-        let folders: Vec<_> = scan_addons(tmp.path(), "retail")
+    fn folders(root: &Path) -> Vec<String> {
+        scan_addons(root, "retail")
             .unwrap()
             .into_iter()
             .map(|a| a.folder)
-            .collect();
-        assert_eq!(folders, ["Alpha", "alpha", "beta", "zeta"]);
+            .collect()
+    }
+
+    #[test]
+    fn the_order_ignores_case() {
+        let tmp = TempDir::new();
+        for folder in ["zeta", "Alpha", "beta", "Gamma"] {
+            addon(tmp.path(), folder, &[]);
+        }
+        assert_eq!(folders(tmp.path()), ["Alpha", "beta", "Gamma", "zeta"]);
+    }
+
+    /// Due cartelle che differiscono solo per le maiuscole possono esistere solo dove il file
+    /// system le distingue: su Windows (NTFS) sarebbero la stessa cartella.
+    #[cfg(unix)]
+    #[test]
+    fn names_differing_only_by_case_have_a_stable_order() {
+        let tmp = TempDir::new();
+        for folder in ["alpha", "Alpha"] {
+            addon(tmp.path(), folder, &[]);
+        }
+        assert_eq!(folders(tmp.path()), ["Alpha", "alpha"]);
     }
 
     #[test]
