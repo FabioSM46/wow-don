@@ -154,6 +154,8 @@ if ! git merge-base --is-ancestor "$BASE_HEAD" HEAD; then
   # Esegui tutti i gate coinvolti, poi:
   git add -A
   git commit -m "fix: reconcile ${BASE_BRANCH} on PR #<pr-number>"
+  bash scripts/check-publication-privacy.sh
+  bash scripts/check-commit-privacy.sh "origin/$BASE_BRANCH" HEAD
   git push origin HEAD
   REMOTE_HEAD=$(git rev-parse HEAD)
 fi
@@ -354,6 +356,8 @@ if git diff --cached --quiet; then
   echo "No source changes to commit"
 else
   git commit -m "fix: address feedback on PR #<pr-number>"
+  bash scripts/check-publication-privacy.sh
+  bash scripts/check-commit-privacy.sh "origin/$BASE_BRANCH" HEAD
   git fetch origin "$BRANCH"
   [ "$(git rev-parse "origin/$BRANCH")" = "$REMOTE_HEAD" ] || {
     echo "PR head moved; preserve local commits and reconstruct state"
@@ -397,13 +401,15 @@ gh api graphql \
 ```
 
 Per i finding del corpo pubblica una risposta per finding (corretto, con file/test, oppure
-respinto, con le prove). È la traccia di audit pubblica. Poi rileggi `latest_review_id`: deve
+respinto, con le prove), dopo aver passato il testo esatto a `scripts/check-body-privacy.sh`.
+È la traccia di audit pubblica. Poi rileggi `latest_review_id`: deve
 essere ancora uguale a `ACK_REVIEW_ID`, altrimenti ripeti questo passo dalla lettura dei corpi.
 Rinnova `DEEPSEEK_REVIEW_READ` solo dopo che la traccia esiste, trattando la lettura della label
 a tre stati (presente/assente/illeggibile), e verifica sia la label nuova sia le postcondizioni:
 
 ```bash
 ACK_COMMENT='<un punto per finding del corpo DeepSeek, con ID della review e prove>'
+printf '%s\n' "$ACK_COMMENT" | bash scripts/check-body-privacy.sh || exit 1
 gh pr comment <pr-number> --body "$ACK_COMMENT" || exit 1
 LATEST_BEFORE_ACK=$(bash scripts/gh-automation.sh pr-deepseek-rounds <pr-number> \
   | jq -er '.latest_review_id')
@@ -506,7 +512,8 @@ verso basi diverse da `main` spetta a chi legge il risultato finito e i vincoli 
   congelata non lo vede.
 - Mai force-push o rebase senza istruzione esplicita dell'utente. I conflitti si risolvono con un
   merge della base nella testa della PR, preservando la storia.
-- Esegui sempre i gate in locale prima di pubblicare correzioni.
+- Esegui sempre i gate in locale prima di pubblicare correzioni, e i due controlli di privacy
+  (`check-publication-privacy.sh`, `check-commit-privacy.sh`) prima di ogni push.
 - Applica `DEEPSEEK_REVIEW_READ` solo con la sequenza lettura/risposta/audit pubblico/scrittura
   fresca dei passi 4c e 4f. Mai `NO_DEEPSEEK_REVIEW`.
 

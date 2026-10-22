@@ -44,9 +44,18 @@ jobs:
       frontend: ${{ steps.classify.outputs.frontend }}
       helpers: ${{ steps.classify.outputs.helpers }}
     steps:
+      # Full history: the commit-privacy scan walks every commit the PR adds.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: Reject publication privacy leaks
+        run: bash scripts/check-publication-privacy.sh
+      - name: Reject commit privacy leaks
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/check-commit-privacy.sh "$BASE_SHA" "$HEAD_SHA"
       - name: Classify changed files
         id: classify
         env:
@@ -157,6 +166,9 @@ jobs:
       - name: Automation helper tests
         run: |
           bash scripts/test/agent-skills-sync.test.sh
+          bash scripts/test/commit-privacy.test.sh
+          bash scripts/test/publication-privacy.test.sh
+          bash scripts/test/body-privacy.test.sh
           bash scripts/test/gh-automation-deepseek-rounds.test.sh
           bash scripts/test/iteration-lifecycle.test.sh
           bash scripts/test/pr-labeler-step.test.sh

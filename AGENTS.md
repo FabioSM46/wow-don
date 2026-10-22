@@ -51,7 +51,63 @@ quando "funziona".
 2. Poi il frontend, contro il comportamento reale del comando.
 3. Esegui i gate di entrambe le aree prima di aprire la PR.
 
+## Confine di privacy: scrivere come se il repository fosse pubblico
+
+Il repository oggi è privato e potrebbe diventare pubblico. Quando succede, tutto quello che è
+già stato pubblicato diventa leggibile per sempre: file, metadati dei commit (autore e
+committer), nomi dei branch, messaggi di commit e di PR, commenti di review, log della CI,
+artifact. Per questo valgono già adesso le regole di un repository pubblico.
+
+- **Mai un indirizzo email reale.** I commit usano l'indirizzo `noreply` fornito da GitHub
+  (copialo da Settings → Emails, non scrivere il numero a mano). Codice, fixture e messaggi
+  possono contenere solo identità `noreply` di GitHub e indirizzi su domini di esempio riservati.
+- **Mai percorsi della propria macchina.** Niente nomi utente, home directory, mount point o
+  posizioni dei checkout. La documentazione usa segnaposto come `<repo-root>`, `<worktree>` e
+  `<workspace>`; i test usano percorsi chiaramente sintetici.
+- **Mai dati personali** nelle issue, nelle PR o nel codice: nomi reali, numeri di telefono,
+  posizioni, identificativi di account. L'identità pubblica del progetto è l'handle `@FabioSM46`.
+- **Mai segreti o identificativi operativi.** Chiavi API, token, credenziali, hostname interni e
+  endpoint non pubblici stanno nei GitHub Secrets o in file locali ignorati (`.env`), mai in git,
+  nei log, nelle issue o nelle PR.
+- **Mai un riferimento a una sessione di un agente.** Un trailer `Claude-Session:` o un link
+  `claude.ai/code/session_…` in un messaggio è un endpoint legato a un account.
+- **Mai attribuire un commit a un account che non è il tuo.** Un indirizzo
+  `<id>+<login>@users.noreply.github.com` accredita chi possiede `<id>`, non `<login>`: il numero
+  sbagliato accanto al nome giusto accredita uno sconosciuto. I tre script di privacy tengono una
+  tabella login → id per le identità che il repository pubblica.
+
+**Tre script dividono il lavoro, e condividono le stesse tre categorie** (email non pubblica,
+percorso della macchina, indirizzo di rete privato), copiate in ciascuno e tenute uguali da
+`scripts/test/commit-privacy.test.sh`:
+
+- `bash scripts/check-publication-privacy.sh` legge il contenuto dei file tracciati;
+- `bash scripts/check-commit-privacy.sh <base> <head>` legge autore, committer e messaggio di ogni
+  commit che il branch aggiunge;
+- `bash scripts/check-body-privacy.sh` legge un corpo di issue o PR da stdin. Usalo prima di
+  pubblicare: `bash scripts/check-body-privacy.sh < corpo.md`.
+
+Esegui i primi due prima di ogni push: la CI li esegue nel job `detect` e una violazione blocca la
+PR anche con tutto il resto verde. Le diagnostiche nominano solo posizione e categoria, mai il
+valore trovato; quando un controllo fallisce, togli il dato prima di continuare invece di
+ristamparlo in un altro messaggio.
+
+**Il corpo di una issue o di una PR si può controllare solo dopo.** `.github/workflows/body-privacy.yml`
+gira su `issues` e `pull_request_target` (`opened`, `edited`): se trova qualcosa aggiunge la label
+`needs-privacy-review` e un commento con categoria e riga; non chiude, non modifica e non
+nasconde niente. **Non può impedire una fuga, può solo accorciare il tempo in cui nessuno lo sa**:
+un run verde significa "niente è pubblicato ora", mai "niente è mai stato pubblicato". È la
+superficie che una macchina scrive più spesso: un agente che scrive il corpo di una PR trascrive
+quello che ha appena fatto, e l'ha fatto in una cartella con un nome.
+
+**Prima di rendere pubblico il repository**: esegui `check-publication-privacy.sh` sull'albero e
+`check-commit-privacy.sh` su tutta la storia, rileggi a mano titoli e corpi di issue e PR già
+aperte, controlla i secret e verifica che i ruleset siano ancora attivi dopo il cambio di
+visibilità.
+
 ## Convenzioni comuni
+
+- **Niente segreti nel codice**: chiavi, token e credenziali stanno nei GitHub Secrets o in file
+  locali ignorati, mai in git, nei log, nelle issue o nelle PR.
 
 - **Commit**: mai committare senza richiesta esplicita; stile conventional commit (`feat:`,
   `fix:`, `refactor:`, `docs:`, `ci:`).
@@ -60,8 +116,6 @@ quando "funziona".
 - **Mai leggere i file `.env`**: gli agenti AI NON devono leggere, aprire o ispezionare nessun
   file `.env`. Per sapere quali variabili servono si usa solo `.env.example`. `.env` contiene la
   chiave API reale.
-- **Repository privato, ma niente segreti nel codice**: chiavi, token e credenziali stanno nei
-  GitHub Secrets o in file locali ignorati, mai in git, nei log, nelle issue o nelle PR.
 - **Nessuna firma degli strumenti**: niente trailer `Co-Authored-By` di agenti, niente
   "Generated with ..." nelle PR, niente link `claude.ai/code/session_…` nei messaggi.
 - **MAI push o merge su `main`**: `main` è il branch di rilascio e resta solo umano. L'AI non
@@ -327,7 +381,7 @@ thread).
    `ci-gate` ha girato su una PR vera.
 4. **Label**: `READY TO MERGE`, `needs-review`, `needs-work`, `DEEPSEEK_REVIEW_READ`,
    `NO_DEEPSEEK_REVIEW`, `ceremony`, `feature`, `bug`, `needs-refinement`, `needs-triage`,
-   `ready-for-dev`.
+   `ready-for-dev`, `needs-privacy-review`.
 
 ## Definition of Done
 
@@ -341,6 +395,9 @@ thread).
 - [ ] **Nessuna stampa di debug** nei percorsi di produzione
 - [ ] **Nessun segreto** — niente chiavi, token, password o credenziali nel codice o nei test
 - [ ] **Chiave API solo nel backend** — mai nel frontend né nei log
+- [ ] **Privacy di pubblicazione pulita** — nessuna email reale, dato personale, percorso della
+      macchina, hostname o endpoint privato; `scripts/check-publication-privacy.sh` passa
+      sull'albero e `scripts/check-commit-privacy.sh` sui commit che il branch aggiunge
 
 Se un gate fallisce, l'implementazione non è finita.
 
@@ -350,7 +407,7 @@ Se un gate fallisce, l'implementazione non è finita.
 
 | Job          | Gate |
 | ------------ | ---- |
-| `detect`     | Classifica i file cambiati con `scripts/changed-areas.sh` |
+| `detect`     | Controlli di privacy sull'albero e sui commit della PR, poi classifica i file cambiati con `scripts/changed-areas.sh` |
 | `backend`    | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` (con le librerie di sistema di Tauri) |
 | `frontend`   | `pnpm install --frozen-lockfile`, `pnpm build` |
 | `automation` | Tutta la suite `scripts/test/*.test.sh` più `test_deepseek_review.py` |

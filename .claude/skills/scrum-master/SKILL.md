@@ -2,7 +2,7 @@
 name: scrum-master
 description: Scrum ceremony facilitator. Use for backlog refinement, iteration planning, and feature specification.
 argument-hint: <ceremony>
-allowed-tools: Bash(gh *) Bash(git *) Bash(cat *) Bash(xargs *) Bash(date *) Bash(echo *) Bash(set *) Bash(jq *)
+allowed-tools: Bash(gh *) Bash(git *) Bash(bash *) Bash(cat *) Bash(xargs *) Bash(date *) Bash(echo *) Bash(set *) Bash(jq *)
 ---
 
 # scrum-master — cerimonie scrum
@@ -348,6 +348,10 @@ eredita invece di rifare la stima, e la decisione la prende chi è più lontano 
 - **Dimensiona ogni issue rispetto al limite di 90,000 caratteri prima di assegnarla a una
   milestone.**
 - Nel dubbio sullo scope, chiedi.
+- **Ogni corpo di issue e ogni commento passa da `bash scripts/check-body-privacy.sh` prima di
+  essere pubblicato** (per esempio `bash scripts/check-body-privacy.sh < /tmp/issue-<numero>.md`):
+  niente email reali, percorsi della propria macchina o indirizzi di rete privati. Nei riferimenti
+  al codice usa percorsi relativi al repository.
 - Le issue di cerimonia (label `ceremony`) sono escluse da tutti i report.
 
 ## Riferimenti
