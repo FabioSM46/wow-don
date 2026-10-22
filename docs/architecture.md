@@ -26,13 +26,13 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | --- | --- | --- |
 | `config` | Legge `CURSEFORGE_API_KEY` dall'ambiente / `.env` | Esiste |
 | `commands` | Comandi Tauri esposti al frontend | Esiste (`app_status`) |
-| `installations` | Trova e gestisce le installazioni di WoW, anche dentro prefissi Wine | Da fare |
+| `installations` | Trova e gestisce le installazioni di WoW, anche dentro prefissi Wine | Esiste (aggiunta manuale e validazione; scoperta automatica da fare) |
 | `addons::toc` | Legge i file `.toc` in `Interface/AddOns` (titolo, versione, `## Interface`) | Da fare |
 | `addons::fingerprint` | Calcola i fingerprint (MurmurHash2) per riconoscere gli addon installati | Da fare |
 | `sources` | Trait comune per le fonti (`search`, `versions`, `download`) | Da fare |
 | `sources::curseforge` | Client per `https://api.curseforge.com/v1` con header `x-api-key` | Da fare |
 | `install` | Download, estrazione zip, sostituzione atomica delle cartelle | Da fare |
-| `store` | Stato locale: addon installati, fonte, versione, versione del gioco forzata | Da fare |
+| `store` | Stato locale: addon installati, fonte, versione, versione del gioco forzata | Esiste per le installazioni (`installations.json`, D22) |
 
 ## API CurseForge usate
 
@@ -66,6 +66,6 @@ installazioni a mano e, più avanti, cercarle nei prefissi Lutris noti.
 ## Sicurezza
 
 - La chiave non è mai inviata al frontend né scritta nei log.
-- In produzione la chiave verrà dalla config utente (vedi decisione aperta A1).
+- In produzione la chiave verrà dalla config utente (formato e posizione di D22).
 - Gli zip scaricati si estraggono in una cartella temporanea e si controlla che i
   percorsi non escano dalla cartella `AddOns` prima di spostarli.
