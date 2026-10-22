@@ -51,6 +51,29 @@ quando "funziona".
 2. Poi il frontend, contro il comportamento reale del comando.
 3. Esegui i gate di entrambe le aree prima di aprire la PR.
 
+### Interfaccia: minimale e moderna
+
+La UI deve essere **minimale e moderna** (decisione D20 in `docs/decisions.md`). In pratica:
+
+- **Poche superfici.** Una schermata fa una cosa; niente pannelli, barre e finestre accessorie
+  che non servono al compito. Le azioni secondarie stanno dietro un menu o compaiono al
+  passaggio del mouse, non tutte in vista.
+- **Spazio e gerarchia, non decorazione.** Spaziatura generosa e regolare, tipografia pulita
+  (font di sistema), al massimo due pesi e pochi corpi. Niente gradienti, ombre pesanti, bordi
+  doppi, icone decorative o animazioni che non comunicano uno stato.
+- **Colore con parsimonia.** Una palette neutra con un solo colore d'accento; il colore segnala
+  stato (errore, avviso, selezione), non abbellisce. Chiaro e scuro sono entrambi obbligatori,
+  con le variabili CSS già in `src/App.css`.
+- **I dati in primo piano.** Ricerca, filtri e ordinamento sono il punto di forza dell'app (D4):
+  la casella di ricerca è sempre visibile, i filtri sono compatti, le tabelle sono dense ma
+  leggibili.
+- **Stati sempre gestiti**: caricamento, lista vuota (con una frase che dice cosa fare) ed
+  errore, senza dialoghi bloccanti del browser.
+- **Nessuna libreria di componenti o di stile** senza decisione esplicita: CSS semplice finché
+  basta.
+
+Una PR che tocca `src/` descrive in una riga come rispetta queste regole.
+
 ## Confine di privacy: scrivere come se il repository fosse pubblico
 
 Il repository oggi è privato e potrebbe diventare pubblico. Quando succede, tutto quello che è
