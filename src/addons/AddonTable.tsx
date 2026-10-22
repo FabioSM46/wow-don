@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   api,
@@ -12,8 +12,10 @@ import {
   defaultFilters,
   defaultSort,
   displayTitle,
+  groupAddons,
+  groupUpdate,
   nextSort,
-  visibleAddons,
+  visibleGroups,
   type Filters,
   type Sort,
   type SortKey,
@@ -54,6 +56,17 @@ export function AddonTable({ installation }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<Sort>(defaultSort);
+  // Gruppi aperti (per cartella principale): le altre cartelle compaiono sotto la riga.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  function toggle(folder: string) {
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      if (next.has(folder)) next.delete(folder);
+      else next.add(folder);
+      return next;
+    });
+  }
   // L'ultimo risultato valido resta visibile anche durante un nuovo controllo, così la tabella
   // e il filtro "Solo con aggiornamenti" non si svuotano mentre si aspetta.
   const [updates, setUpdates] = useState<Map<string, AddonUpdate> | undefined>();
@@ -104,6 +117,7 @@ export function AddonTable({ installation }: Props) {
     let current = true;
     setLoad({ state: "loading" });
     setFilters(defaultFilters);
+    setExpanded(new Set());
     api
       .listAddons(installation.id)
       .then((addons) => current && setLoad({ state: "ready", addons }))
@@ -114,14 +128,16 @@ export function AddonTable({ installation }: Props) {
   }, [installation.id]);
 
   const addons = load.state === "ready" ? load.addons : [];
-  const authors = useMemo(() => authorsOf(addons), [addons]);
+  // Un addon fatto di più cartelle è una riga sola: conteggi e filtri contano i gruppi.
+  const groups = useMemo(() => groupAddons(addons, updates), [addons, updates]);
+  const authors = useMemo(() => authorsOf(groups.map((g) => g.main)), [groups]);
   const visible = useMemo(
-    () => visibleAddons(addons, filters, sort, updates),
-    [addons, filters, sort, updates],
+    () => visibleGroups(groups, filters, sort, updates),
+    [groups, filters, sort, updates],
   );
-  const updateCount = updates
-    ? [...updates.values()].filter((u) => u.status === "updateAvailable").length
-    : 0;
+  const updateCount = groups.filter(
+    (g) => groupUpdate(g, updates)?.status === "updateAvailable",
+  ).length;
 
   function update(patch: Partial<Filters>) {
     setFilters((previous) => ({ ...previous, ...patch }));
@@ -149,7 +165,7 @@ export function AddonTable({ installation }: Props) {
         <div className="section-actions">
           {load.state === "ready" && (
             <span className="muted count">
-              {visible.length} di {addons.length} addon
+              {visible.length} di {groups.length} addon
               {updateCount > 0 && ` · ${updateCount} da aggiornare`}
             </span>
           )}
@@ -251,28 +267,91 @@ export function AddonTable({ installation }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {visible.map((addon) => (
-                    <tr key={addon.folder} className={addon.error ? "has-error" : undefined}>
-                      <td>
-                        <span className="addon-title" title={addon.notes ?? undefined}>
-                          {displayTitle(addon)}
-                        </span>
-                        {addon.error && <span className="addon-error">{addon.error}</span>}
-                      </td>
-                      <td className="mono">{addon.folder}</td>
-                      <td>{addon.version ?? "—"}</td>
-                      <td>{addon.author ?? "—"}</td>
-                      <td className="mono">
-                        {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
-                      </td>
-                      <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
-                      <ProjectCell update={updates?.get(addon.folder)} />
-                      <UpdateCell
-                        update={updates?.get(addon.folder)}
-                        checking={checking}
-                      />
-                    </tr>
-                  ))}
+                  {visible.map(({ main: addon, others }) => {
+                    const error = addon.error ?? others.find((o) => o.error)?.error ?? null;
+                    const update = groupUpdate({ main: addon, others }, updates);
+                    const hasOthers = others.length > 0;
+                    const open = hasOthers && expanded.has(addon.folder);
+                    const classes = [
+                      error ? "has-error" : "",
+                      hasOthers ? "expandable" : "",
+                      open ? "open" : "",
+                    ].join(" ");
+                    return (
+                      <Fragment key={addon.folder}>
+                        <tr
+                          className={classes.trim() || undefined}
+                          onClick={hasOthers ? () => toggle(addon.folder) : undefined}
+                        >
+                          <td>
+                            {hasOthers ? (
+                              <button
+                                className="chevron"
+                                aria-expanded={open}
+                                aria-label={`${open ? "Nascondi" : "Mostra"} le cartelle di ${displayTitle(addon)}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggle(addon.folder);
+                                }}
+                              >
+                                {open ? "▾" : "▸"}
+                              </button>
+                            ) : (
+                              <span className="chevron-space" />
+                            )}
+                            <span className="addon-title" title={addon.notes ?? undefined}>
+                              {displayTitle(addon)}
+                            </span>
+                            {error && <span className="addon-error">{error}</span>}
+                          </td>
+                          <td className="mono">
+                            {addon.folder}
+                            {hasOthers && (
+                              <span
+                                className="more-folders"
+                                aria-label={`e altre ${others.length} cartelle: ${others.map((o) => o.folder).join(", ")}`}
+                              >
+                                +{others.length}
+                              </span>
+                            )}
+                          </td>
+                          <td>{addon.version ?? "—"}</td>
+                          <td>{addon.author ?? "—"}</td>
+                          <td className="mono">
+                            {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
+                          </td>
+                          <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
+                          <ProjectCell update={update} />
+                          <UpdateCell update={update} checking={checking} />
+                        </tr>
+                        {open &&
+                          others.map((other) => (
+                            <tr
+                              key={other.folder}
+                              className={other.error ? "sub-row has-error" : "sub-row"}
+                            >
+                              <td>
+                                <span className="sub-title" title={other.notes ?? undefined}>
+                                  {displayTitle(other)}
+                                </span>
+                                {other.error && (
+                                  <span className="addon-error">{other.error}</span>
+                                )}
+                              </td>
+                              <td className="mono">{other.folder}</td>
+                              <td>{other.version ?? "—"}</td>
+                              <td>{other.author ?? "—"}</td>
+                              <td className="mono">
+                                {other.interface.length > 0 ? other.interface.join(", ") : "—"}
+                              </td>
+                              <td className="nowrap">{formatModified(other.modifiedMs)}</td>
+                              <td />
+                              <td />
+                            </tr>
+                          ))}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -289,7 +368,14 @@ function ProjectCell({ update }: { update?: AddonUpdate }) {
   return (
     <td>
       {project.url ? (
-        <button className="link inline" onClick={() => openUrl(project.url!)}>
+        <button
+          className="link inline"
+          onClick={(event) => {
+            // Il link non apre e chiude la riga del gruppo.
+            event.stopPropagation();
+            void openUrl(project.url!);
+          }}
+        >
           {project.name || `#${project.id}`}
         </button>
       ) : (
@@ -312,15 +398,26 @@ function UpdateCell({ update, checking }: { update?: AddonUpdate; checking: bool
   switch (update.status) {
     case "updateAvailable":
       return (
-        <td className="update-available" title={update.latest.date}>
+        <td className="update-available" title={installedTitle(update, update.latest.date)}>
           {update.latest.name}
         </td>
       );
     case "upToDate":
-      return <td className="muted">Aggiornato</td>;
+      return (
+        <td className="muted" title={installedTitle(update)}>
+          Aggiornato
+        </td>
+      );
     case "error":
       return <td className="error">{update.message}</td>;
     case "notMatched":
       return <td />;
   }
+}
+
+/** Lo stato riguarda il progetto: il suggerimento dice quale file del progetto è installato. */
+function installedTitle(update: AddonUpdate, latestDate?: string): string | undefined {
+  const installed = update.installedFile ? `Installato: ${update.installedFile.name}` : undefined;
+  const latest = latestDate ? `Nuovo file del ${latestDate.slice(0, 10)}` : undefined;
+  return [installed, latest].filter(Boolean).join("\n") || undefined;
 }

@@ -400,3 +400,53 @@ button:focus-visible {
   font-weight: 500;
 }
 
+.more-folders {
+  margin-left: 6px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Gruppi di cartelle: la riga si apre con un clic e mostra sotto le altre cartelle. */
+
+.addon-table tr.expandable {
+  cursor: pointer;
+}
+
+.chevron,
+.chevron-space {
+  display: inline-block;
+  width: 1.1em;
+  margin-right: 4px;
+}
+
+.chevron {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.addon-table tr.open td {
+  border-bottom: none;
+}
+
+.addon-table tbody tr.sub-row td {
+  border-top: none;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.sub-title {
+  display: inline-block;
+  padding-left: calc(1.1em + 4px);
+}
+
+.sub-title::before {
+  content: "└ ";
+}
+
