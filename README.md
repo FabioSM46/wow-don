@@ -96,6 +96,10 @@ wow-don/
 │   ├── decisions.md        # registro delle decisioni
 │   ├── architecture.md     # moduli, API usate, sicurezza
 │   └── roadmap.md          # milestone
+├── scripts/                # helper della pipeline e test dell'automazione
+├── .github/                # CI, review DeepSeek, labeler, template delle issue
+├── .claude/skills/         # skill per gli agenti (/dev-issue, /process-pr, /scrum-master)
+├── AGENTS.md               # regole per gli agenti AI e pipeline
 ├── .env.example            # modello del file con la chiave API
 ├── index.html
 ├── package.json
@@ -109,9 +113,16 @@ La struttura prevista dei moduli del backend è in
 
 ### Requisiti
 
-- Rust stabile (`rustup`), con edition 2024 (Rust 1.85 o successivo).
-- Node.js 22 e pnpm.
-- Librerie di sistema per Tauri su Linux. Su Ubuntu/Debian:
+| Strumento | Versione | Serve per |
+| ----- | ------------------------------- | ------------------ |
+| Rust  | fissata in `src-tauri/rust-toolchain.toml` (rustfmt + clippy) | backend |
+| Node  | 22                              | frontend |
+| pnpm  | 10                              | frontend |
+| gh    | 2.18.0 o successivo             | script della pipeline |
+| jq    | qualunque recente               | script della pipeline, `scripts/test/` |
+| python3 | 3.12 consigliato              | test del reviewer DeepSeek |
+
+Librerie di sistema per Tauri su Linux. Su Ubuntu/Debian:
 
   ```bash
   sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
@@ -143,6 +154,12 @@ Controlli rapidi:
 pnpm build                              # type-check e build del frontend
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
+
+### Flusso di lavoro
+
+Il branch di integrazione è `develop` (branch predefinito); `main` riceve solo i rilasci. Il
+lavoro passa da issue → PR verso `develop` → CI e review automatica DeepSeek → merge. Le regole
+per gli agenti AI e i dettagli della pipeline sono in [AGENTS.md](AGENTS.md).
 
 ## Documentazione
 

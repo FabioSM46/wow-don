@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  pull_request:
+
+# Every job starts read-only. Jobs that need more (the diff classifier) widen
+# their own token explicitly instead of inheriting a repository-level default.
+permissions:
+  contents: read
+
+# Supersede an in-flight run when new commits land on the same PR.
+#
+# Scoped to pull_request events only, deliberately: a cancelled job resolves to
+# CANCELLED, and `pr-status-json` counts CANCELLED among its FAILING conclusions —
+# so a cancellation that landed on the PR's *current* head SHA would pin it at
+# needs-work. A `synchronize` event always carries a NEW head SHA, so the run being
+# cancelled is always one for a commit that is no longer the head.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Non-main PRs are classified from the changed-file list. Main promotion PRs
+  # validate everything. Jobs skip via job-level `if:` — NEVER via workflow- or
+  # job-level `paths:` filters — so every job still reports a result that
+  # `ci-gate` can audit.
+  #
+  # Every failure direction is open:
+  #   * the classifier treats unrecognised paths and empty input as "run
+  #     everything" (scripts/changed-areas.sh, pinned by its tests);
+  #   * this step falls back to all-true when it cannot enumerate the diff;
+  #   * the consumers test `!= 'false'`, so a missing output runs the job.
+  #
+  # `helpers` is always true: automation tests read files across the whole repo
+  # and test changed-areas.sh itself, so a path selector could exempt them.
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.classify.outputs.backend }}
+      frontend: ${{ steps.classify.outputs.frontend }}
+      helpers: ${{ steps.classify.outputs.helpers }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Classify changed files
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+
+          if [ "$BASE_REF" = "main" ]; then
+            echo "Release promotion matrix: everything runs"
+            printf 'backend=true\nfrontend=true\nhelpers=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          files=""
+          list_ok=false
+          # Both sides of a rename, deliberately: a file moved out of a workspace
+          # must still rebuild the workspace it left.
+          if files=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" \
+              --paginate --jq '.[] | .filename, (.previous_filename // empty)'); then
+            # The files API hard-caps at 3000 entries and --paginate stops there silently.
+            if [ "$(printf '%s\n' "$files" | grep -c .)" -lt 3000 ]; then
+              list_ok=true
+            fi
+          fi
+
+          if [ "$list_ok" = true ]; then
+            printf '%s\n' "$files" | bash scripts/changed-areas.sh >> "$GITHUB_OUTPUT"
+            printf 'helpers=true\n' >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::detect: could not enumerate changed files; failing open — all jobs run"
+            printf 'backend=true\nfrontend=true\nhelpers=true\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  # Rust/Tauri backend gates (src-tauri/). `!= 'false'`, not `== 'true'`: a job may
+  # skip only on a positive, well-formed "false". `!cancelled()` keeps this
+  # evaluable when `detect` itself failed.
+  backend:
+    needs: detect
+    if: ${{ !cancelled() && needs.detect.outputs.backend != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # Tauri on Linux links against WebKitGTK and friends. scripts/apt-install-with-fallback.sh
+      # survives a flaky Ubuntu mirror and fails fast naming every host it tried.
+      - name: Install Tauri system dependencies
+        working-directory: ${{ github.workspace }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/apt-install-with-fallback.sh libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Build
+        run: cargo build --locked
+      - name: Test
+        run: cargo test --locked
+
+  # React/TypeScript frontend gates: `pnpm build` is `tsc && vite build`, so it is
+  # the type-check and the bundle in one.
+  frontend:
+    needs: detect
+    if: ${{ !cancelled() && needs.detect.outputs.frontend != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Type-check and build
+        run: pnpm build
+
+  # The automation-helper suite: gh-automation.sh, the CI scripts, the labeler
+  # step, and deepseek_review.py all have their only CI coverage here.
+  automation:
+    needs: detect
+    if: ${{ !cancelled() && needs.detect.outputs.helpers != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Automation helper tests
+        run: |
+          bash scripts/test/agent-skills-sync.test.sh
+          bash scripts/test/gh-automation-deepseek-rounds.test.sh
+          bash scripts/test/iteration-lifecycle.test.sh
+          bash scripts/test/pr-labeler-step.test.sh
+          bash scripts/test/pr-label-writes.test.sh
+          bash scripts/test/pr-edit-writes.test.sh
+          bash scripts/test/pr-status-frozen-rule.test.sh
+          bash scripts/test/pr-merge-guard.test.sh
+          bash scripts/test/pr-mergeable-retry.test.sh
+          bash scripts/test/changed-areas.test.sh
+          bash scripts/test/ci-gate.test.sh
+          bash scripts/test/deepseek-budget.test.sh
+          bash scripts/test/deepseek-force-review-dispatch.test.sh
+          bash scripts/test/diff-measure-parity.test.sh
+          bash scripts/test/apt-install-fallback.test.sh
+          bash scripts/test/actions-hardening.test.sh
+          # The reviewer script's own tests. They stub `github`/`openai`, so there
+          # is no network call and no API key involved.
+          python3 .github/scripts/test_deepseek_review.py
+
+  # The one stable check consumed by READY TO MERGE and branch protection. It is
+  # always created after the whole matrix reaches a terminal state.
+  ci_gate:
+    name: ci-gate
+    needs: [detect, backend, frontend, automation]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE_REF: ${{ github.base_ref }}
+      DETECT_RESULT: ${{ needs.detect.result }}
+      BACKEND_SELECTED: ${{ needs.detect.outputs.backend }}
+      BACKEND_RESULT: ${{ needs.backend.result }}
+      FRONTEND_SELECTED: ${{ needs.detect.outputs.frontend }}
+      FRONTEND_RESULT: ${{ needs.frontend.result }}
+      HELPERS_SELECTED: ${{ needs.detect.outputs.helpers }}
+      AUTOMATION_RESULT: ${{ needs.automation.result }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Evaluate tiered CI policy
+        run: bash scripts/ci-gate.sh

@@ -1,0 +1,85 @@
+name: Bug
+description: Segnala un bug o un comportamento inatteso
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+assignees: []
+body:
+  - type: dropdown
+    id: workspace
+    attributes:
+      label: Area
+      description: Quale parte del repository è coinvolta?
+      options:
+        - backend (Rust / Tauri)
+        - frontend (React / TypeScript)
+        - shared (Trasversale)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: Cosa è successo?
+      description: Il comportamento osservato. Includi messaggi di errore, panic e stack trace esatti.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Cosa doveva succedere?
+      description: Il comportamento corretto, abbastanza preciso da poterne ricavare un test.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Passi per riprodurre
+      description: Passi in ordine. L'agente prova a riprodurre il bug prima di correggerlo.
+      placeholder: |
+        1. Aggiungi l'installazione `_classic_beta_` dentro il prefisso Lutris
+        2. Apri la lista degli addon installati
+        3. L'addon con due file `.toc` compare due volte
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical_context
+    attributes:
+      label: Contesto tecnico
+      description: |
+        **OBBLIGATORIO**. Log, errori e percorsi del codice coinvolti.
+      placeholder: |
+        Log:
+        ```
+        thread 'main' panicked at src-tauri/src/addons/toc.rs:42:18
+        ```
+
+        File rilevanti:
+        - src-tauri/src/addons/toc.rs (origine del panic)
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Fuori scope
+      description: |
+        **OBBLIGATORIO**. Cosa questa correzione NON deve toccare.
+      placeholder: |
+        - Non riscrivere il parser dei `.toc`
+        - Non toccare il client CurseForge
+    validations:
+      required: true
+
+  - type: textarea
+    id: code_pointers
+    attributes:
+      label: Riferimenti nel codice
+      description: |
+        Riferimenti `file:riga` da leggere per primi. Formato `path/to/file.rs:42`.
+      placeholder: |
+        - src-tauri/src/addons/toc.rs:42 (origine dell'errore)
+    validations:
+      required: false
