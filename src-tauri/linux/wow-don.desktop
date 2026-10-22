@@ -1,0 +1,9 @@
+[Desktop Entry]
+Categories=Game;Utility;
+Comment={{comment}}
+Exec={{exec}}
+StartupWMClass={{exec}}
+Icon={{icon}}
+Name=WoW-don
+Terminal=false
+Type=Application

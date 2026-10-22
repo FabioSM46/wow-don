@@ -23,6 +23,8 @@ sostituisce e si annota quella vecchia come superata.
 | D5 | Supporto a più installazioni di WoW e a più prefissi Wine | Retail, Classic e beta possono convivere | Proposta |
 | D6 | Si può forzare la versione del gioco per un addon | Le beta come Forever sono coperte male dai metadati | Proposta |
 | D20 | UI minimale e moderna: poche superfici, spazio e tipografia al posto della decorazione, un solo colore d'accento, chiaro e scuro (regole in `AGENTS.md`, sezione "Interfaccia") | Richiesta esplicita; l'interfaccia scomoda è il difetto principale di WowUp-CF | Confermata |
+| D23 | L'app funziona su Linux e su Windows. Su Linux resta centrale il gioco dentro un prefisso Wine (D2); su Windows si gestisce l'installazione nativa | Richiesta esplicita | Confermata |
+| D24 | Distribuzione: pacchetto `.deb` su Linux, installer NSIS (`*-setup.exe`) su Windows, installato per l'utente corrente (`installMode: currentUser`, senza diritti di amministratore, con voce nel menu Start e disinstallazione da Impostazioni); nessuna versione portable. Chiude A3 | Richiesta esplicita; entrambi generati da Tauri senza strumenti esterni | Confermata |
 
 ## Fonti e API
 
@@ -59,5 +61,5 @@ sostituisce e si annota quella vecchia come superata.
 | --- | --- |
 | A1 | Formato della config utente (posizione in `~/.config/wow-don/`, TOML o JSON) |
 | A2 | Libreria per la tabella degli addon nel frontend |
-| A3 | Formato di distribuzione su Linux (AppImage, .deb, Flatpak) |
+| A3 | ~~Formato di distribuzione su Linux (AppImage, .deb, Flatpak)~~ Risolta da D24 |
 | A4 | Licenza, se il progetto diventa pubblico |

@@ -1,8 +1,8 @@
 [package]
 name = "wow-don"
 version = "0.1.0"
-description = "Gestore di addon per World of Warcraft su Linux"
-authors = ["Fabio Sdringola Maranga"]
+description = "Gestore di addon per World of Warcraft per Linux e Windows"
+authors = ["FabioSM46"]
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
