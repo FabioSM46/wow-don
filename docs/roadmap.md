@@ -14,7 +14,7 @@ Ultimo aggiornamento: 2026-10-22.
 - Leggere `Interface/AddOns` e i file `.toc`.
 - Mostrare la lista degli addon installati con ricerca e filtri locali.
 
-## M2 — CurseForge
+## M2 — CurseForge (fatto)
 
 - Client API con chiave personale.
 - Riconoscimento degli addon installati tramite fingerprint.

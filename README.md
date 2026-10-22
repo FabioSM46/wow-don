@@ -8,10 +8,11 @@ come installer su Windows.
 
 ## Stato
 
-**Fase M1: addon installati.** Si aggiungono a mano le installazioni di WoW (cartelle
+**Fase M2: CurseForge.** Si aggiungono a mano le installazioni di WoW (cartelle
 `_<flavor>_`, anche dentro prefissi Wine) e si vede la lista degli addon installati,
-letta dai file `.toc`, con ricerca, filtri e ordinamento. CurseForge, aggiornamenti e
-installazione arrivano con M2 e M3. Il piano è in [docs/roadmap.md](docs/roadmap.md).
+letta dai file `.toc`, con ricerca, filtri e ordinamento. Gli addon vengono riconosciuti
+su CurseForge tramite fingerprint e l'app indica quali hanno un aggiornamento (per ora
+Retail e Classic Era). Download e installazione arrivano con M3. Il piano è in [docs/roadmap.md](docs/roadmap.md).
 
 ## Perché
 
