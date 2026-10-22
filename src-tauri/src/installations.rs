@@ -231,7 +231,7 @@ mod tests {
         let installation = validate(&dir).unwrap();
         assert_eq!(installation.flavor, "classic_beta");
         assert_eq!(installation.name, "Classic Beta");
-        assert_eq!(installation.path, dir.canonicalize().unwrap());
+        assert_eq!(installation.path, canonicalize(&dir).unwrap());
     }
 
     #[test]

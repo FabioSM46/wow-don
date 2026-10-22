@@ -29,14 +29,14 @@ run_case() {
 
 non_main_common=(
   BASE_REF=develop DETECT_RESULT=success
-  BACKEND_SELECTED=true BACKEND_RESULT=success
+  BACKEND_SELECTED=true BACKEND_RESULT=success BACKEND_WINDOWS_RESULT=success
   FRONTEND_SELECTED=false FRONTEND_RESULT=skipped
   HELPERS_SELECTED=false AUTOMATION_RESULT=skipped
 )
 
 main_common=(
   BASE_REF=main DETECT_RESULT=success
-  BACKEND_SELECTED=true BACKEND_RESULT=success
+  BACKEND_SELECTED=true BACKEND_RESULT=success BACKEND_WINDOWS_RESULT=success
   FRONTEND_SELECTED=true FRONTEND_RESULT=success
   HELPERS_SELECTED=true AUTOMATION_RESULT=success
 )
@@ -47,11 +47,17 @@ run_case "a feature base uses the same selected-work policy" 0 \
   "${non_main_common[@]/BASE_REF=develop/BASE_REF=feature/parent-branch}"
 run_case "docs-only PR accepts an entirely skipped workload" 0 \
   BASE_REF=develop DETECT_RESULT=success \
-  BACKEND_SELECTED=false BACKEND_RESULT=skipped \
+  BACKEND_SELECTED=false BACKEND_RESULT=skipped BACKEND_WINDOWS_RESULT=skipped \
   FRONTEND_SELECTED=false FRONTEND_RESULT=skipped \
   HELPERS_SELECTED=false AUTOMATION_RESULT=skipped
 run_case "selected job may not skip" 1 "${non_main_common[@]/BACKEND_RESULT=success/BACKEND_RESULT=skipped}"
 run_case "unselected job may not disappear" 1 "${non_main_common[@]/FRONTEND_RESULT=skipped/FRONTEND_RESULT=missing}"
+run_case "the Windows backend job may not skip when backend is selected" 1 \
+  "${non_main_common[@]/BACKEND_WINDOWS_RESULT=success/BACKEND_WINDOWS_RESULT=skipped}"
+run_case "a failed Windows backend job fails the gate" 1 \
+  "${non_main_common[@]/BACKEND_WINDOWS_RESULT=success/BACKEND_WINDOWS_RESULT=failure}"
+run_case "a missing Windows backend result fails closed" 1 \
+  "${non_main_common[@]/BACKEND_WINDOWS_RESULT=success/BACKEND_WINDOWS_RESULT=}"
 run_case "cancelled selected job fails closed" 1 "${non_main_common[@]/BACKEND_RESULT=success/BACKEND_RESULT=cancelled}"
 run_case "failed detect cannot be hidden" 1 "${non_main_common[@]/DETECT_RESULT=success/DETECT_RESULT=failure}"
 run_case "missing selector fails closed" 1 "${non_main_common[@]/FRONTEND_SELECTED=false/FRONTEND_SELECTED=}"
@@ -80,6 +86,8 @@ narrowed=("${narrowed[@]/FRONTEND_RESULT=success/FRONTEND_RESULT=skipped}")
 run_case "release selector may not narrow the matrix" 1 "${narrowed[@]}"
 run_case "release helper scope may not narrow the matrix" 1 \
   "${main_common[@]/HELPERS_SELECTED=true/HELPERS_SELECTED=false}"
+run_case "release Windows backend may not skip" 1 \
+  "${main_common[@]/BACKEND_WINDOWS_RESULT=success/BACKEND_WINDOWS_RESULT=skipped}"
 run_case "release automation may not skip" 1 \
   "${main_common[@]/AUTOMATION_RESULT=success/AUTOMATION_RESULT=skipped}"
 run_case "pending release job fails closed" 1 \

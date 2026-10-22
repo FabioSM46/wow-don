@@ -41,7 +41,8 @@ sarebbero entrambe aggirabili o nessuna delle due. L'API lo riporta per ruleset 
   il budget di round è finito, e richiedere `review` bloccherebbe le PR. `ci-gate` è l'unico
   check stabile e contiene la regola per branch:
   - verso basi diverse da `main`: i job selezionati dal diff e `automation` devono avere
-    successo; i job non selezionati possono risultare `SKIPPED`;
+    successo; i job non selezionati possono risultare `SKIPPED`. `backend-windows` segue lo
+    stesso selettore di `backend`;
   - verso `main`: tutti i job devono girare e avere successo.
 
 ## Perché `READY TO MERGE` non è ridondante

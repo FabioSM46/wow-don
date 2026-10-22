@@ -8,6 +8,7 @@
 #   * main: a release promotion validates everything. Every selector must be true
 #     and every job must succeed — a false selector narrows release validation.
 #
+# `backend-windows` answers to the same `backend` selector as the Linux job.
 # The automation job answers to detect's classifier-independent `helpers` selector.
 
 set -uo pipefail
@@ -40,6 +41,7 @@ expect_selected() {
 base_ref="${BASE_REF:-}"
 detect_result="${DETECT_RESULT:-}"
 backend_result="${BACKEND_RESULT:-}"
+backend_windows_result="${BACKEND_WINDOWS_RESULT:-}"
 frontend_result="${FRONTEND_RESULT:-}"
 automation_result="${AUTOMATION_RESULT:-}"
 
@@ -52,6 +54,7 @@ case "$base_ref" in
     # remain green.
     expect_exact "backend selector" "${BACKEND_SELECTED:-}" true
     expect_exact "backend" "$backend_result" success
+    expect_exact "backend-windows" "$backend_windows_result" success
     expect_exact "frontend selector" "${FRONTEND_SELECTED:-}" true
     expect_exact "frontend" "$frontend_result" success
     expect_exact "helper-scope selector" "${HELPERS_SELECTED:-}" true
@@ -60,6 +63,8 @@ case "$base_ref" in
   "") reject "BASE_REF must be a non-empty branch name" ;;
   *)
     expect_selected "backend" "${BACKEND_SELECTED:-}" "$backend_result"
+    # Windows runs the same backend gates and answers to the same selector.
+    expect_selected "backend-windows" "${BACKEND_SELECTED:-}" "$backend_windows_result"
     expect_selected "frontend" "${FRONTEND_SELECTED:-}" "$frontend_result"
     expect_selected "automation" "${HELPERS_SELECTED:-}" "$automation_result"
     ;;
