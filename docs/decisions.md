@@ -22,6 +22,7 @@ sostituisce e si annota quella vecchia come superata.
 | D4 | Il punto di forza dell'app sono ricerca, filtri e ordinamento | È il difetto principale di WowUp-CF | Proposta |
 | D5 | Supporto a più installazioni di WoW e a più prefissi Wine | Retail, Classic e beta possono convivere | Proposta |
 | D6 | Si può forzare la versione del gioco per un addon | Le beta come Forever sono coperte male dai metadati | Proposta |
+| D20 | UI minimale e moderna: poche superfici, spazio e tipografia al posto della decorazione, un solo colore d'accento, chiaro e scuro (regole in `AGENTS.md`, sezione "Interfaccia") | Richiesta esplicita; l'interfaccia scomoda è il difetto principale di WowUp-CF | Confermata |
 
 ## Fonti e API
 
@@ -43,6 +44,7 @@ sostituisce e si annota quella vecchia come superata.
 | D15 | UI con Tauri 2 | Libertà nella UI (tabelle, filtri) con backend Rust | Confermata |
 | D16 | Frontend React + TypeScript con Vite e pnpm | Template ufficiale Tauri; React già usato negli altri progetti | Proposta |
 | D17 | Rust edition 2024 | Default del template | Proposta |
+| D21 | Selettore di cartelle con il plugin ufficiale `tauri-plugin-dialog` | Percorsi lunghi dentro i prefissi Wine; approvato nella specifica di M1 (issue #5) | Confermata |
 
 ## Processo
 
