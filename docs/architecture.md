@@ -29,7 +29,7 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | `installations` | Trova e gestisce le installazioni di WoW, anche dentro prefissi Wine | Esiste (aggiunta manuale e validazione; scoperta automatica da fare) |
 | `addons::toc` | Legge i file `.toc` in `Interface/AddOns` (titolo, versione, `## Interface`) e sceglie il `.toc` giusto per il flavor dell'installazione | Esiste |
 | `addons::scan` | Legge le cartelle di `Interface/AddOns` e il loro `.toc`, senza modificare niente | Esiste |
-| `addons::fingerprint` | Calcola i fingerprint (MurmurHash2) per riconoscere gli addon installati | Da fare |
+| `addons::fingerprint` | Calcola i fingerprint di CurseForge (MurmurHash2 seme 1 senza spaziatura, sui file inclusi da `.toc` e `.xml`) per riconoscere gli addon installati | Esiste |
 | `sources` | Trait comune per le fonti (`search`, `versions`, `download`) | Da fare |
 | `sources::curseforge` | Client per `https://api.curseforge.com/v1` con header `x-api-key` | Da fare |
 | `install` | Download, estrazione zip, sostituzione atomica delle cartelle | Da fare |
