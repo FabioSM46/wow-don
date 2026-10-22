@@ -1,3 +1,4 @@
+mod addons;
 mod commands;
 mod config;
 mod installations;
