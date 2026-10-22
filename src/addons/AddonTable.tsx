@@ -21,6 +21,13 @@ type Load =
 
 const dateFormat = new Intl.DateTimeFormat("it-IT", { dateStyle: "medium" });
 
+/** `format` lancia un'eccezione su una data non valida: un `mtime` strano mostra "—". */
+function formatModified(ms: number | null): string {
+  if (ms === null) return "—";
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? "—" : dateFormat.format(date);
+}
+
 export function AddonTable({ installation }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
@@ -159,11 +166,7 @@ export function AddonTable({ installation }: Props) {
                       <td className="mono">
                         {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
                       </td>
-                      <td className="nowrap">
-                        {addon.modifiedMs !== null
-                          ? dateFormat.format(new Date(addon.modifiedMs))
-                          : "—"}
-                      </td>
+                      <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
                     </tr>
                   ))}
                 </tbody>
