@@ -112,9 +112,41 @@ export function AddonTable({ installation }: Props) {
     }
   }, [installation.id, runCheck]);
 
+  // Rilegge `Interface/AddOns` senza svuotare la tabella né perdere filtri e righe aperte:
+  // serve dopo aver installato o tolto addon fuori dall'app.
+  const [rescanning, setRescanning] = useState(false);
+  const [rescanError, setRescanError] = useState<string | null>(null);
+  function rescan() {
+    const id = installation.id;
+    setRescanning(true);
+    setRescanError(null);
+    api
+      .listAddons(id)
+      .then((addons) => {
+        if (currentId.current !== id) return;
+        setLoad({ state: "ready", addons });
+        // Gli stati di aggiornamento si riferivano alla lista di prima: si ricontrolla.
+        runCheck();
+      })
+      .catch((err) => {
+        if (currentId.current !== id) return;
+        // Un errore di lettura non toglie la tabella già mostrata: lo si segnala sopra.
+        setLoad((previous) =>
+          previous.state === "ready" ? previous : { state: "error", message: errorMessage(err) },
+        );
+        setRescanError(errorMessage(err));
+      })
+      .finally(() => {
+        if (currentId.current === id) setRescanning(false);
+      });
+  }
+
   useEffect(() => {
     // Cambiando installazione in fretta, una risposta vecchia non deve sovrascrivere la nuova.
     let current = true;
+    // Una rilettura partita per l'installazione precedente non vale più per questa.
+    setRescanning(false);
+    setRescanError(null);
     setLoad({ state: "loading" });
     setFilters(defaultFilters);
     setExpanded(new Set());
@@ -126,25 +158,6 @@ export function AddonTable({ installation }: Props) {
       current = false;
     };
   }, [installation.id]);
-
-  // Rilegge `Interface/AddOns` senza svuotare la tabella né perdere filtri e righe aperte:
-  // serve dopo aver installato o tolto addon fuori dall'app.
-  const [rescanning, setRescanning] = useState(false);
-  function rescan() {
-    const id = installation.id;
-    setRescanning(true);
-    api
-      .listAddons(id)
-      .then((addons) => {
-        if (currentId.current === id) setLoad({ state: "ready", addons });
-      })
-      .catch((err) => {
-        if (currentId.current === id) setLoad({ state: "error", message: errorMessage(err) });
-      })
-      .finally(() => {
-        if (currentId.current === id) setRescanning(false);
-      });
-  }
 
   const addons = load.state === "ready" ? load.addons : [];
   // Un addon fatto di più cartelle è una riga sola: conteggi e filtri contano i gruppi.
@@ -209,6 +222,11 @@ export function AddonTable({ installation }: Props) {
       {checkError && (
         <p className="message error" role="alert">
           {checkError}
+        </p>
+      )}
+      {rescanError && (
+        <p className="message error" role="alert">
+          {rescanError}
         </p>
       )}
 
