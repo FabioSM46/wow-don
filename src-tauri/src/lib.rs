@@ -6,6 +6,7 @@ mod sources;
 mod store;
 #[cfg(test)]
 mod test_support;
+mod updates;
 
 use std::sync::Mutex;
 
@@ -30,6 +31,7 @@ pub fn run() {
             commands::add_installation,
             commands::remove_installation,
             commands::list_addons,
+            commands::check_updates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

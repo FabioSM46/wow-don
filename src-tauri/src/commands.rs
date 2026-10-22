@@ -9,7 +9,9 @@ use tauri::State;
 use crate::addons::scan::{self, InstalledAddon};
 use crate::config::Config;
 use crate::installations::Installation;
+use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport};
 use crate::store::InstallationStore;
+use crate::updates::{self, AddonUpdate};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,4 +70,31 @@ pub async fn list_addons(
     .await
     // L'errore di Tauri dice se il compito è andato in panic o è stato annullato.
     .map_err(|error| format!("La lettura degli addon si è interrotta ({error})."))?
+}
+
+/// Riconosce gli addon su CurseForge e indica quali hanno un aggiornamento. Scansione e rete
+/// girano fuori dal thread principale.
+#[tauri::command]
+pub async fn check_updates(
+    installation_id: String,
+    store: Store<'_>,
+    config: State<'_, Config>,
+) -> Result<Vec<AddonUpdate>, String> {
+    let key = config
+        .curseforge_api_key
+        .clone()
+        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let installation = locked(&store)?
+        .list()?
+        .into_iter()
+        .find(|installation| installation.id == installation_id)
+        .ok_or_else(|| "Installazione non trovata.".to_owned())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        let client = CurseForgeClient::new(transport, Some(key));
+        updates::check_updates(&installation, &client)
+    })
+    .await
+    .map_err(|error| format!("Il controllo degli aggiornamenti si è interrotto ({error})."))?
 }

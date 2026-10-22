@@ -5,7 +5,8 @@
 //! `Debug` o nei log (D10). Il trasporto HTTP sta dietro [`Transport`]: i test provano il
 //! parsing e gli errori con risposte scritte a mano, senza rete e senza chiave.
 
-// Usato dal controllo degli aggiornamenti (issue #18).
+// Alcune parti servono solo al test live (`version_types`) o arriveranno con M3 (campi dei file
+// e dei mod per il download): sono già qui perché descrivono l'API, non il loro uso.
 #![allow(dead_code)]
 
 use std::fmt;
