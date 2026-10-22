@@ -179,8 +179,11 @@ struct Envelope<T> {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FingerprintMatches {
+    #[serde(deserialize_with = "null_as_default")]
     pub exact_matches: Vec<FingerprintMatch>,
+    #[serde(deserialize_with = "null_as_default")]
     pub exact_fingerprints: Vec<u64>,
+    #[serde(deserialize_with = "null_as_default")]
     pub unmatched_fingerprints: Vec<u64>,
 }
 
@@ -190,7 +193,7 @@ pub struct FingerprintMatch {
     /// Id del mod (progetto).
     pub id: u32,
     pub file: File,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub latest_files: Vec<File>,
 }
 
@@ -199,23 +202,23 @@ pub struct FingerprintMatch {
 pub struct File {
     pub id: u32,
     pub mod_id: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub display_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub file_name: String,
     /// Data ISO 8601, per esempio `2026-10-01T12:00:00Z`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub file_date: String,
     pub release_type: u8,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub game_versions: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub sortable_game_versions: Vec<SortableGameVersion>,
     #[serde(default)]
     pub file_fingerprint: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub modules: Vec<FileModule>,
-    #[serde(default = "available")]
+    #[serde(default = "available", deserialize_with = "null_as_available")]
     pub is_available: bool,
 }
 
@@ -223,10 +226,28 @@ fn available() -> bool {
     true
 }
 
+/// L'API a volte manda `null` dove ci si aspetta una lista o un testo (per esempio
+/// `"unmatchedFingerprints": null` quando tutti i fingerprint corrispondono o nessuno): `null`
+/// vale come il valore vuoto, come un campo assente.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn null_as_available<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(true))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SortableGameVersion {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub game_version_name: String,
     #[serde(default)]
     pub game_version_type_id: Option<u32>,
@@ -235,7 +256,7 @@ pub struct SortableGameVersion {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileModule {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub name: String,
     pub fingerprint: u64,
 }
@@ -245,14 +266,14 @@ pub struct FileModule {
 pub struct Mod {
     pub id: u32,
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub slug: String,
     /// Assente vuol dire sconosciuto: chi lo usa per i download lo tratta come `false`.
     #[serde(default)]
     pub allow_mod_distribution: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub links: ModLinks,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub latest_files_indexes: Vec<FileIndex>,
 }
 
@@ -266,10 +287,10 @@ pub struct ModLinks {
 #[serde(rename_all = "camelCase")]
 pub struct FileIndex {
     pub file_id: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub filename: String,
     pub release_type: u8,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub game_version: String,
     #[serde(default)]
     pub game_version_type_id: Option<u32>,
@@ -279,11 +300,11 @@ pub struct FileIndex {
 #[serde(rename_all = "camelCase")]
 pub struct GameVersionType {
     pub id: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub game_id: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub slug: String,
 }
 
@@ -488,6 +509,26 @@ mod tests {
              "releaseType": 1, "gameVersionTypeId": 517}]},
           {"id": 2, "name": "Minimal"}
         ]}"#;
+
+    /// La forma esatta di una risposta reale di `POST /v1/fingerprints/1` per un fingerprint
+    /// che non corrisponde a niente: `unmatchedFingerprints` è `null`, non una lista vuota.
+    #[test]
+    fn nulls_in_the_real_response_are_read_as_empty() {
+        let client = client(Ok((
+            200,
+            r#"{"data":{"isCacheBuilt":true,"exactMatches":[],"exactFingerprints":[],"partialMatches":[],"partialMatchFingerprints":{},"installedFingerprints":[1],"unmatchedFingerprints":null}}"#,
+        )));
+        let result = client.match_fingerprints(&[1]).unwrap();
+        assert!(result.exact_matches.is_empty());
+        assert!(result.unmatched_fingerprints.is_empty());
+
+        let file = r#"{"id": 1, "modId": 2, "displayName": null, "fileName": null, "fileDate": null,
+          "releaseType": 1, "gameVersions": null, "sortableGameVersions": null,
+          "modules": null, "isAvailable": null}"#;
+        let file: File = serde_json::from_str(file).unwrap();
+        assert!(file.display_name.is_empty() && file.modules.is_empty());
+        assert!(file.is_available);
+    }
 
     #[test]
     fn mods_with_missing_optional_fields_are_parsed() {

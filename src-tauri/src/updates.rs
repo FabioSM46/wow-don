@@ -18,15 +18,27 @@ use crate::sources::curseforge::{
 /// Tipo di versione del gioco di CurseForge (`gameVersionTypeId`) per il flavor di
 /// un'installazione.
 ///
-/// Da confermare con il test `live_version_types` di `sources::curseforge`, che stampa i tipi
-/// reali: 517 (Retail) e 67408 (Classic Era) sono gli id usati dai client noti. Tutti gli altri
-/// flavor (`classic`, `anniversary`, `classic_beta`, ma anche PTR e beta, che hanno client e
-/// file propri) restano senza tipo finché l'id non è confermato: meglio un errore chiaro che
-/// un aggiornamento per la versione sbagliata.
+/// Verificati il 2026-10-22 con il test `live_version_types` di `sources::curseforge`
+/// sull'API reale. Per le cartelle del gioco:
+///
+/// - `_retail_` → 517 "WoW Retail";
+/// - `_classic_era_` → 67408 "WoW Classic";
+/// - `_classic_` → 79434 "WoW Mists of Pandaria Classic", la Classic a espansioni progressive
+///   attuale (cambierà quando passerà all'espansione successiva);
+/// - `_anniversary_` → 73246 "WoW Burning Crusade Classic", che CurseForge usa anche per la
+///   Classic Anniversary;
+/// - `_classic_beta_` → 88568 "WoW Forever", il client che oggi usa quella cartella.
+///
+/// PTR, beta di Retail e Titan Reforged (81212) restano senza tipo finché non si sa con
+/// certezza quale cartella usano: meglio un errore chiaro che un aggiornamento per la versione
+/// sbagliata.
 pub fn version_type_for(flavor: &str) -> Option<u32> {
     match flavor.trim_matches('_').to_ascii_lowercase().as_str() {
         "retail" => Some(517),
         "classic_era" => Some(67408),
+        "classic" => Some(79434),
+        "anniversary" => Some(73246),
+        "classic_beta" | "forever" => Some(88568),
         _ => None,
     }
 }
@@ -354,8 +366,9 @@ mod tests {
         assert_eq!(version_type_for("retail"), Some(RETAIL));
         assert_eq!(version_type_for("_retail_"), Some(RETAIL));
         assert_eq!(version_type_for("classic_era"), Some(ERA));
-        assert_eq!(version_type_for("classic_beta"), None);
-        assert_eq!(version_type_for("anniversary"), None);
+        assert_eq!(version_type_for("classic"), Some(79434));
+        assert_eq!(version_type_for("anniversary"), Some(73246));
+        assert_eq!(version_type_for("classic_beta"), Some(88568));
         assert_eq!(version_type_for("ptr"), None);
         assert_eq!(version_type_for("beta"), None);
     }
