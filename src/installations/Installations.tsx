@@ -16,17 +16,19 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
 
   async function add() {
     setError(null);
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "Scegli la cartella _<flavor>_ di World of Warcraft",
-    });
-    // Selettore annullato: non succede niente.
-    if (typeof selected !== "string") return;
+    // Bloccato già mentre il selettore è aperto: un secondo clic non apre un altro selettore.
     setBusy(true);
     try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Scegli la cartella _<flavor>_ di World of Warcraft",
+      });
+      // Selettore annullato: non succede niente.
+      if (typeof selected !== "string") return;
       const added = await api.addInstallation(selected);
-      onChange([...installations, added]);
+      // La lista si rilegge dal backend invece di aggiungere a quella vista all'inizio.
+      onChange(await api.listInstallations());
       onSelect(added.id);
     } catch (err) {
       setError(errorMessage(err));
@@ -40,7 +42,7 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
     setBusy(true);
     try {
       await api.removeInstallation(id);
-      onChange(installations.filter((installation) => installation.id !== id));
+      onChange(await api.listInstallations());
     } catch (err) {
       setError(errorMessage(err));
     } finally {
