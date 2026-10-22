@@ -196,7 +196,8 @@ Trigger: `$scrum-master feature-spec <descrizione-funzionalità>`
    - **Backend (Rust/Tauri)**: moduli in `src-tauri/src/`, comandi Tauri esposti, tipi
      serializzati verso il frontend, I/O su disco, gestione degli errori
    - **Frontend (React/TypeScript)**: componenti, stato, ricerca/filtri/ordinamento, chiamate
-     `invoke()`
+     `invoke()`, seguendo le regole della sezione "Interfaccia" di `AGENTS.md` (UI minimale e
+     moderna); ogni issue di frontend ripete il vincolo nel Contesto tecnico
    - **Fonti esterne** (se servono): endpoint CurseForge usati, limiti, campi da verificare sulla
      documentazione ufficiale
    - **Dati e persistenza** (se servono): stato locale, formato, migrazioni
