@@ -1,6 +1,6 @@
 // Ricerca, filtri e ordinamento degli addon: funzioni pure, senza React né I/O.
 
-import type { InstalledAddon } from "../api";
+import type { AddonUpdate, InstalledAddon } from "../api";
 
 export type Filters = {
   query: string;
@@ -8,6 +8,8 @@ export type Filters = {
   author: string | null;
   hideLoadOnDemand: boolean;
   onlyErrors: boolean;
+  /** Solo gli addon con un aggiornamento disponibile (serve il risultato del controllo). */
+  onlyUpdates: boolean;
 };
 
 export type SortKey = "title" | "author" | "modified";
@@ -18,6 +20,7 @@ export const defaultFilters: Filters = {
   author: null,
   hideLoadOnDemand: false,
   onlyErrors: false,
+  onlyUpdates: false,
 };
 
 export const defaultSort: Sort = { key: "title", direction: "asc" };
@@ -36,7 +39,12 @@ export function authorsOf(addons: InstalledAddon[]): string[] {
   return [...authors].sort((a, b) => a.localeCompare(b, "it", { sensitivity: "base" }));
 }
 
-export function matchesFilters(addon: InstalledAddon, filters: Filters): boolean {
+export function matchesFilters(
+  addon: InstalledAddon,
+  filters: Filters,
+  update?: AddonUpdate,
+): boolean {
+  if (filters.onlyUpdates && update?.status !== "updateAvailable") return false;
   if (filters.author !== null && addon.author !== filters.author) return false;
   if (filters.hideLoadOnDemand && addon.loadOnDemand) return false;
   if (filters.onlyErrors && addon.error === null) return false;
@@ -79,9 +87,10 @@ export function visibleAddons(
   addons: InstalledAddon[],
   filters: Filters,
   sort: Sort,
+  updates?: Map<string, AddonUpdate>,
 ): InstalledAddon[] {
   return sortAddons(
-    addons.filter((addon) => matchesFilters(addon, filters)),
+    addons.filter((addon) => matchesFilters(addon, filters, updates?.get(addon.folder))),
     sort,
   );
 }
