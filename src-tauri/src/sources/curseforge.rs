@@ -204,8 +204,9 @@ pub struct File {
     pub mod_id: u32,
     #[serde(default, deserialize_with = "null_as_default")]
     pub display_name: String,
-    #[serde(default, deserialize_with = "null_as_default")]
-    pub file_name: String,
+    /// Identifica il file da scaricare: assente o `null` resta `None`, mai un nome vuoto.
+    #[serde(default)]
+    pub file_name: Option<String>,
     /// Data ISO 8601, per esempio `2026-10-01T12:00:00Z`.
     #[serde(default, deserialize_with = "null_as_default")]
     pub file_date: String,
@@ -226,9 +227,12 @@ fn available() -> bool {
     true
 }
 
-/// L'API a volte manda `null` dove ci si aspetta una lista o un testo (per esempio
-/// `"unmatchedFingerprints": null` quando tutti i fingerprint corrispondono o nessuno): `null`
-/// vale come il valore vuoto, come un campo assente.
+/// L'API a volte manda `null` dove ci si aspetta una lista o un testo descrittivo (per esempio
+/// `"unmatchedFingerprints": null`): `null` vale come il valore vuoto, come un campo assente.
+///
+/// Solo per liste e testi descrittivi. Gli identificativi (id, `fileName`, `releaseType`,
+/// fingerprint, nome del mod) restano rigorosi o diventano `Option`: un `0` o un nome vuoto al
+/// posto di un dato mancante sembrerebbero validi a chi li usa.
 fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -287,8 +291,8 @@ pub struct ModLinks {
 #[serde(rename_all = "camelCase")]
 pub struct FileIndex {
     pub file_id: u32,
-    #[serde(default, deserialize_with = "null_as_default")]
-    pub filename: String,
+    #[serde(default)]
+    pub filename: Option<String>,
     pub release_type: u8,
     #[serde(default, deserialize_with = "null_as_default")]
     pub game_version: String,
@@ -300,8 +304,8 @@ pub struct FileIndex {
 #[serde(rename_all = "camelCase")]
 pub struct GameVersionType {
     pub id: u32,
-    #[serde(default, deserialize_with = "null_as_default")]
-    pub game_id: u32,
+    #[serde(default)]
+    pub game_id: Option<u32>,
     #[serde(default, deserialize_with = "null_as_default")]
     pub name: String,
     #[serde(default, deserialize_with = "null_as_default")]
@@ -527,6 +531,10 @@ mod tests {
           "modules": null, "isAvailable": null}"#;
         let file: File = serde_json::from_str(file).unwrap();
         assert!(file.display_name.is_empty() && file.modules.is_empty());
+        assert_eq!(file.file_name, None);
+        // Gli identificativi non diventano 0: un id null resta un errore.
+        let broken = r#"{"id": null, "modId": 2, "releaseType": 1}"#;
+        assert!(serde_json::from_str::<File>(broken).is_err());
         assert!(file.is_available);
     }
 
