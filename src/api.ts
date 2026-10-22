@@ -29,8 +29,30 @@ export type InstalledAddon = {
   wagoId: string | null;
   wowiId: string | null;
   modifiedMs: number | null;
+  fingerprint: number | null;
   error: string | null;
 };
+
+export type FileSummary = { id: number; name: string; date: string };
+
+export type Project = {
+  id: number;
+  name: string;
+  url: string | null;
+  allowModDistribution: boolean;
+};
+
+/** Risultato di `check_updates` per una cartella; `status` dice quale variante è. */
+export type AddonUpdate = {
+  folder: string;
+  project: Project | null;
+  installedFile: FileSummary | null;
+} & (
+  | { status: "notMatched" }
+  | { status: "upToDate" }
+  | { status: "updateAvailable"; latest: FileSummary }
+  | { status: "error"; message: string }
+);
 
 export const api = {
   appStatus: () => invoke<AppStatus>("app_status"),
@@ -39,6 +61,8 @@ export const api = {
   removeInstallation: (id: string) => invoke<void>("remove_installation", { id }),
   listAddons: (installationId: string) =>
     invoke<InstalledAddon[]>("list_addons", { installationId }),
+  checkUpdates: (installationId: string) =>
+    invoke<AddonUpdate[]>("check_updates", { installationId }),
 };
 
 /** I comandi rifiutano con il messaggio del backend; qualunque altra cosa diventa testo. */
