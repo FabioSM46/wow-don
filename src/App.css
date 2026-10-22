@@ -400,3 +400,11 @@ button:focus-visible {
   font-weight: 500;
 }
 
+.more-folders {
+  margin-left: 6px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 0.75rem;
+  color: var(--muted);
+  cursor: default;
+}
+

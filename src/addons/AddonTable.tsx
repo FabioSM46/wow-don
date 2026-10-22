@@ -12,8 +12,10 @@ import {
   defaultFilters,
   defaultSort,
   displayTitle,
+  groupAddons,
+  groupUpdate,
   nextSort,
-  visibleAddons,
+  visibleGroups,
   type Filters,
   type Sort,
   type SortKey,
@@ -114,14 +116,16 @@ export function AddonTable({ installation }: Props) {
   }, [installation.id]);
 
   const addons = load.state === "ready" ? load.addons : [];
-  const authors = useMemo(() => authorsOf(addons), [addons]);
+  // Un addon fatto di più cartelle è una riga sola: conteggi e filtri contano i gruppi.
+  const groups = useMemo(() => groupAddons(addons, updates), [addons, updates]);
+  const authors = useMemo(() => authorsOf(groups.map((g) => g.main)), [groups]);
   const visible = useMemo(
-    () => visibleAddons(addons, filters, sort, updates),
+    () => visibleGroups(addons, filters, sort, updates),
     [addons, filters, sort, updates],
   );
-  const updateCount = updates
-    ? [...updates.values()].filter((u) => u.status === "updateAvailable").length
-    : 0;
+  const updateCount = groups.filter(
+    (g) => groupUpdate(g, updates)?.status === "updateAvailable",
+  ).length;
 
   function update(patch: Partial<Filters>) {
     setFilters((previous) => ({ ...previous, ...patch }));
@@ -149,7 +153,7 @@ export function AddonTable({ installation }: Props) {
         <div className="section-actions">
           {load.state === "ready" && (
             <span className="muted count">
-              {visible.length} di {addons.length} addon
+              {visible.length} di {groups.length} addon
               {updateCount > 0 && ` · ${updateCount} da aggiornare`}
             </span>
           )}
@@ -251,28 +255,39 @@ export function AddonTable({ installation }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {visible.map((addon) => (
-                    <tr key={addon.folder} className={addon.error ? "has-error" : undefined}>
-                      <td>
-                        <span className="addon-title" title={addon.notes ?? undefined}>
-                          {displayTitle(addon)}
-                        </span>
-                        {addon.error && <span className="addon-error">{addon.error}</span>}
-                      </td>
-                      <td className="mono">{addon.folder}</td>
-                      <td>{addon.version ?? "—"}</td>
-                      <td>{addon.author ?? "—"}</td>
-                      <td className="mono">
-                        {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
-                      </td>
-                      <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
-                      <ProjectCell update={updates?.get(addon.folder)} />
-                      <UpdateCell
-                        update={updates?.get(addon.folder)}
-                        checking={checking}
-                      />
-                    </tr>
-                  ))}
+                  {visible.map(({ main: addon, others }) => {
+                    const error = addon.error ?? others.find((o) => o.error)?.error ?? null;
+                    const update = groupUpdate({ main: addon, others }, updates);
+                    return (
+                      <tr key={addon.folder} className={error ? "has-error" : undefined}>
+                        <td>
+                          <span className="addon-title" title={addon.notes ?? undefined}>
+                            {displayTitle(addon)}
+                          </span>
+                          {error && <span className="addon-error">{error}</span>}
+                        </td>
+                        <td className="mono">
+                          {addon.folder}
+                          {others.length > 0 && (
+                            <span
+                              className="more-folders"
+                              title={[addon.folder, ...others.map((o) => o.folder)].join("\n")}
+                            >
+                              +{others.length}
+                            </span>
+                          )}
+                        </td>
+                        <td>{addon.version ?? "—"}</td>
+                        <td>{addon.author ?? "—"}</td>
+                        <td className="mono">
+                          {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
+                        </td>
+                        <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
+                        <ProjectCell update={update} />
+                        <UpdateCell update={update} checking={checking} />
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
