@@ -76,10 +76,12 @@ function disjointAuthors(x: InstalledAddon[], y: InstalledAddon[]): boolean {
  * sono riconosciute come progetti diversi, se una è riconosciuta e il suo file non contiene
  * l'altra, o (senza il controllo a dire il contrario) se i loro `.toc` dichiarano
  * `X-Curse-Project-ID` diversi o autori senza nomi in comune. Così un plugin di un altro autore (`ElvUI_WindTools` sotto
- * `ElvUI`) resta una riga sua. Il veto per autore non vale quando è la cartella principale a
- * richiedere quella che ne estende il nome (`Questie` → `QuestieDB`): un addon che richiede la
- * propria cartella di dati non può esserne il plugin di un altro autore, e il campo `## Author`
- * è testo libero che due cartelle dello stesso addon scrivono in modo diverso. L'id Wago non è un confine: Wago elenca come progetti separati
+ * `ElvUI`) resta una riga sua. Il veto per autore vale solo nella direzione dei plugin, una
+ * cartella che richiede la principale di cui estende il nome: non quando è la principale a
+ * richiedere quella che ne estende il nome (`Questie` → `QuestieDB`), perché un addon non
+ * funziona senza le sue dipendenze obbligatorie, né con `## Group`, che è una dichiarazione
+ * seguita anche dal gioco. Il campo `## Author` è testo libero che due cartelle dello stesso
+ * addon scrivono in modo diverso. L'id Wago non è un confine: Wago elenca come progetti separati
  * cartelle che arrivano nello stesso file CurseForge (i plugin di Details).
  *
  * Gli archi si uniscono dal più forte al più debole e due gruppi si fondono solo se nessuna
@@ -164,7 +166,7 @@ export function groupAddons(
     if (left.some((x) => right.some((y) => vetoed(x, y)))) continue;
     // Il veto per autore vale solo senza il controllo a dire il contrario.
     const checked = [...left, ...right].some((x) => recognised.has(x.folder));
-    if (strength !== 2 && !checked && disjointAuthors(left, right)) continue;
+    if (strength === 3 && !checked && disjointAuthors(left, right)) continue;
     parent.set(rb, ra);
     members.set(ra, [...left, ...right]);
     members.delete(rb);

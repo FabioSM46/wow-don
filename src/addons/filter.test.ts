@@ -200,6 +200,14 @@ describe("groupAddons", () => {
     assert.deepEqual(layout(addons), ["ElvUI", "ElvUI_Extra", "ElvUI_WindTools"]);
   });
 
+  it("follows ## Group even when the authors share no name", () => {
+    const addons = [
+      addon("EllesmereUI", { author: "Ellesmere" }),
+      addon("EllesmereUIBags", { author: "Contributor", group: "EllesmereUI", dependencies: ["EllesmereUI"] }),
+    ];
+    assert.deepEqual(layout(addons), ["EllesmereUI EllesmereUIBags"]);
+  });
+
   it("keeps folders by different authors apart before the check", () => {
     const addons = [
       addon("ElvUI", { author: "Elv, Simpy" }),
