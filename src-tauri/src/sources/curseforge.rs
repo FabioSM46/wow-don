@@ -1159,21 +1159,36 @@ mod tests {
     #[test]
     #[ignore = "usa la rete e la chiave CurseForge reale"]
     fn live_get_file_and_download() {
+        // Progetto da `WOW_DON_LIVE_MOD_ID`, altrimenti Details! (61284). Il test fallisce se il
+        // progetto è distribuibile ma il download non riesce: così non passa senza aver provato
+        // la CDN.
+        let mod_id: u32 = std::env::var("WOW_DON_LIVE_MOD_ID")
+            .ok()
+            .map(|v| {
+                v.trim()
+                    .parse()
+                    .expect("WOW_DON_LIVE_MOD_ID non è un numero")
+            })
+            .unwrap_or(61284);
         let config = crate::config::Config::load();
         let client = CurseForgeClient::new(
             ReqwestTransport::new().unwrap(),
             config.curseforge_api_key.clone(),
         );
-        let mods = client.get_mods(&[61284]).expect("richiesta a CurseForge");
-        let index = mods[0]
+        let mods = client.get_mods(&[mod_id]).expect("richiesta a CurseForge");
+        let project = mods.first().expect("progetto trovato");
+        let index = project
             .latest_files_indexes
             .first()
             .expect("almeno un file");
         let file = client
-            .get_file(61284, index.file_id)
+            .get_file(mod_id, index.file_id)
             .expect("richiesta a CurseForge");
         println!(
-            "file {} ({:?}), downloadUrl presente: {}",
+            "progetto {} ({}), allowModDistribution: {:?}; file {} ({:?}), downloadUrl presente: {}",
+            project.id,
+            project.name,
+            project.allow_mod_distribution,
             file.id,
             file.file_name,
             file.download_url.is_some()
@@ -1183,7 +1198,14 @@ mod tests {
                 println!("scaricati {} byte", bytes.len());
                 assert!(bytes.starts_with(b"PK"), "non è uno zip");
             }
-            Err(CurseForgeError::DownloadNotAllowed) => println!("download non permesso"),
+            Err(CurseForgeError::DownloadNotAllowed) => {
+                assert_ne!(
+                    project.allow_mod_distribution,
+                    Some(true),
+                    "progetto distribuibile ma senza downloadUrl"
+                );
+                println!("download non permesso dall'autore");
+            }
             Err(error) => panic!("{error}"),
         }
     }
