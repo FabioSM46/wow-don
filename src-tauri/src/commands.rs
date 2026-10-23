@@ -65,20 +65,17 @@ pub fn add_installation(path: String, store: Store<'_>) -> Result<Installation, 
     locked(&store)?.add(Path::new(&path))
 }
 
-/// Rimuove l'installazione e poi le impostazioni dei suoi addon. I due lock non si tengono mai
-/// insieme.
+/// Rimuove prima le impostazioni degli addon e poi l'installazione: se le impostazioni non si
+/// possono togliere non cambia niente e si può riprovare, invece di lasciarle orfane. I due
+/// lock non si tengono mai insieme.
 #[tauri::command]
 pub fn remove_installation(
     id: String,
     store: Store<'_>,
     settings: Settings<'_>,
 ) -> Result<(), String> {
-    locked(&store)?.remove(&id)?;
-    locked_settings(&settings)?
-        .remove_installation(&id)
-        .map_err(|error| {
-            format!("The installation was removed, but its addon settings were not: {error}")
-        })
+    locked_settings(&settings)?.remove_installation(&id)?;
+    locked(&store)?.remove(&id)
 }
 
 /// I tipi di versione del gioco che si possono forzare per un addon. Nessuna chiamata di rete.

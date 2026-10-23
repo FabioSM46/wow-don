@@ -165,7 +165,8 @@ impl AddonSettingsStore {
     }
 
     /// Le versioni forzate di un'installazione. Un tipo che l'app non conosce più (per esempio
-    /// la Classic progressiva dopo un cambio di espansione) resta nel file ma non si usa.
+    /// la Classic progressiva dopo un cambio di espansione) non si usa, e il salvataggio
+    /// successivo lo toglie dal file.
     pub fn overrides_for(&self, installation_id: &str) -> Result<VersionOverrides, String> {
         self.check_loaded()?;
         Ok(self
@@ -239,7 +240,13 @@ impl AddonSettingsStore {
         }
     }
 
-    fn save(&mut self, settings: SettingsByInstallation) -> Result<(), String> {
+    /// Scrive le impostazioni senza i tipi che l'app non conosce più.
+    fn save(&mut self, mut settings: SettingsByInstallation) -> Result<(), String> {
+        for addons in settings.values_mut() {
+            addons
+                .retain(|_, setting| updates::is_known_version_type(setting.game_version_type_id));
+        }
+        settings.retain(|_, addons| !addons.is_empty());
         let stored = StoredAddonSettings {
             version: ADDON_SETTINGS_VERSION,
             installations: settings,
@@ -546,10 +553,18 @@ mod tests {
             br#"{"version": 1, "installations": {"a": {"7": {"gameVersionTypeId": 1}, "8": {"gameVersionTypeId": 517}}}}"#,
         )
         .unwrap();
-        let store = AddonSettingsStore::load(file);
+        let mut store = AddonSettingsStore::load(file.clone());
         assert_eq!(
             store.overrides_for("a").unwrap(),
             VersionOverrides::from([(8, RETAIL)])
+        );
+
+        // Il salvataggio successivo lo toglie dal file.
+        store.set_override("b", 7, RETAIL).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(
+            saved["installations"],
+            serde_json::json!({"a": {"8": {"gameVersionTypeId": RETAIL}}, "b": {"7": {"gameVersionTypeId": RETAIL}}})
         );
     }
 
