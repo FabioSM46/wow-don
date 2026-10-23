@@ -56,8 +56,8 @@ fn create_backup_at(
         .collect();
     if roots.is_empty() {
         return Err(
-            "Niente da salvare: l'installazione non ha né la cartella WTF né la cartella \
-             Interface."
+            "Nothing to back up: the installation has neither a WTF folder nor an \
+             Interface folder."
                 .to_owned(),
         );
     }
@@ -199,8 +199,8 @@ fn add_dir<W: Write + io::Seek>(
     for child in children {
         let name = child.file_name().into_string().map_err(|_| {
             format!(
-                "Un file in {entry_name} ha un nome con caratteri non validi: rinominalo e \
-                 riprova."
+                "A file in {entry_name} has a name with invalid characters: rename it and \
+                 try again."
             )
         })?;
         let child_entry = format!("{entry_name}/{name}");
@@ -496,7 +496,9 @@ mod tests {
         let backups = tmp.path().join("backups");
         let error = create_backup(&inst, &backups).unwrap_err();
         assert!(
-            error.contains("WTF") && error.contains("Interface"),
+            error.starts_with("Nothing to back up")
+                && error.contains("WTF")
+                && error.contains("Interface"),
             "{error}"
         );
         assert!(!backups.exists());

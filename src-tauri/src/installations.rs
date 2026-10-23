@@ -116,8 +116,8 @@ pub fn validate(path: &Path) -> Result<Installation, String> {
         return Err("The path contains invalid characters: rename or move the folder.".to_owned());
     }
     Installation::from_canonical(canonical).ok_or_else(|| {
-        "La cartella deve essere una cartella _<flavor>_ di World of Warcraft, \
-         per esempio _retail_ o _classic_era_."
+        "The folder must be a World of Warcraft _<flavor>_ folder, \
+         for example _retail_ or _classic_era_."
             .to_owned()
     })
 }
@@ -265,7 +265,11 @@ mod tests {
                 .contains("does not exist")
         );
         assert!(validate(&file).unwrap_err().contains("is not a folder"));
-        assert!(validate(&wrong_name).unwrap_err().contains("_<flavor>_"));
+        assert!(
+            validate(&wrong_name)
+                .unwrap_err()
+                .contains("must be a World of Warcraft _<flavor>_ folder")
+        );
         assert!(validate(Path::new("")).is_err());
     }
 }
