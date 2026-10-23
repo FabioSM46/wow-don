@@ -25,6 +25,7 @@ sostituisce e si annota quella vecchia come superata.
 | D20 | UI minimale e moderna: poche superfici, spazio e tipografia al posto della decorazione, un solo colore d'accento, chiaro e scuro (regole in `AGENTS.md`, sezione "Interfaccia") | Richiesta esplicita; l'interfaccia scomoda è il difetto principale di WowUp-CF | Confermata |
 | D23 | L'app funziona su Linux e su Windows. Su Linux resta centrale il gioco dentro un prefisso Wine (D2); su Windows si gestisce l'installazione nativa | Richiesta esplicita | Confermata |
 | D24 | Distribuzione: pacchetto `.deb` su Linux, installer NSIS (`*-setup.exe`) su Windows, installato per l'utente corrente (`installMode: currentUser`, senza diritti di amministratore, con voce nel menu Start e disinstallazione da Impostazioni); nessuna versione portable. Chiude A3 | Richiesta esplicita; entrambi generati da Tauri senza strumenti esterni | Confermata |
+| D27 | L'interfaccia dell'app è solo in inglese, compresi i messaggi d'errore e di esito restituiti dal backend ai comandi Tauri; la documentazione resta in italiano, codice e commit in inglese (D19 invariata). Nessuna libreria di traduzione: una sola lingua | Richiesta esplicita; una sola lingua nell'interfaccia | Confermata |
 
 ## Fonti e API
 
