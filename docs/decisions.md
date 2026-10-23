@@ -49,6 +49,7 @@ sostituisce e si annota quella vecchia come superata.
 | D21 | Selettore di cartelle con il plugin ufficiale `tauri-plugin-dialog` | Percorsi lunghi dentro i prefissi Wine; approvato nella specifica di M1 (issue #5) | Confermata |
 | D22 | Lo stato locale è in JSON nella cartella di configurazione dell'app risolta da Tauri (`app_config_dir()`, su Linux `~/.config/com.fabiosm46.wowdon/`), con scrittura atomica; le installazioni stanno in `installations.json` | Nessuna nuova dipendenza (`serde_json` c'è già); percorso standard della piattaforma. Chiude A1 | Confermata |
 | D25 | Client HTTP: `reqwest` (versione bloccante, dentro `spawn_blocking`) con TLS `rustls` e certificati del sistema | Già nel lockfile tramite Tauri; TLS in puro Rust uguale su Linux e Windows, senza OpenSSL. Approvato nella specifica di M2 | Confermata |
+| D26 | Estrazione degli zip con la crate `zip` (9.x), senza feature di default e con il solo deflate (`deflate-flate2-zlib-rs`, decompressione in puro Rust già presente nel lockfile) | Gli addon si distribuiscono come zip; in puro Rust, uguale su Linux e Windows. Servirà anche al backup di `WTF` e `Interface`. Approvato nella specifica di M3 | Confermata |
 
 ## Processo
 
