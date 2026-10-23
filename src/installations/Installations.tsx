@@ -5,12 +5,12 @@ import { BackupList, useBackups } from "./Backups";
 
 type Props = {
   installations: Installation[];
-  activeId: string | null;
-  onSelect: (id: string) => void;
+  /** L'installazione appena aggiunta diventa quella attiva (il selettore è nell'header). */
+  onAdded: (id: string) => void;
   onChange: (installations: Installation[]) => void;
 };
 
-export function Installations({ installations, activeId, onSelect, onChange }: Props) {
+export function Installations({ installations, onAdded, onChange }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -23,14 +23,14 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "Scegli la cartella _<flavor>_ di World of Warcraft",
+        title: "Choose the World of Warcraft _<flavor>_ folder",
       });
       // Selettore annullato: non succede niente.
       if (typeof selected !== "string") return;
       const added = await api.addInstallation(selected);
       // La lista si rilegge dal backend invece di aggiungere a quella vista all'inizio.
       onChange(await api.listInstallations());
-      onSelect(added.id);
+      onAdded(added.id);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -55,9 +55,9 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
   return (
     <section className="installations" aria-labelledby="installations-title">
       <header className="section-header">
-        <h2 id="installations-title">Installazioni</h2>
+        <h2 id="installations-title">Installations</h2>
         <button className="button" onClick={add} disabled={busy}>
-          Aggiungi installazione
+          Add installation
         </button>
       </header>
 
@@ -69,8 +69,8 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
 
       {installations.length === 0 ? (
         <p className="empty">
-          Nessuna installazione. Aggiungi la cartella <code>_retail_</code>,{" "}
-          <code>_classic_era_</code> o un'altra cartella <code>_&lt;flavor&gt;_</code> dentro{" "}
+          No installations yet. Add the <code>_retail_</code> folder,{" "}
+          <code>_classic_era_</code> or another <code>_&lt;flavor&gt;_</code> folder inside{" "}
           <code>World of Warcraft</code>.
         </p>
       ) : (
@@ -79,10 +79,8 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
             <InstallationRow
               key={installation.id}
               installation={installation}
-              active={installation.id === activeId}
               confirming={installation.id === confirmingId}
               busy={busy}
-              onSelect={() => onSelect(installation.id)}
               onConfirm={() => setConfirmingId(installation.id)}
               onCancel={() => setConfirmingId(null)}
               onRemove={() => remove(installation.id)}
@@ -96,22 +94,18 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
 
 type RowProps = {
   installation: Installation;
-  active: boolean;
   confirming: boolean;
   busy: boolean;
-  onSelect: () => void;
   onConfirm: () => void;
   onCancel: () => void;
   onRemove: () => void;
 };
 
-/** Una riga: selezione, azioni secondarie (Backup, Rimuovi) e sotto gli ultimi backup. */
+/** Una riga: nome e percorso, azioni secondarie (Backup, Rimuovi) e sotto gli ultimi backup. */
 function InstallationRow({
   installation,
-  active,
   confirming,
   busy,
-  onSelect,
   onConfirm,
   onCancel,
   onRemove,
@@ -119,22 +113,22 @@ function InstallationRow({
   const backups = useBackups(installation.id);
 
   return (
-    <li className={active ? "installation active" : "installation"}>
+    <li className="installation">
       <div className="installation-row">
-        <button className="installation-main" onClick={onSelect} aria-pressed={active}>
+        <div className="installation-main">
           <span className="installation-name">{installation.name}</span>
           <span className="installation-path" title={installation.path}>
             {installation.path}
           </span>
-        </button>
+        </div>
         {confirming ? (
           <span className="confirm">
-            <span>Rimuovere?</span>
+            <span>Remove?</span>
             <button className="link danger" onClick={onRemove} disabled={busy}>
-              Rimuovi
+              Remove
             </button>
             <button className="link" onClick={onCancel}>
-              Annulla
+              Cancel
             </button>
           </span>
         ) : (
@@ -148,19 +142,19 @@ function InstallationRow({
               aria-busy={backups.creating}
               aria-label={
                 backups.creating
-                  ? `Backup di ${installation.name} in corso`
-                  : `Crea un backup di ${installation.name}`
+                  ? `Backing up ${installation.name}`
+                  : `Back up ${installation.name}`
               }
             >
-              {backups.creating ? "Backup in corso…" : "Backup"}
+              {backups.creating ? "Backing up…" : "Backup"}
             </button>
             <button
               className="link subtle"
               onClick={onConfirm}
               disabled={backups.creating}
-              aria-label={`Rimuovi ${installation.name}`}
+              aria-label={`Remove ${installation.name}`}
             >
-              Rimuovi
+              Remove
             </button>
           </span>
         )}

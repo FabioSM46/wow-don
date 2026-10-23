@@ -5,8 +5,8 @@ import { api, errorMessage, type BackupInfo } from "../api";
 /** Quanti backup si vedono sotto l'installazione; gli altri si trovano nella cartella. */
 const VISIBLE = 3;
 
-const dateFormat = new Intl.DateTimeFormat("it-IT", { dateStyle: "medium", timeStyle: "short" });
-const numberFormat = new Intl.NumberFormat("it-IT", { maximumFractionDigits: 1 });
+const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" });
+const numberFormat = new Intl.NumberFormat("en", { maximumFractionDigits: 1 });
 
 /** `format` lancia un'eccezione su una data non valida: un `mtime` strano mostra "—". */
 function formatDate(ms: number | null): string {
@@ -115,20 +115,20 @@ export function BackupList({ backups }: { backups: Backups }) {
         <p className="backups-error error" role="alert">
           {listError}{" "}
           <button className="link inline" onClick={() => void reload()}>
-            Riprova
+            Retry
           </button>
         </p>
       )}
       {list === null ? (
         // Prima lettura fallita: basta l'errore, senza una frase che direbbe "nessun backup".
-        !listError && <p className="backups-note">Lettura dei backup…</p>
+        !listError && <p className="backups-note">Loading backups…</p>
       ) : list.length === 0 ? (
         <p className="backups-note">
-          Nessun backup. Usa «Backup» per salvare <code>WTF</code> e <code>Interface</code> prima
-          di cambiare molti addon.
+          No backups yet. Use “Backup” to save <code>WTF</code> and <code>Interface</code> before
+          changing many addons.
         </p>
       ) : (
-        <ul className="backup-list" aria-label="Ultimi backup">
+        <ul className="backup-list" aria-label="Latest backups">
           {list.slice(0, VISIBLE).map((backup) => (
             <li key={backup.path} className="backup">
               <span className="backup-date" title={backup.name}>
@@ -138,15 +138,15 @@ export function BackupList({ backups }: { backups: Backups }) {
               <button
                 className="link subtle"
                 onClick={() => void reveal(backup)}
-                aria-label={`Apri la cartella del backup ${backup.name}`}
+                aria-label={`Open the folder of backup ${backup.name}`}
               >
-                Apri cartella
+                Open folder
               </button>
             </li>
           ))}
           {hidden > 0 && (
             <li className="backup backup-more">
-              {hidden === 1 ? "1 backup meno recente" : `${hidden} backup meno recenti`}
+              {hidden === 1 ? "1 older backup" : `${hidden} older backups`}
             </li>
           )}
         </ul>

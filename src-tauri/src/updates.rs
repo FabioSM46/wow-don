@@ -187,7 +187,7 @@ pub fn evaluate(
             };
             let Some(fingerprint) = addon.fingerprint else {
                 update.status = UpdateStatus::Error {
-                    message: "Cartella non leggibile: impossibile riconoscerla.".to_owned(),
+                    message: "Unreadable folder: it cannot be recognized.".to_owned(),
                 };
                 return update;
             };
@@ -262,7 +262,7 @@ fn scan_and_evaluate<T: Transport>(
 ) -> Result<(Vec<InstalledAddon>, Vec<AddonUpdate>), String> {
     let version_type = version_type_for(&installation.flavor).ok_or_else(|| {
         format!(
-            "Il controllo degli aggiornamenti non supporta ancora la versione del gioco \"{}\".",
+            "The update check does not support the game version \"{}\" yet.",
             installation.name
         )
     })?;

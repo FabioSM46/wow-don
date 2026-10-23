@@ -34,9 +34,7 @@ pub struct InstalledAddon {
 /// maiuscole e minuscole.
 pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<InstalledAddon>, String> {
     if !installation_dir.is_dir() {
-        return Err(
-            "La cartella dell'installazione non esiste più o non è raggiungibile.".to_owned(),
-        );
+        return Err("The installation folder no longer exists or cannot be reached.".to_owned());
     }
     let addons_dir = installation_dir.join("Interface").join("AddOns");
     let entries = match fs::read_dir(&addons_dir) {
@@ -44,7 +42,7 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
             return Err(format!(
-                "Impossibile leggere la cartella degli addon ({}).",
+                "Could not read the addons folder ({}).",
                 error.kind()
             ));
         }
@@ -59,7 +57,7 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
                 // Senza la voce non si conosce nemmeno il nome: resta un segnaposto visibile.
                 unreadable += 1;
                 addons.push(unreadable_entry(
-                    format!("(voce non leggibile {unreadable})"),
+                    format!("(unreadable entry {unreadable})"),
                     &error,
                 ));
                 continue;
@@ -104,7 +102,7 @@ fn unreadable_entry(folder: String, error: &std::io::Error) -> InstalledAddon {
         toc: TocInfo::default(),
         modified_ms: None,
         fingerprint: None,
-        error: Some(format!("Cartella non leggibile ({}).", error.kind())),
+        error: Some(format!("Unreadable folder ({}).", error.kind())),
     }
 }
 
@@ -128,7 +126,7 @@ fn read_addon(
             .filter_map(|entry| entry.file_name().into_string().ok())
             .collect(),
         Err(error) => {
-            addon.error = Some(format!("Cartella non leggibile ({}).", error.kind()));
+            addon.error = Some(format!("Unreadable folder ({}).", error.kind()));
             return addon;
         }
     };
@@ -136,14 +134,14 @@ fn read_addon(
     // riconosce la cartella dai suoi file, non dal flavor.
     addon.fingerprint = fingerprint::folder_fingerprint(dir);
     let Some(toc_file) = toc::select_toc(&addon.folder, &file_names, flavor) else {
-        addon.error = Some("Nessun file .toc per questa versione del gioco.".to_owned());
+        addon.error = Some("No .toc file for this game version.".to_owned());
         return addon;
     };
     match fs::read(dir.join(toc_file)) {
         // I `.toc` non sono sempre UTF-8: quello che non lo è diventa un carattere sostitutivo.
         Ok(bytes) => addon.toc = toc::parse_toc(&String::from_utf8_lossy(&bytes)),
         Err(error) => {
-            addon.error = Some(format!("File .toc non leggibile ({}).", error.kind()));
+            addon.error = Some(format!("Unreadable .toc file ({}).", error.kind()));
         }
     }
     addon.toc_file = Some(toc_file.to_owned());
@@ -201,7 +199,7 @@ mod tests {
         assert!(
             scan_addons(&gone, "retail")
                 .unwrap_err()
-                .contains("non esiste")
+                .contains("no longer exists")
         );
     }
 
@@ -216,13 +214,7 @@ mod tests {
         let addons = scan_addons(tmp.path(), "retail").unwrap();
         assert_eq!(addons.len(), 1);
         assert_eq!(addons[0].folder, "Linked");
-        assert!(
-            addons[0]
-                .error
-                .as_deref()
-                .unwrap()
-                .contains("non leggibile")
-        );
+        assert!(addons[0].error.as_deref().unwrap().contains("Unreadable"));
     }
 
     #[test]
