@@ -251,13 +251,25 @@ mod tests {
             "dependencies",
             "optionalDeps",
             "loadOnDemand",
+            "group",
             "curseProjectId",
             "wagoId",
             "wowiId",
         ] {
             assert!(keys.contains(&key.to_owned()), "missing {key} in {keys:?}");
         }
-        assert_eq!(keys.len(), 16, "unexpected keys: {keys:?}");
+        // `json["group"]` vale `Null` anche per una chiave assente: prima la presenza.
+        assert!(json.as_object().unwrap().contains_key("group"));
+        assert_eq!(json["group"], serde_json::Value::Null);
+        let grouped = InstalledAddon {
+            toc: toc::parse_toc("## Group: EllesmereUI\n"),
+            ..addon
+        };
+        assert_eq!(
+            serde_json::to_value(&grouped).unwrap()["group"],
+            serde_json::Value::String("EllesmereUI".to_owned())
+        );
+        assert_eq!(keys.len(), 17, "unexpected keys: {keys:?}");
     }
 
     #[test]

@@ -38,16 +38,19 @@ export type AddonGroup = {
 const lower = (s: string) => s.toLocaleLowerCase("it");
 
 /**
- * Raggruppa le cartelle che formano un solo addon. Due regole:
+ * Raggruppa le cartelle che formano un solo addon. Tre regole:
  *
  * - **dai `.toc`, senza rete**: B va con A se A dichiara B tra le dipendenze obbligatorie e il
  *   nome di B inizia con il nome di A (`Questie` richiede `QuestieDB`);
+ * - **dal campo `## Group`**, come fa il gioco: B va con A se il `group` di B è il nome di A
+ *   (i moduli `EllesmereUI*` dichiarano `EllesmereUI`); se A non è installata, niente;
  * - **da CurseForge**, se c'è il risultato del controllo: le cartelle dello stesso progetto.
  *
- * Una cartella finisce in un solo gruppo. La principale è, tra le cartelle che non sono moduli
- * `LoadOnDemand` (se ce ne sono), quella che nessun'altra del gruppo richiede; a parità il nome
- * più corto, poi l'ordine alfabetico. Così `Questie` guida `QuestieDB` e `DBM-Core` guida i
- * moduli di DBM che caricano su richiesta.
+ * Una cartella finisce in un solo gruppo. La principale è la cartella indicata da `group`, se
+ * ce n'è una nel gruppo; poi, tra le cartelle che non sono moduli `LoadOnDemand` (se ce ne
+ * sono), quella che nessun'altra del gruppo richiede; a parità il nome più corto, poi l'ordine
+ * alfabetico. Così `EllesmereUI` guida i suoi moduli, `Questie` guida `QuestieDB` e `DBM-Core`
+ * guida i moduli di DBM che caricano su richiesta.
  */
 export function groupAddons(
   addons: InstalledAddon[],
@@ -75,6 +78,10 @@ export function groupAddons(
       }
     }
   }
+  for (const addon of addons) {
+    const target = addon.group ? byFolder.get(lower(addon.group)) : undefined;
+    if (target && target !== addon) join(target.folder, addon.folder);
+  }
   if (updates) {
     const firstOfProject = new Map<number, string>();
     for (const addon of addons) {
@@ -101,8 +108,12 @@ export function groupAddons(
 }
 
 function pickMain(group: InstalledAddon[]): InstalledAddon {
-  const loaded = group.filter((a) => !a.loadOnDemand);
-  const candidates = loaded.length > 0 ? loaded : group;
+  // La cartella indicata dal `## Group` delle cartelle del gruppo lo guida.
+  const named = new Set(group.flatMap((a) => (a.group ? [lower(a.group)] : [])));
+  const leaders = group.filter((a) => named.has(lower(a.folder)));
+  const scope = leaders.length > 0 ? leaders : group;
+  const loaded = scope.filter((a) => !a.loadOnDemand);
+  const candidates = loaded.length > 0 ? loaded : scope;
   const required = new Set(
     candidates.flatMap((a) => a.dependencies.map(lower)).filter(Boolean),
   );

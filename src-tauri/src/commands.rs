@@ -1,12 +1,13 @@
 //! Comandi Tauri invocabili dal frontend.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::addons::scan::{self, InstalledAddon};
+use crate::backup::{self, BackupInfo};
 use crate::config::Config;
 use crate::installations::Installation;
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport};
@@ -97,4 +98,50 @@ pub async fn check_updates(
     })
     .await
     .map_err(|error| format!("Il controllo degli aggiornamenti si è interrotto ({error})."))?
+}
+
+fn find_installation(store: &Store<'_>, installation_id: &str) -> Result<Installation, String> {
+    locked(store)?
+        .list()?
+        .into_iter()
+        .find(|installation| installation.id == installation_id)
+        .ok_or_else(|| "Installazione non trovata.".to_owned())
+}
+
+/// `app_data_dir()/backups/<id-installazione>/`: la cartella la sceglie Tauri.
+fn backups_dir(app: &AppHandle, installation_id: &str) -> Result<PathBuf, String> {
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Cartella dei dati dell'app non disponibile.".to_owned())?;
+    Ok(data.join("backups").join(installation_id))
+}
+
+/// Zip di `WTF` e `Interface` dell'installazione. Può leggere centinaia di MB, quindi gira
+/// fuori dal thread principale.
+#[tauri::command]
+pub async fn create_backup(
+    installation_id: String,
+    app: AppHandle,
+    store: Store<'_>,
+) -> Result<BackupInfo, String> {
+    let installation = find_installation(&store, &installation_id)?;
+    let dir = backups_dir(&app, &installation.id)?;
+    tauri::async_runtime::spawn_blocking(move || backup::create_backup(&installation, &dir))
+        .await
+        .map_err(|error| format!("Il backup si è interrotto ({error})."))?
+}
+
+/// I backup di un'installazione, dal più recente.
+#[tauri::command]
+pub async fn list_backups(
+    installation_id: String,
+    app: AppHandle,
+    store: Store<'_>,
+) -> Result<Vec<BackupInfo>, String> {
+    let installation = find_installation(&store, &installation_id)?;
+    let dir = backups_dir(&app, &installation.id)?;
+    tauri::async_runtime::spawn_blocking(move || backup::list_backups(&dir))
+        .await
+        .map_err(|error| format!("La lettura dei backup si è interrotta ({error})."))?
 }
