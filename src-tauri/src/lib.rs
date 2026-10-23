@@ -34,6 +34,7 @@ pub fn run() {
             commands::remove_installation,
             commands::list_addons,
             commands::check_updates,
+            commands::update_addons,
             commands::create_backup,
             commands::list_backups,
         ])

@@ -12,7 +12,7 @@ use crate::config::Config;
 use crate::installations::Installation;
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport};
 use crate::store::InstallationStore;
-use crate::updates::{self, AddonUpdate};
+use crate::updates::{self, AddonUpdate, UpdateOutcome};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +98,30 @@ pub async fn check_updates(
     })
     .await
     .map_err(|error| format!("Il controllo degli aggiornamenti si è interrotto ({error})."))?
+}
+
+/// Aggiorna i progetti `mod_ids` dell'installazione: rifà il controllo, scarica e installa.
+/// Rete e disco girano fuori dal thread principale.
+#[tauri::command]
+pub async fn update_addons(
+    installation_id: String,
+    mod_ids: Vec<u32>,
+    store: Store<'_>,
+    config: State<'_, Config>,
+) -> Result<Vec<UpdateOutcome>, String> {
+    let key = config
+        .curseforge_api_key
+        .clone()
+        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let installation = find_installation(&store, &installation_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        let client = CurseForgeClient::new(transport, Some(key));
+        updates::update_addons(&installation, &client, &mod_ids)
+    })
+    .await
+    .map_err(|error| format!("The update was interrupted ({error})."))?
 }
 
 fn find_installation(store: &Store<'_>, installation_id: &str) -> Result<Installation, String> {
