@@ -15,12 +15,20 @@ use std::sync::Mutex;
 use config::Config;
 use store::{ADDON_SETTINGS_FILE, AddonSettingsStore, INSTALLATIONS_FILE, InstallationStore};
 use tauri::Manager;
+use tauri_plugin_window_state::StateFlags;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Remember only size, position and maximized state of the main window (D28): the
+        // default flags would also restore visibility, decorations and fullscreen.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
+                .build(),
+        )
         .manage(Config::load())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
