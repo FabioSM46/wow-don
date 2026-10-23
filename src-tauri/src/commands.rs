@@ -121,7 +121,9 @@ pub fn clear_version_override(
 
 /// Gli addon di un'installazione, con il progetto che l'app vi ha installato (issue #62). La
 /// scansione legge il disco, quindi gira fuori dal thread principale per non bloccare la
-/// finestra con molti addon; il registro si legge prima, qui.
+/// finestra con molti addon; il registro si legge prima, qui. Un registro illeggibile non
+/// nasconde gli addon: la lettura procede senza record, mentre le scritture restano bloccate e
+/// il prossimo aggiornamento riporta l'errore nel suo esito.
 #[tauri::command]
 pub async fn list_addons(
     installation_id: String,
@@ -133,7 +135,9 @@ pub async fn list_addons(
         .into_iter()
         .find(|installation| installation.id == installation_id)
         .ok_or_else(|| "Installation not found.".to_owned())?;
-    let records = locked_installed(&installed)?.records_for(&installation.id)?;
+    let records = locked_installed(&installed)?
+        .records_for(&installation.id)
+        .unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
         scan::scan_addons(&installation.path, &installation.flavor)
             .map(|addons| scan::with_installed_projects(addons, &records))
