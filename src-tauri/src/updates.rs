@@ -14,7 +14,7 @@ use crate::addons::scan::{self, InstalledAddon};
 use crate::install;
 use crate::installations::Installation;
 use crate::sources::curseforge::{
-    CurseForgeClient, CurseForgeError, File, FingerprintMatch, FingerprintMatches, Mod,
+    CurseForgeClient, CurseForgeError, File, FileModule, FingerprintMatch, FingerprintMatches, Mod,
     RELEASE_TYPE_RELEASE, Transport,
 };
 
@@ -108,10 +108,11 @@ pub struct AddonUpdate {
     pub installed_file: Option<FileSummary>,
     #[serde(flatten)]
     pub status: UpdateStatus,
-    /// Le cartelle (`modules`) del file installato: servono all'aggiornamento per togliere
-    /// quelle che la versione nuova non ha più. Restano nel backend.
+    /// Le cartelle (`modules`) del file installato, con il loro fingerprint: servono
+    /// all'aggiornamento per togliere quelle che la versione nuova non ha più. Restano nel
+    /// backend.
     #[serde(skip)]
-    pub installed_modules: Vec<String>,
+    pub installed_modules: Vec<FileModule>,
 }
 
 /// Abbina e valuta. `version_type` è il `gameVersionTypeId` dell'installazione.
@@ -159,7 +160,7 @@ pub fn evaluate(
                     .unwrap_or(false),
             });
             update.installed_file = Some(FileSummary::from(&found.file));
-            update.installed_modules = found.file.modules.iter().map(|m| m.name.clone()).collect();
+            update.installed_modules = found.file.modules.clone();
             update.status = match newest_release(found, version_type) {
                 Some(latest) if is_newer(latest, &found.file) => UpdateStatus::UpdateAvailable {
                     latest: FileSummary::from(latest),
@@ -202,6 +203,14 @@ pub fn check_updates<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
 ) -> Result<Vec<AddonUpdate>, String> {
+    scan_and_evaluate(installation, client).map(|(_, updates)| updates)
+}
+
+/// Come [`check_updates`], ma restituisce anche la scansione.
+fn scan_and_evaluate<T: Transport>(
+    installation: &Installation,
+    client: &CurseForgeClient<T>,
+) -> Result<(Vec<InstalledAddon>, Vec<AddonUpdate>), String> {
     let version_type = version_type_for(&installation.flavor).ok_or_else(|| {
         format!(
             "Il controllo degli aggiornamenti non supporta ancora la versione del gioco \"{}\".",
@@ -217,7 +226,8 @@ pub fn check_updates<T: Transport>(
     mod_ids.sort_unstable();
     mod_ids.dedup();
     let mods = client.get_mods(&mod_ids).map_err(|e| e.to_string())?;
-    Ok(evaluate(&addons, &matches, &mods, version_type))
+    let updates = evaluate(&addons, &matches, &mods, version_type);
+    Ok((addons, updates))
 }
 
 // ── Aggiornamento ───────────────────────────────────────────────────────────
@@ -280,18 +290,19 @@ pub fn update_addons<T: Transport>(
     client: &CurseForgeClient<T>,
     mod_ids: &[u32],
 ) -> Result<Vec<UpdateOutcome>, String> {
-    let updates = check_updates(installation, client)?;
+    let (addons, updates) = scan_and_evaluate(installation, client)?;
     let addons_dir = installation.path.join("Interface").join("AddOns");
     let mut seen = HashSet::new();
     Ok(mod_ids
         .iter()
         .copied()
         .filter(|id| seen.insert(*id))
-        .map(|mod_id| update_project(&updates, &addons_dir, client, mod_id))
+        .map(|mod_id| update_project(&addons, &updates, &addons_dir, client, mod_id))
         .collect())
 }
 
 fn update_project<T: Transport>(
+    addons: &[InstalledAddon],
     updates: &[AddonUpdate],
     addons_dir: &Path,
     client: &CurseForgeClient<T>,
@@ -331,19 +342,7 @@ fn update_project<T: Transport>(
             "CurseForge does not provide a download link for this file: update it from the CurseForge website.",
         );
     }
-    // Una cartella del file installato che appartiene anche a un altro progetto installato
-    // (una libreria distribuita da più addon) non è obsoleta: toglierla romperebbe l'altro.
-    let shared: HashSet<String> = updates
-        .iter()
-        .filter(|u| u.project.as_ref().is_some_and(|p| p.id != mod_id))
-        .flat_map(|u| u.installed_modules.iter().map(|m| m.to_lowercase()))
-        .collect();
-    let old_modules: Vec<String> = installed
-        .installed_modules
-        .iter()
-        .filter(|m| !shared.contains(&m.to_lowercase()))
-        .cloned()
-        .collect();
+    let old_modules = removable_modules(addons, updates, installed);
     match install_file(client, &file, addons_dir, &old_modules) {
         Ok(()) => UpdateOutcome {
             mod_id,
@@ -354,6 +353,52 @@ fn update_project<T: Transport>(
         },
         Err(message) => UpdateOutcome::error(mod_id, name, message),
     }
+}
+
+/// Le cartelle del file installato che l'aggiornamento può togliere se il nuovo zip non le ha
+/// più. I nomi restituiti sono quelli letti dal disco, mai quelli della risposta di CurseForge.
+/// Una cartella resta se:
+/// - non è più sul disco, o il suo fingerprint non è quello del modulo installato (è stata
+///   modificata o sostituita da un'altra cosa);
+/// - è un modulo del file installato di un altro progetto riconosciuto (una libreria
+///   distribuita da più addon);
+/// - un addon che non fa parte di questo progetto la dichiara tra le dipendenze del `.toc`,
+///   obbligatorie o facoltative (protegge anche gli addon non riconosciuti da CurseForge).
+fn removable_modules(
+    addons: &[InstalledAddon],
+    updates: &[AddonUpdate],
+    installed: &AddonUpdate,
+) -> Vec<String> {
+    let lower = |name: &str| name.to_lowercase();
+    let mod_id = installed.project.as_ref().map(|p| p.id);
+    let own: HashSet<String> = installed
+        .installed_modules
+        .iter()
+        .map(|m| lower(&m.name))
+        .collect();
+    let shared: HashSet<String> = updates
+        .iter()
+        .filter(|u| u.project.as_ref().map(|p| p.id) != mod_id)
+        .flat_map(|u| u.installed_modules.iter().map(|m| lower(&m.name)))
+        .collect();
+    let needed: HashSet<String> = addons
+        .iter()
+        .filter(|a| !own.contains(&lower(&a.folder)))
+        .flat_map(|a| a.toc.dependencies.iter().chain(&a.toc.optional_deps))
+        .map(|name| lower(name))
+        .collect();
+    installed
+        .installed_modules
+        .iter()
+        .filter_map(|module| {
+            addons.iter().find(|a| {
+                lower(&a.folder) == lower(&module.name)
+                    && a.fingerprint.map(u64::from) == Some(module.fingerprint)
+            })
+        })
+        .filter(|a| !shared.contains(&lower(&a.folder)) && !needed.contains(&lower(&a.folder)))
+        .map(|a| a.folder.clone())
+        .collect()
 }
 
 /// Scarica `file`, lo estrae in staging e sostituisce le cartelle. Le cartelle di `old_modules`
@@ -571,7 +616,10 @@ mod tests {
                     date: "d".to_owned(),
                 },
             },
-            installed_modules: vec!["Foo".to_owned()],
+            installed_modules: vec![FileModule {
+                name: "Foo".to_owned(),
+                fingerprint: 1,
+            }],
         };
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(json["status"], "updateAvailable");
@@ -830,6 +878,69 @@ mod tests {
                 "other"
             );
             // Nessuna cartella di lavoro rimasta accanto ad AddOns.
+            assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
+        }
+
+        #[test]
+        fn only_unchanged_unneeded_folders_on_disk_are_removed() {
+            let fx = fixture(&[
+                ("Alpha", "alpha v1"),
+                ("Alpha_Gone", "gone"),
+                ("Alpha_Edited", "edited"),
+                ("Alpha_Lib", "lib"),
+                ("Alpha_Plain", "plain"),
+                ("Unknown", "unknown"),
+            ]);
+            let fp = |folder: &str| fx.fingerprints[folder];
+            // Dopo l'installazione: una cartella tolta a mano, una modificata, e un addon non
+            // riconosciuto che dipende da una libreria del progetto.
+            fs::remove_dir_all(fx.addons.join("Alpha_Gone")).unwrap();
+            fs::write(
+                fx.addons.join("Alpha_Edited").join("Alpha_Edited.lua"),
+                "mine",
+            )
+            .unwrap();
+            fs::write(
+                fx.addons.join("Unknown").join("Unknown.toc"),
+                "## Interface: 120000\n## Dependencies: alpha_lib\nUnknown.lua\n",
+            )
+            .unwrap();
+            let modules = [
+                ("Alpha", fp("Alpha")),
+                ("Alpha_Gone", fp("Alpha_Gone")),
+                ("Alpha_Edited", fp("Alpha_Edited")),
+                ("Alpha_Lib", fp("Alpha_Lib")),
+                ("Alpha_Plain", fp("Alpha_Plain")),
+                // Un nome che esce da AddOns non diventa mai un percorso da togliere.
+                ("../Unknown", fp("Unknown")),
+            ];
+            let current = file_json(1, 10, "2026-09-01T00:00:00Z", &modules);
+            let latest = file_json(1, 11, "2026-10-01T00:00:00Z", &[]);
+            let routes = Routes {
+                fingerprints: json!({"data": {"exactMatches": [
+                    {"id": 1, "file": current, "latestFiles": [latest.clone()]}
+                ]}})
+                .to_string(),
+                mods: json!({"data": [project(1, "Alpha", true)]}).to_string(),
+                files: HashMap::from([(
+                    format!("{API}/v1/mods/1/files/11"),
+                    json!({ "data": latest }).to_string(),
+                )]),
+                zips: HashMap::from([(
+                    download_url(11),
+                    zip_of(&[("Alpha/Alpha.lua", "alpha v2")]),
+                )]),
+                ..Routes::default()
+            };
+            let client = client(routes);
+
+            let outcomes = update_addons(&fx.installation, &client, &[1]).unwrap();
+
+            assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "{outcomes:?}");
+            assert_eq!(
+                names(&fx.addons),
+                ["Alpha", "Alpha_Edited", "Alpha_Lib", "Unknown"]
+            );
             assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
         }
 
