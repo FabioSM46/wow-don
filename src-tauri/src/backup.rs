@@ -62,12 +62,8 @@ fn create_backup_at(
         );
     }
 
-    fs::create_dir_all(backups_dir).map_err(|error| {
-        format!(
-            "Impossibile creare la cartella dei backup ({}).",
-            error.kind()
-        )
-    })?;
+    fs::create_dir_all(backups_dir)
+        .map_err(|error| format!("Could not create the backups folder ({}).", error.kind()))?;
 
     let stem = format!("{}-{}", installation.flavor, timestamp(now));
     // Il temporaneo ha un nome unico (pid e contatore) e si apre con `create_new`: due backup
@@ -90,7 +86,7 @@ fn create_backup_at(
     let final_path = free_name(backups_dir, &stem);
     // Il nome finale compare solo a scrittura completa.
     fs::rename(&temp.0, &final_path)
-        .map_err(|error| format!("Impossibile completare il backup ({}).", error.kind()))?;
+        .map_err(|error| format!("Could not complete the backup ({}).", error.kind()))?;
     info_for(&final_path)
 }
 
@@ -102,7 +98,7 @@ pub fn list_backups(backups_dir: &Path) -> Result<Vec<BackupInfo>, String> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
             return Err(format!(
-                "Impossibile leggere la cartella dei backup ({}).",
+                "Could not read the backups folder ({}).",
                 error.kind()
             ));
         }
@@ -166,19 +162,19 @@ fn write_zip(target: &Path, roots: &[(String, PathBuf)]) -> Result<(), String> {
         .write(true)
         .create_new(true)
         .open(target)
-        .map_err(|error| format!("Impossibile creare il file del backup ({}).", error.kind()))?;
+        .map_err(|error| format!("Could not create the backup file ({}).", error.kind()))?;
     let mut writer = ZipWriter::new(BufWriter::new(file));
     for (name, path) in roots {
         add_dir(&mut writer, path, name)?;
     }
     let inner = writer
         .finish()
-        .map_err(|error| format!("Impossibile chiudere lo zip del backup ({error})."))?;
+        .map_err(|error| format!("Could not finish the backup zip ({error})."))?;
     let file = inner
         .into_inner()
-        .map_err(|error| format!("Impossibile scrivere il backup ({}).", error.error().kind()))?;
+        .map_err(|error| format!("Could not write the backup ({}).", error.error().kind()))?;
     file.sync_all()
-        .map_err(|error| format!("Impossibile scrivere il backup ({}).", error.kind()))
+        .map_err(|error| format!("Could not write the backup ({}).", error.kind()))
 }
 
 /// Aggiunge `dir` come `entry_name/` e tutto il suo contenuto, ricorsivamente. Le voci usano
@@ -188,8 +184,7 @@ fn add_dir<W: Write + io::Seek>(
     dir: &Path,
     entry_name: &str,
 ) -> Result<(), String> {
-    let read_error =
-        |error: io::Error| format!("Impossibile leggere {entry_name} ({}).", error.kind());
+    let read_error = |error: io::Error| format!("Could not read {entry_name} ({}).", error.kind());
     let mut children: Vec<_> = fs::read_dir(dir)
         .map_err(read_error)?
         .collect::<Result<_, _>>()
@@ -199,7 +194,7 @@ fn add_dir<W: Write + io::Seek>(
 
     writer
         .add_directory(format!("{entry_name}/"), options_for(dir, 0))
-        .map_err(|error| format!("Impossibile scrivere {entry_name} nel backup ({error})."))?;
+        .map_err(|error| format!("Could not write {entry_name} to the backup ({error})."))?;
 
     for child in children {
         let name = child.file_name().into_string().map_err(|_| {
@@ -212,7 +207,7 @@ fn add_dir<W: Write + io::Seek>(
         // `DirEntry::file_type` non segue i link simbolici: un link non è né file né cartella.
         let kind = child
             .file_type()
-            .map_err(|error| format!("Impossibile leggere {child_entry} ({}).", error.kind()))?;
+            .map_err(|error| format!("Could not read {child_entry} ({}).", error.kind()))?;
         let path = child.path();
         if kind.is_dir() {
             add_dir(writer, &path, &child_entry)?;
@@ -229,14 +224,14 @@ fn add_file<W: Write + io::Seek>(
     entry_name: &str,
 ) -> Result<(), String> {
     let mut source = File::open(path)
-        .map_err(|error| format!("Impossibile leggere {entry_name} ({}).", error.kind()))?;
+        .map_err(|error| format!("Could not read {entry_name} ({}).", error.kind()))?;
     let size = source.metadata().map(|meta| meta.len()).unwrap_or(0);
     writer
         .start_file(entry_name, options_for(path, size))
-        .map_err(|error| format!("Impossibile scrivere {entry_name} nel backup ({error})."))?;
+        .map_err(|error| format!("Could not write {entry_name} to the backup ({error})."))?;
     // In streaming: un file di WTF da centinaia di MB non passa mai tutto dalla memoria.
     io::copy(&mut source, writer)
-        .map_err(|error| format!("Impossibile copiare {entry_name} ({}).", error.kind()))?;
+        .map_err(|error| format!("Could not copy {entry_name} ({}).", error.kind()))?;
     Ok(())
 }
 
@@ -337,7 +332,7 @@ fn file_name(path: &Path) -> String {
 
 fn info_for(path: &Path) -> Result<BackupInfo, String> {
     let meta = fs::metadata(path)
-        .map_err(|error| format!("Impossibile leggere il backup ({}).", error.kind()))?;
+        .map_err(|error| format!("Could not read the backup ({}).", error.kind()))?;
     let modified_ms = meta
         .modified()
         .ok()

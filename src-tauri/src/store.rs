@@ -67,7 +67,7 @@ impl InstallationStore {
             .iter()
             .any(|existing| existing.id == installation.id || existing.path == installation.path)
         {
-            return Err("Questa installazione è già stata aggiunta.".to_owned());
+            return Err("This installation has already been added.".to_owned());
         }
         let mut next = self.installations.clone();
         next.push(installation.clone());
@@ -78,7 +78,7 @@ impl InstallationStore {
     pub fn remove(&mut self, id: &str) -> Result<(), String> {
         self.reload()?;
         if !self.installations.iter().any(|existing| existing.id == id) {
-            return Err("Installazione non trovata.".to_owned());
+            return Err("Installation not found.".to_owned());
         }
         let next = self
             .installations
@@ -110,7 +110,7 @@ impl InstallationStore {
             paths: installations.iter().map(|i| i.path.clone()).collect(),
         };
         write_atomically(&self.file, &stored)
-            .map_err(|error| format!("Impossibile salvare le installazioni ({}).", error.kind()))?;
+            .map_err(|error| format!("Could not save the installations ({}).", error.kind()))?;
         self.installations = installations;
         Ok(())
     }
@@ -287,17 +287,17 @@ fn read(file: &Path) -> Result<Vec<Installation>, String> {
         Ok(None) => return Ok(Vec::new()),
         Err(error) => {
             return Err(format!(
-                "Impossibile leggere {INSTALLATIONS_FILE} ({}).",
+                "Could not read {INSTALLATIONS_FILE} ({}).",
                 error.kind()
             ));
         }
     };
     let stored: StoredInstallations = serde_json::from_str(&text).map_err(|_| {
-        format!("{INSTALLATIONS_FILE} è danneggiato: correggilo o spostalo e riavvia l'app.")
+        format!("{INSTALLATIONS_FILE} is damaged: fix it or move it away and restart the app.")
     })?;
     if stored.version != FORMAT_VERSION {
         return Err(format!(
-            "{INSTALLATIONS_FILE} ha una versione non supportata ({}).",
+            "{INSTALLATIONS_FILE} has an unsupported version ({}).",
             stored.version
         ));
     }
@@ -306,9 +306,7 @@ fn read(file: &Path) -> Result<Vec<Installation>, String> {
         .into_iter()
         .map(|path| {
             Installation::from_canonical(path).ok_or_else(|| {
-                format!(
-                    "{INSTALLATIONS_FILE} contiene un percorso che non è una cartella _<flavor>_."
-                )
+                format!("{INSTALLATIONS_FILE} contains a path that is not a _<flavor>_ folder.")
             })
         })
         .collect()
@@ -440,7 +438,7 @@ mod tests {
         let same = tmp
             .path()
             .join("World of Warcraft/../World of Warcraft/_retail_");
-        assert!(store.add(&same).unwrap_err().contains("già"));
+        assert!(store.add(&same).unwrap_err().contains("already"));
         assert_eq!(store.list().unwrap().len(), 1);
     }
 
@@ -469,7 +467,7 @@ mod tests {
         let retail = game_dir(tmp.path(), "_retail_");
 
         let mut store = InstallationStore::load(file.clone());
-        assert!(store.list().unwrap_err().contains("danneggiato"));
+        assert!(store.list().unwrap_err().contains("damaged"));
         assert!(store.add(&retail).is_err());
         assert!(store.remove("any").is_err());
         assert_eq!(fs::read(&file).unwrap(), b"{ not json");
@@ -635,6 +633,6 @@ mod tests {
         let file = tmp.path().join(INSTALLATIONS_FILE);
         fs::write(&file, br#"{"version": 99, "paths": []}"#).unwrap();
         let store = InstallationStore::load(file);
-        assert!(store.list().unwrap_err().contains("versione"));
+        assert!(store.list().unwrap_err().contains("unsupported version"));
     }
 }
