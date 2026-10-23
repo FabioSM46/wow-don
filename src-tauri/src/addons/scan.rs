@@ -1,5 +1,6 @@
 //! Scansione di `Interface/AddOns` di un'installazione. Solo lettura: non modifica niente.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
@@ -8,6 +9,7 @@ use serde::Serialize;
 
 use super::fingerprint;
 use super::toc::{self, TocInfo};
+use crate::store::InstalledRecords;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,6 +150,74 @@ fn read_addon(
     addon
 }
 
+/// Il progetto CurseForge che l'app ha installato in una cartella, dal registro
+/// `installed-addons.json` (issue #62).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledProject {
+    pub id: u32,
+    /// Le cartelle del record che esistono ancora, con il nome che hanno sul disco.
+    pub folders: Vec<String>,
+}
+
+/// Una cartella di `list_addons`: la scansione più il progetto registrato, se c'è.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListedAddon {
+    #[serde(flatten)]
+    pub addon: InstalledAddon,
+    pub installed_project: Option<InstalledProject>,
+}
+
+/// Unisce la scansione ai record dell'app. Pura: non legge né disco né store. I nomi si
+/// confrontano senza distinguere maiuscole e minuscole, come fa il gioco. Un record conta solo
+/// per le sue cartelle ancora presenti; un record senza cartelle presenti non produce niente.
+/// Una cartella che compare nei record di più progetti (una libreria distribuita da più addon)
+/// non viene attribuita a nessuno: non è la prova di un solo progetto.
+pub fn with_installed_projects(
+    addons: Vec<InstalledAddon>,
+    records: &InstalledRecords,
+) -> Vec<ListedAddon> {
+    let on_disk: HashMap<String, &str> = addons
+        .iter()
+        .map(|a| (a.folder.to_lowercase(), a.folder.as_str()))
+        .collect();
+    let mut owners: HashMap<String, Vec<InstalledProject>> = HashMap::new();
+    for (mod_id, record) in records {
+        let mut present: Vec<String> = Vec::new();
+        for folder in &record.folders {
+            if let Some(name) = on_disk.get(&folder.to_lowercase())
+                && !present.iter().any(|p| p == name)
+            {
+                present.push((*name).to_owned());
+            }
+        }
+        let project = InstalledProject {
+            id: *mod_id,
+            folders: present,
+        };
+        for folder in &project.folders {
+            owners
+                .entry(folder.to_lowercase())
+                .or_default()
+                .push(project.clone());
+        }
+    }
+    addons
+        .into_iter()
+        .map(|addon| {
+            let installed_project = match owners.remove(&addon.folder.to_lowercase()) {
+                Some(mut projects) if projects.len() == 1 => projects.pop(),
+                _ => None,
+            };
+            ListedAddon {
+                addon,
+                installed_project,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,6 +332,108 @@ mod tests {
             serde_json::Value::String("EllesmereUI".to_owned())
         );
         assert_eq!(keys.len(), 17, "unexpected keys: {keys:?}");
+    }
+
+    fn listed(folders: &[&str]) -> Vec<InstalledAddon> {
+        folders
+            .iter()
+            .map(|folder| InstalledAddon {
+                folder: (*folder).to_owned(),
+                toc_file: None,
+                toc: TocInfo::default(),
+                modified_ms: None,
+                fingerprint: None,
+                error: None,
+            })
+            .collect()
+    }
+
+    fn records(entries: &[(u32, &[&str])]) -> InstalledRecords {
+        entries
+            .iter()
+            .map(|(id, folders)| {
+                (
+                    *id,
+                    crate::store::InstalledRecord {
+                        file_id: id * 10,
+                        folders: folders.iter().map(|f| (*f).to_owned()).collect(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// La cartella e, se c'è, il progetto registrato con le sue cartelle.
+    type Attributed<'a> = (&'a str, Option<(u32, Vec<&'a str>)>);
+
+    fn projects(listed: &[ListedAddon]) -> Vec<Attributed<'_>> {
+        listed
+            .iter()
+            .map(|l| {
+                (
+                    l.addon.folder.as_str(),
+                    l.installed_project
+                        .as_ref()
+                        .map(|p| (p.id, p.folders.iter().map(String::as_str).collect())),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn recorded_folders_carry_their_project() {
+        let addons = listed(&["Details", "details_compare2", "Other"]);
+        // Il record usa i nomi dello zip; sul disco una cartella ha un'altra capitalizzazione,
+        // e una cartella del record non c'è più.
+        let records = records(&[(7, &["Details", "Details_Compare2", "Details_Gone"])]);
+        let result = with_installed_projects(addons, &records);
+        let both = Some((7, vec!["Details", "details_compare2"]));
+        assert_eq!(
+            projects(&result),
+            [
+                ("Details", both.clone()),
+                ("details_compare2", both),
+                ("Other", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_record_whose_folders_are_gone_produces_nothing() {
+        let addons = listed(&["Other"]);
+        let result = with_installed_projects(addons, &records(&[(7, &["Details"])]));
+        assert_eq!(projects(&result), [("Other", None)]);
+    }
+
+    #[test]
+    fn a_folder_in_several_records_is_not_attributed() {
+        let addons = listed(&["Alpha", "Beta", "LibShared"]);
+        let records = records(&[(1, &["Alpha", "LibShared"]), (2, &["Beta", "LibShared"])]);
+        let result = with_installed_projects(addons, &records);
+        assert_eq!(
+            projects(&result),
+            [
+                ("Alpha", Some((1, vec!["Alpha", "LibShared"]))),
+                ("Beta", Some((2, vec!["Beta", "LibShared"]))),
+                ("LibShared", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_listed_payload_adds_installed_project() {
+        let mut result =
+            with_installed_projects(listed(&["Alpha", "Beta"]), &records(&[(1, &["Alpha"])]));
+        let alpha = serde_json::to_value(&result[0]).unwrap();
+        assert_eq!(alpha["folder"], "Alpha");
+        assert_eq!(
+            alpha["installedProject"],
+            serde_json::json!({"id": 1, "folders": ["Alpha"]})
+        );
+        let beta = serde_json::to_value(result.pop().unwrap()).unwrap();
+        assert!(beta.as_object().unwrap().contains_key("installedProject"));
+        assert_eq!(beta["installedProject"], serde_json::Value::Null);
+        assert_eq!(beta.as_object().unwrap().len(), 18);
     }
 
     #[test]

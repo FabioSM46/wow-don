@@ -6,12 +6,12 @@ use std::sync::{Mutex, MutexGuard};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
-use crate::addons::scan::{self, InstalledAddon};
+use crate::addons::scan::{self, ListedAddon};
 use crate::backup::{self, BackupInfo};
 use crate::config::Config;
 use crate::installations::Installation;
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport};
-use crate::store::{AddonSettingsStore, InstallationStore};
+use crate::store::{AddonSettingsStore, InstallationStore, InstalledAddonsStore};
 use crate::updates::{self, AddonUpdate, UpdateOutcome, VersionOverrides, VersionType};
 
 #[derive(Serialize)]
@@ -48,6 +48,16 @@ fn locked_settings<'a>(
         .map_err(|_| "Addon settings are not available: restart the app.".to_owned())
 }
 
+type Installed<'a> = State<'a, Mutex<InstalledAddonsStore>>;
+
+fn locked_installed(
+    installed: &Mutex<InstalledAddonsStore>,
+) -> Result<MutexGuard<'_, InstalledAddonsStore>, String> {
+    installed
+        .lock()
+        .map_err(|_| "The installed addons list is not available: restart the app.".to_owned())
+}
+
 fn overrides_for(
     settings: &Settings<'_>,
     installation_id: &str,
@@ -65,16 +75,18 @@ pub fn add_installation(path: String, store: Store<'_>) -> Result<Installation, 
     locked(&store)?.add(Path::new(&path))
 }
 
-/// Rimuove prima le impostazioni degli addon e poi l'installazione: se le impostazioni non si
-/// possono togliere non cambia niente e si può riprovare, invece di lasciarle orfane. I due
+/// Rimuove prima le impostazioni e i record degli addon, poi l'installazione: se qualcosa non
+/// si può togliere l'installazione resta e si può riprovare, invece di lasciare dati orfani. I
 /// lock non si tengono mai insieme.
 #[tauri::command]
 pub fn remove_installation(
     id: String,
     store: Store<'_>,
     settings: Settings<'_>,
+    installed: Installed<'_>,
 ) -> Result<(), String> {
     locked_settings(&settings)?.remove_installation(&id)?;
+    locked_installed(&installed)?.remove_installation(&id)?;
     locked(&store)?.remove(&id)
 }
 
@@ -107,20 +119,24 @@ pub fn clear_version_override(
     locked_settings(&settings)?.clear_override(&installation_id, mod_id)
 }
 
-/// Gli addon di un'installazione. La scansione legge il disco, quindi gira fuori dal thread
-/// principale per non bloccare la finestra con molti addon.
+/// Gli addon di un'installazione, con il progetto che l'app vi ha installato (issue #62). La
+/// scansione legge il disco, quindi gira fuori dal thread principale per non bloccare la
+/// finestra con molti addon; il registro si legge prima, qui.
 #[tauri::command]
 pub async fn list_addons(
     installation_id: String,
     store: Store<'_>,
-) -> Result<Vec<InstalledAddon>, String> {
+    installed: Installed<'_>,
+) -> Result<Vec<ListedAddon>, String> {
     let installation = locked(&store)?
         .list()?
         .into_iter()
         .find(|installation| installation.id == installation_id)
         .ok_or_else(|| "Installation not found.".to_owned())?;
+    let records = locked_installed(&installed)?.records_for(&installation.id)?;
     tauri::async_runtime::spawn_blocking(move || {
         scan::scan_addons(&installation.path, &installation.flavor)
+            .map(|addons| scan::with_installed_projects(addons, &records))
     })
     .await
     // L'errore di Tauri dice se il compito è andato in panic o è stato annullato.
@@ -156,12 +172,14 @@ pub async fn check_updates(
     .map_err(|error| format!("The update check was interrupted ({error})."))?
 }
 
-/// Aggiorna i progetti `mod_ids` dell'installazione: rifà il controllo, scarica e installa.
-/// Rete e disco girano fuori dal thread principale.
+/// Aggiorna i progetti `mod_ids` dell'installazione: rifà il controllo, scarica e installa, e
+/// registra in `installed-addons.json` quello che ha installato. Rete e disco girano fuori dal
+/// thread principale; il lock del registro si prende solo per scrivere ogni record.
 #[tauri::command]
 pub async fn update_addons(
     installation_id: String,
     mod_ids: Vec<u32>,
+    app: AppHandle,
     store: Store<'_>,
     settings: Settings<'_>,
     config: State<'_, Config>,
@@ -176,7 +194,16 @@ pub async fn update_addons(
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         let client = CurseForgeClient::new(transport, Some(key));
-        updates::update_addons(&installation, &client, &overrides, &mod_ids)
+        let installed = app.state::<Mutex<InstalledAddonsStore>>();
+        updates::update_addons(
+            &installation,
+            &client,
+            &overrides,
+            &mod_ids,
+            &mut |mod_id, record| {
+                locked_installed(&installed)?.record(&installation.id, mod_id, record)
+            },
+        )
     })
     .await
     .map_err(|error| format!("The update was interrupted ({error})."))?

@@ -13,7 +13,10 @@ mod updates;
 use std::sync::Mutex;
 
 use config::Config;
-use store::{ADDON_SETTINGS_FILE, AddonSettingsStore, INSTALLATIONS_FILE, InstallationStore};
+use store::{
+    ADDON_SETTINGS_FILE, AddonSettingsStore, INSTALLATIONS_FILE, INSTALLED_ADDONS_FILE,
+    InstallationStore, InstalledAddonsStore,
+};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -29,6 +32,9 @@ pub fn run() {
             )));
             app.manage(Mutex::new(AddonSettingsStore::load(
                 config_dir.join(ADDON_SETTINGS_FILE),
+            )));
+            app.manage(Mutex::new(InstalledAddonsStore::load(
+                config_dir.join(INSTALLED_ADDONS_FILE),
             )));
             Ok(())
         })
