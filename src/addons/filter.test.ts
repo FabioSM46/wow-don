@@ -274,11 +274,14 @@ describe("groupAddons", () => {
   });
 });
 
-/** Folders as `list_addons` returns them after the app installed `folders` for project `id`. */
+/**
+ * Folders after the app installed `folders` for project `id`. The list is passed through as
+ * given, missing folders included: `list_addons` already drops them, but the grouping must not
+ * depend on it.
+ */
 function recorded(addons: InstalledAddon[], id: number, folders: string[]): InstalledAddon[] {
-  const present = folders.filter((f) => addons.some((a) => a.folder === f));
   return addons.map((a) =>
-    present.includes(a.folder) ? { ...a, installedProject: { id, folders: present } } : a,
+    folders.includes(a.folder) ? { ...a, installedProject: { id, folders } } : a,
   );
 }
 
@@ -301,6 +304,7 @@ describe("groupAddons with the app's record of installed folders", () => {
 
   it("ignores record folders that are not installed", () => {
     const addons = recorded(dbm(), 3358, [...DBM_FOLDERS, "DBM-Gone"]);
+    assert.ok(addons[0].installedProject?.folders.includes("DBM-Gone"));
     assert.deepEqual(layout(addons), ["DBM-Core DBM-GUI DBM-StatusBarTimers"]);
   });
 
