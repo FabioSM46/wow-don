@@ -69,7 +69,7 @@ type Load =
   | { state: "error"; message: string }
   | { state: "ready"; addons: InstalledAddon[] };
 
-const dateFormat = new Intl.DateTimeFormat("it-IT", { dateStyle: "medium" });
+const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium" });
 
 /** `format` lancia un'eccezione su una data non valida: un `mtime` strano mostra "—". */
 function formatModified(ms: number | null): string {
@@ -327,28 +327,28 @@ export function AddonTable({ installation }: Props) {
   return (
     <section className="addons" aria-labelledby="addons-title">
       <header className="section-header">
-        <h2 id="addons-title">Addon · {installation.name}</h2>
+        <h2 id="addons-title">Addons · {installation.name}</h2>
         <div className="section-actions">
           {load.state === "ready" && (
             <span className="muted count">
-              {visible.length} di {groups.length} addon
-              {updateCount > 0 && ` · ${updateCount} da aggiornare`}
+              {visible.length} of {groups.length} {groups.length === 1 ? "addon" : "addons"}
+              {updateCount > 0 && ` · ${updateCount} to update`}
             </span>
           )}
           <button
             className="button secondary"
             onClick={rescan}
             disabled={rescanning || busy || load.state === "loading"}
-            title="Rilegge la cartella Interface/AddOns"
+            title="Reads the Interface/AddOns folder again"
           >
-            {rescanning ? "Lettura…" : "Rileggi addon"}
+            {rescanning ? "Reloading…" : "Reload addons"}
           </button>
           <button
             className="button secondary"
             onClick={() => void runCheck()}
             disabled={checking || busy}
           >
-            {checking ? "Controllo in corso…" : "Controlla aggiornamenti"}
+            {checking ? "Checking…" : "Check for updates"}
           </button>
           {(busy || updatableIds.length > 0) && (
             <button
@@ -379,7 +379,7 @@ export function AddonTable({ installation }: Props) {
         </p>
       )}
 
-      {load.state === "loading" && <p className="muted">Lettura degli addon…</p>}
+      {load.state === "loading" && <p className="muted">Loading addons…</p>}
       {load.state === "error" && (
         <p className="message error" role="alert">
           {load.message}
@@ -387,8 +387,8 @@ export function AddonTable({ installation }: Props) {
       )}
       {load.state === "ready" && addons.length === 0 && (
         <p className="empty">
-          Nessun addon in questa installazione: la cartella <code>Interface/AddOns</code> è vuota
-          o non esiste ancora.
+          No addons in this installation: the <code>Interface/AddOns</code> folder is empty or
+          does not exist yet.
         </p>
       )}
 
@@ -398,18 +398,18 @@ export function AddonTable({ installation }: Props) {
             <input
               className="search"
               type="search"
-              placeholder="Cerca per titolo, cartella, autore o note"
-              aria-label="Cerca addon"
+              placeholder="Search by title, folder, author or notes"
+              aria-label="Search addons"
               value={filters.query}
               onChange={(event) => update({ query: event.target.value })}
             />
             <select
               className="select"
-              aria-label="Filtra per autore"
+              aria-label="Filter by author"
               value={filters.author ?? ""}
               onChange={(event) => update({ author: event.target.value || null })}
             >
-              <option value="">Tutti gli autori</option>
+              <option value="">All authors</option>
               {authors.map((author) => (
                 <option key={author} value={author}>
                   {author}
@@ -422,7 +422,7 @@ export function AddonTable({ installation }: Props) {
                 checked={filters.hideLoadOnDemand}
                 onChange={(event) => update({ hideLoadOnDemand: event.target.checked })}
               />
-              Nascondi moduli LoadOnDemand
+              Hide LoadOnDemand modules
             </label>
             <label className="toggle">
               <input
@@ -430,7 +430,7 @@ export function AddonTable({ installation }: Props) {
                 checked={filters.onlyErrors}
                 onChange={(event) => update({ onlyErrors: event.target.checked })}
               />
-              Solo con errori
+              Only with errors
             </label>
             <label className="toggle">
               <input
@@ -439,25 +439,25 @@ export function AddonTable({ installation }: Props) {
                 disabled={!updates}
                 onChange={(event) => update({ onlyUpdates: event.target.checked })}
               />
-              Solo con aggiornamenti
+              Only with updates
             </label>
           </div>
 
           {visible.length === 0 ? (
-            <p className="empty">Nessun addon corrisponde alla ricerca o ai filtri.</p>
+            <p className="empty">No addons match the search or filters.</p>
           ) : (
             <div className="table-wrap">
               <table className="addon-table">
                 <thead>
                   <tr>
-                    {header("title", "Titolo")}
-                    <th>Cartella</th>
-                    <th>Versione</th>
-                    {header("author", "Autore")}
+                    {header("title", "Title")}
+                    <th>Folder</th>
+                    <th>Version</th>
+                    {header("author", "Author")}
                     <th>Interface</th>
-                    {header("modified", "Modificato")}
+                    {header("modified", "Modified")}
                     <th>CurseForge</th>
-                    <th>Aggiornamento</th>
+                    <th>Update</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -482,7 +482,7 @@ export function AddonTable({ installation }: Props) {
                               <button
                                 className="chevron"
                                 aria-expanded={open}
-                                aria-label={`${open ? "Nascondi" : "Mostra"} le cartelle di ${displayTitle(addon)}`}
+                                aria-label={`${open ? "Hide" : "Show"} the folders of ${displayTitle(addon)}`}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   toggle(addon.folder);
@@ -503,7 +503,7 @@ export function AddonTable({ installation }: Props) {
                             {hasOthers && (
                               <span
                                 className="more-folders"
-                                aria-label={`e altre ${others.length} cartelle: ${others.map((o) => o.folder).join(", ")}`}
+                                aria-label={`and ${others.length} more ${others.length === 1 ? "folder" : "folders"}: ${others.map((o) => o.folder).join(", ")}`}
                               >
                                 +{others.length}
                               </span>
@@ -683,9 +683,9 @@ function ProjectCell({
       {!project.allowModDistribution && (
         <span
           className="hint"
-          title="L'autore non permette il download da app di terzi: andrà aggiornato dal sito."
+          title="The author does not allow downloads from third-party apps: update it from the website."
         >
-          solo dal sito
+          website only
         </span>
       )}
       {override !== null && (
@@ -742,7 +742,7 @@ function UpdateCell({ update, checking, updating, disabled, onUpdate }: UpdateCe
     case "upToDate":
       return (
         <td className="muted" title={installedTitle(update)}>
-          Aggiornato
+          Up to date
         </td>
       );
     case "error":
@@ -754,8 +754,8 @@ function UpdateCell({ update, checking, updating, disabled, onUpdate }: UpdateCe
 
 /** Lo stato riguarda il progetto: il suggerimento dice quale file del progetto è installato. */
 function installedTitle(update: AddonUpdate, latestDate?: string): string | undefined {
-  const installed = update.installedFile ? `Installato: ${update.installedFile.name}` : undefined;
-  const latest = latestDate ? `Nuovo file del ${latestDate.slice(0, 10)}` : undefined;
+  const installed = update.installedFile ? `Installed: ${update.installedFile.name}` : undefined;
+  const latest = latestDate ? `New file from ${latestDate.slice(0, 10)}` : undefined;
   return [installed, latest].filter(Boolean).join("\n") || undefined;
 }
 

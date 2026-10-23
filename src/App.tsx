@@ -46,7 +46,7 @@ function App() {
             {error}
           </p>
         )}
-        {installations === null && !error && <p className="muted">Caricamento…</p>}
+        {installations === null && !error && <p className="muted">Loading…</p>}
         {installations !== null && (
           <Installations
             installations={installations}
@@ -63,7 +63,7 @@ function App() {
           <span>v{status.version}</span>
           <span>
             CurseForge:{" "}
-            {status.curseforgeKeyConfigured ? "chiave configurata" : "chiave mancante"}
+            {status.curseforgeKeyConfigured ? "key configured" : "key missing"}
           </span>
         </footer>
       )}
