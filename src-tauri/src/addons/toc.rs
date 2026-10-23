@@ -25,6 +25,9 @@ pub struct TocInfo {
     pub dependencies: Vec<String>,
     pub optional_deps: Vec<String>,
     pub load_on_demand: bool,
+    /// `## Group`: la cartella sotto cui il gioco raggruppa questo addon nella propria lista
+    /// (i moduli di EllesmereUI dichiarano `EllesmereUI`).
+    pub group: Option<String>,
     pub curse_project_id: Option<String>,
     pub wago_id: Option<String>,
     pub wowi_id: Option<String>,
@@ -55,6 +58,7 @@ pub fn parse_toc(text: &str) -> TocInfo {
             "notes" => info.notes = non_empty(strip_ui_escapes(value)),
             "optionaldeps" => info.optional_deps = parse_list(value),
             "loadondemand" => info.load_on_demand = value == "1",
+            "group" => info.group = non_empty(strip_ui_escapes(value)),
             "x-curse-project-id" => info.curse_project_id = Some(value.to_owned()),
             "x-wago-id" => info.wago_id = Some(value.to_owned()),
             "x-wowi-id" => info.wowi_id = Some(value.to_owned()),
@@ -273,6 +277,31 @@ mod tests {
         assert_eq!(info.dependencies, ["Core"]);
         assert_eq!(info.optional_deps, ["Ace3", "LibStub"]);
         assert_eq!(parse_toc("## DepsCustom: X\n").dependencies, ["X"]);
+    }
+
+    #[test]
+    fn the_group_field_is_read() {
+        let info = parse_toc(
+            "## Title: |cff0cd29fEllesmereUI|r Action Bars\n\
+             ## Category: |cff0cd29fEllesmere|rUI\n\
+             ## Group: EllesmereUI\n\
+             ## Dependencies: EllesmereUI\n",
+        );
+        assert_eq!(info.group.as_deref(), Some("EllesmereUI"));
+        assert_eq!(info.dependencies, ["EllesmereUI"]);
+        assert_eq!(
+            parse_toc("##   group  :   Foo  \r\n").group.as_deref(),
+            Some("Foo")
+        );
+        assert_eq!(
+            parse_toc("## Group: |cffff0000Foo|r\n").group.as_deref(),
+            Some("Foo")
+        );
+        assert_eq!(parse_toc("## Group:   \n").group, None);
+        assert_eq!(parse_toc("## Group: |cffff0000|r\n").group, None);
+        assert_eq!(parse_toc("## Title: Foo\n").group, None);
+        // `## Category` non è `## Group`: resta ignorato.
+        assert_eq!(parse_toc("## Category: Foo\n").group, None);
     }
 
     #[test]
