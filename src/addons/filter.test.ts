@@ -273,3 +273,78 @@ describe("groupAddons", () => {
     assert.deepEqual(layout(addons), ["Alpha AlphaBC", "AlphaB"]);
   });
 });
+
+/**
+ * Folders after the app installed `folders` for project `id`. The list is passed through as
+ * given, missing folders included: `list_addons` already drops them, but the grouping must not
+ * depend on it.
+ */
+function recorded(addons: InstalledAddon[], id: number, folders: string[]): InstalledAddon[] {
+  return addons.map((a) =>
+    folders.includes(a.folder) ? { ...a, installedProject: { id, folders } } : a,
+  );
+}
+
+describe("groupAddons with the app's record of installed folders", () => {
+  // DBM's modules require DBM-Core, but no name extends another one: without the check or the
+  // record nothing ties them together.
+  const dbm = () => [
+    addon("DBM-Core"),
+    addon("DBM-GUI", { dependencies: ["DBM-Core"], loadOnDemand: true }),
+    addon("DBM-StatusBarTimers", { dependencies: ["DBM-Core"] }),
+  ];
+  const DBM_FOLDERS = ["DBM-Core", "DBM-GUI", "DBM-StatusBarTimers"];
+
+  it("keeps an addon the app installed on one row before any check", () => {
+    assert.deepEqual(layout(dbm()), ["DBM-Core", "DBM-GUI", "DBM-StatusBarTimers"]);
+    const addons = recorded(dbm(), 3358, DBM_FOLDERS);
+    assert.deepEqual(layout(addons), ["DBM-Core DBM-GUI DBM-StatusBarTimers"]);
+    assert.equal(groupAddons(addons)[0].main.folder, "DBM-Core");
+  });
+
+  it("ignores record folders that are not installed", () => {
+    const addons = recorded(dbm(), 3358, [...DBM_FOLDERS, "DBM-Gone"]);
+    assert.equal(addons[0].installedProject?.folders.includes("DBM-Gone"), true);
+    assert.deepEqual(layout(addons), ["DBM-Core DBM-GUI DBM-StatusBarTimers"]);
+  });
+
+  it("vetoes folders outside the record, like the published file", () => {
+    // A plugin by another author that requires and extends the recorded main stays apart.
+    const addons = recorded(
+      [
+        addon("ElvUI", { author: "Elv, Simpy" }),
+        addon("ElvUI_Options", { dependencies: ["ElvUI"] }),
+        addon("ElvUI_WindTools", { dependencies: ["ElvUI"], author: "Elv, fang2hou" }),
+      ],
+      231,
+      ["ElvUI", "ElvUI_Options"],
+    );
+    assert.deepEqual(layout(addons), ["ElvUI ElvUI_Options", "ElvUI_WindTools"]);
+  });
+
+  it("never joins two recorded projects, whatever the .toc fields say", () => {
+    let addons = recorded(
+      [addon("Alpha"), addon("Alpha_Extra", { group: "Alpha", dependencies: ["Alpha"] })],
+      1,
+      ["Alpha"],
+    );
+    addons = recorded(addons, 2, ["Alpha_Extra"]);
+    assert.deepEqual(layout(addons), ["Alpha", "Alpha_Extra"]);
+  });
+
+  it("lets the published file prevail over a different record after the check", () => {
+    // The app installed Alpha and Alpha_Old together; another manager has since updated
+    // Alpha to a file without Alpha_Old.
+    const addons = recorded(
+      [addon("Alpha"), addon("Alpha_Old", { dependencies: ["Alpha"] })],
+      1,
+      ["Alpha", "Alpha_Old"],
+    );
+    assert.deepEqual(layout(addons), ["Alpha Alpha_Old"]);
+    const updates = checked(addons, { Alpha: [1, ["Alpha"]] });
+    assert.deepEqual(layout(addons, updates), ["Alpha", "Alpha_Old"]);
+    // A different project in the check wins over the record too.
+    const moved = checked(addons, { Alpha: [9, ["Alpha", "Alpha_Old"]] });
+    assert.deepEqual(layout(addons, moved), ["Alpha", "Alpha_Old"]);
+  });
+});
