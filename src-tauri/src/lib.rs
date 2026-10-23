@@ -1,4 +1,5 @@
 mod addons;
+mod backup;
 mod commands;
 mod config;
 mod install;
@@ -33,6 +34,8 @@ pub fn run() {
             commands::remove_installation,
             commands::list_addons,
             commands::check_updates,
+            commands::create_backup,
+            commands::list_backups,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

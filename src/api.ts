@@ -56,6 +56,14 @@ export type AddonUpdate = {
   | { status: "error"; message: string }
 );
 
+/** Uno zip di backup di `WTF` e `Interface`. */
+export type BackupInfo = {
+  name: string;
+  path: string;
+  size: number;
+  modifiedMs: number | null;
+};
+
 export const api = {
   appStatus: () => invoke<AppStatus>("app_status"),
   listInstallations: () => invoke<Installation[]>("list_installations"),
@@ -65,6 +73,10 @@ export const api = {
     invoke<InstalledAddon[]>("list_addons", { installationId }),
   checkUpdates: (installationId: string) =>
     invoke<AddonUpdate[]>("check_updates", { installationId }),
+  createBackup: (installationId: string) =>
+    invoke<BackupInfo>("create_backup", { installationId }),
+  listBackups: (installationId: string) =>
+    invoke<BackupInfo[]>("list_backups", { installationId }),
 };
 
 /** I comandi rifiutano con il messaggio del backend; qualunque altra cosa diventa testo. */
