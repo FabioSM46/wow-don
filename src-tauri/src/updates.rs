@@ -34,6 +34,39 @@ pub const ANNIVERSARY: u32 = 73246;
 /// "WoW Forever".
 pub const FOREVER: u32 = 88568;
 
+/// I tipi di versione che l'app conosce, con il nome mostrato nel menu del frontend (in
+/// inglese, come tutta l'interfaccia). Sono anche gli unici ammessi come versione forzata di
+/// un addon (D6).
+pub const VERSION_TYPES: [(u32, &str); 5] = [
+    (RETAIL, "Retail"),
+    (CLASSIC_ERA, "Classic Era"),
+    (CLASSIC_PROGRESSIVE, "Classic"),
+    (ANNIVERSARY, "Anniversary"),
+    (FOREVER, "WoW Forever"),
+];
+
+/// Un tipo di versione del gioco per il frontend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VersionType {
+    pub id: u32,
+    pub name: &'static str,
+}
+
+/// I tipi noti, nell'ordine di [`VERSION_TYPES`]. Nessuna chiamata di rete.
+pub fn version_types() -> Vec<VersionType> {
+    VERSION_TYPES
+        .iter()
+        .map(|&(id, name)| VersionType { id, name })
+        .collect()
+}
+
+pub fn is_known_version_type(id: u32) -> bool {
+    VERSION_TYPES.iter().any(|&(known, _)| known == id)
+}
+
+/// Versioni del gioco forzate: id del progetto CurseForge → `gameVersionTypeId`.
+pub type VersionOverrides = HashMap<u32, u32>;
+
 /// Tipo di versione del gioco per il flavor di un'installazione.
 ///
 /// - `_retail_` → Retail; `_classic_era_` → Classic Era;
@@ -108,6 +141,9 @@ pub struct AddonUpdate {
     pub installed_file: Option<FileSummary>,
     #[serde(flatten)]
     pub status: UpdateStatus,
+    /// La versione del gioco forzata per il progetto, se c'è: è quella usata per cercare il
+    /// file più recente al posto di quella dell'installazione.
+    pub version_override: Option<u32>,
     /// Le cartelle (`modules`) del file installato, con il loro fingerprint: servono
     /// all'aggiornamento per togliere quelle che la versione nuova non ha più. Restano nel
     /// backend.
@@ -115,12 +151,14 @@ pub struct AddonUpdate {
     pub installed_modules: Vec<FileModule>,
 }
 
-/// Abbina e valuta. `version_type` è il `gameVersionTypeId` dell'installazione.
+/// Abbina e valuta. `version_type` è il `gameVersionTypeId` dell'installazione; `overrides`
+/// lo sostituisce per i progetti che hanno una versione forzata.
 pub fn evaluate(
     addons: &[InstalledAddon],
     matches: &FingerprintMatches,
     mods: &[Mod],
     version_type: u32,
+    overrides: &VersionOverrides,
 ) -> Vec<AddonUpdate> {
     // Ogni fingerprint di cartella → il match del progetto che la contiene.
     let mut by_fingerprint: HashMap<u64, &FingerprintMatch> = HashMap::new();
@@ -139,6 +177,7 @@ pub fn evaluate(
                 project: None,
                 installed_file: None,
                 status: UpdateStatus::NotMatched,
+                version_override: None,
                 installed_modules: Vec::new(),
             };
             let Some(fingerprint) = addon.fingerprint else {
@@ -161,7 +200,9 @@ pub fn evaluate(
             });
             update.installed_file = Some(FileSummary::from(&found.file));
             update.installed_modules = found.file.modules.clone();
-            update.status = match newest_release(found, version_type) {
+            update.version_override = overrides.get(&found.id).copied();
+            let target = update.version_override.unwrap_or(version_type);
+            update.status = match newest_release(found, target) {
                 Some(latest) if is_newer(latest, &found.file) => UpdateStatus::UpdateAvailable {
                     latest: FileSummary::from(latest),
                 },
@@ -202,14 +243,16 @@ fn is_newer(candidate: &File, installed: &File) -> bool {
 pub fn check_updates<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
+    overrides: &VersionOverrides,
 ) -> Result<Vec<AddonUpdate>, String> {
-    scan_and_evaluate(installation, client).map(|(_, updates)| updates)
+    scan_and_evaluate(installation, client, overrides).map(|(_, updates)| updates)
 }
 
 /// Come [`check_updates`], ma restituisce anche la scansione.
 fn scan_and_evaluate<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
+    overrides: &VersionOverrides,
 ) -> Result<(Vec<InstalledAddon>, Vec<AddonUpdate>), String> {
     let version_type = version_type_for(&installation.flavor).ok_or_else(|| {
         format!(
@@ -226,7 +269,7 @@ fn scan_and_evaluate<T: Transport>(
     mod_ids.sort_unstable();
     mod_ids.dedup();
     let mods = client.get_mods(&mod_ids).map_err(|e| e.to_string())?;
-    let updates = evaluate(&addons, &matches, &mods, version_type);
+    let updates = evaluate(&addons, &matches, &mods, version_type, overrides);
     Ok((addons, updates))
 }
 
@@ -279,8 +322,8 @@ impl UpdateOutcome {
     }
 }
 
-/// Aggiorna i progetti `mod_ids` di un'installazione. Rifà il controllo invece di fidarsi del
-/// frontend; per ogni progetto con un aggiornamento chiede il file a CurseForge, lo scarica,
+/// Aggiorna i progetti `mod_ids` di un'installazione. Rifà il controllo, con le stesse versioni
+/// forzate di [`check_updates`], invece di fidarsi del frontend; per ogni progetto con un aggiornamento chiede il file a CurseForge, lo scarica,
 /// lo estrae in staging e sostituisce le cartelle, togliendo quelle del file installato che la
 /// versione nuova non ha più. Un errore su un progetto non ferma gli altri. Bloccante.
 ///
@@ -288,9 +331,10 @@ impl UpdateOutcome {
 pub fn update_addons<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
+    overrides: &VersionOverrides,
     mod_ids: &[u32],
 ) -> Result<Vec<UpdateOutcome>, String> {
-    let (addons, updates) = scan_and_evaluate(installation, client)?;
+    let (addons, updates) = scan_and_evaluate(installation, client, overrides)?;
     let addons_dir = installation.path.join("Interface").join("AddOns");
     let mut seen = HashSet::new();
     Ok(mod_ids
@@ -493,6 +537,7 @@ mod tests {
             &matches(Vec::new()),
             &[],
             RETAIL,
+            &VersionOverrides::new(),
         );
         assert_eq!(result[0].status, UpdateStatus::NotMatched);
         assert!(result[0].project.is_none());
@@ -512,6 +557,7 @@ mod tests {
             &matches(vec![found]),
             &[project(7, Some(true))],
             RETAIL,
+            &VersionOverrides::new(),
         );
         assert_eq!(result[0].status, UpdateStatus::UpToDate);
         let project = result[0].project.as_ref().unwrap();
@@ -532,6 +578,7 @@ mod tests {
             &matches(vec![found]),
             &[project(7, None)],
             RETAIL,
+            &VersionOverrides::new(),
         );
         assert_eq!(
             result[0].status,
@@ -562,6 +609,7 @@ mod tests {
             &matches(vec![found]),
             &[project(7, Some(true))],
             RETAIL,
+            &VersionOverrides::new(),
         );
         assert_eq!(result[0].status, UpdateStatus::UpToDate);
     }
@@ -578,9 +626,75 @@ mod tests {
             &matches(vec![found]),
             &[project(3, Some(true))],
             RETAIL,
+            &VersionOverrides::new(),
         );
         assert_eq!(result[0].project, result[1].project);
         assert_eq!(result[0].project.as_ref().unwrap().id, 3);
+    }
+
+    #[test]
+    fn an_override_picks_the_classic_era_file_on_a_forever_installation() {
+        // Un addon che pubblica per Classic Era ma non per Forever.
+        let found = || FingerprintMatch {
+            id: 7,
+            file: file(10, "2026-09-01T00:00:00Z", 1, ERA, &[100]),
+            latest_files: vec![file(12, "2026-10-01T00:00:00Z", 1, ERA, &[])],
+        };
+        let addons = [addon("Foo", Some(100)), addon("Other", Some(1))];
+        let mods = [project(7, Some(true))];
+
+        let plain = evaluate(
+            &addons,
+            &matches(vec![found()]),
+            &mods,
+            FOREVER,
+            &VersionOverrides::new(),
+        );
+        assert_eq!(plain[0].status, UpdateStatus::UpToDate);
+        assert_eq!(plain[0].version_override, None);
+
+        let overrides = VersionOverrides::from([(7, ERA), (99, RETAIL)]);
+        let forced = evaluate(&addons, &matches(vec![found()]), &mods, FOREVER, &overrides);
+        assert!(
+            matches!(&forced[0].status, UpdateStatus::UpdateAvailable { latest } if latest.id == 12),
+            "{:?}",
+            forced[0].status
+        );
+        assert_eq!(forced[0].version_override, Some(ERA));
+        // Una cartella non riconosciuta non ha una versione forzata.
+        assert_eq!(forced[1].status, UpdateStatus::NotMatched);
+        assert_eq!(forced[1].version_override, None);
+    }
+
+    #[test]
+    fn known_version_types_have_english_names() {
+        let types = version_types();
+        let names: Vec<_> = types.iter().map(|t| t.name).collect();
+        assert_eq!(
+            names,
+            [
+                "Retail",
+                "Classic Era",
+                "Classic",
+                "Anniversary",
+                "WoW Forever"
+            ]
+        );
+        for flavor in [
+            "retail",
+            "classic_era",
+            "classic",
+            "anniversary",
+            "classic_beta",
+        ] {
+            let id = version_type_for(flavor).unwrap();
+            assert!(is_known_version_type(id), "{flavor}");
+        }
+        assert!(!is_known_version_type(81212));
+        assert_eq!(
+            serde_json::to_value(&types[0]).unwrap(),
+            serde_json::json!({"id": RETAIL, "name": "Retail"})
+        );
     }
 
     /// Fissa l'espansione attuale della Classic progressiva: quando cambia, questo test va
@@ -616,6 +730,7 @@ mod tests {
                     date: "d".to_owned(),
                 },
             },
+            version_override: Some(FOREVER),
             installed_modules: vec![FileModule {
                 name: "Foo".to_owned(),
                 fingerprint: 1,
@@ -625,6 +740,7 @@ mod tests {
         assert_eq!(json["status"], "updateAvailable");
         assert_eq!(json["latest"]["id"], 1);
         assert_eq!(json["installedFile"], serde_json::Value::Null);
+        assert_eq!(json["versionOverride"], FOREVER);
         assert!(json.get("installedModules").is_none());
         let json = serde_json::to_value(UpdateStatus::NotMatched).unwrap();
         assert_eq!(json["status"], "notMatched");
@@ -808,6 +924,10 @@ mod tests {
             json!({"id": mod_id, "name": name, "allowModDistribution": allow})
         }
 
+        fn no_overrides() -> VersionOverrides {
+            VersionOverrides::new()
+        }
+
         fn client(routes: Routes) -> CurseForgeClient<Routes> {
             CurseForgeClient::new(routes, Some("test-key".to_owned()))
         }
@@ -851,7 +971,7 @@ mod tests {
             };
             let client = client(routes);
 
-            let outcomes = update_addons(&fx.installation, &client, &[1]).unwrap();
+            let outcomes = update_addons(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
 
             assert_eq!(
                 outcomes,
@@ -934,7 +1054,7 @@ mod tests {
             };
             let client = client(routes);
 
-            let outcomes = update_addons(&fx.installation, &client, &[1]).unwrap();
+            let outcomes = update_addons(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
 
             assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "{outcomes:?}");
             assert_eq!(
@@ -971,7 +1091,7 @@ mod tests {
             };
             let client = client(routes);
 
-            let outcomes = update_addons(&fx.installation, &client, &[1]).unwrap();
+            let outcomes = update_addons(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
 
             assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "{outcomes:?}");
             assert_eq!(names(&fx.addons), ["Alpha", "Beta", "LibShared"]);
@@ -1029,8 +1149,13 @@ mod tests {
             let log = Arc::clone(&routes.log);
             let client = client(routes);
 
-            let outcomes =
-                update_addons(&fx.installation, &client, &[2, 3, 1, 4, 99, 5, 1]).unwrap();
+            let outcomes = update_addons(
+                &fx.installation,
+                &client,
+                &no_overrides(),
+                &[2, 3, 1, 4, 99, 5, 1],
+            )
+            .unwrap();
 
             let summary: Vec<(u32, &str, OutcomeStatus)> = outcomes
                 .iter()
@@ -1105,10 +1230,47 @@ mod tests {
         }
 
         #[test]
+        fn update_follows_the_stored_override() {
+            let fx = fixture(&[("Alpha", "alpha v1")]);
+            // Installato un file Retail; il più recente è solo Classic Era.
+            let mut current = installed(&fx, 1, &["Alpha"], false);
+            let mut era = file_json(1, 11, "2026-10-01T00:00:00Z", &[]);
+            era["sortableGameVersions"] =
+                json!([{"gameVersionName": "1.15.7", "gameVersionTypeId": CLASSIC_ERA}]);
+            current["latestFiles"] = json!([current["file"].clone(), era.clone()]);
+            let routes = || Routes {
+                fingerprints: json!({"data": {"exactMatches": [current.clone()]}}).to_string(),
+                mods: json!({"data": [project(1, "Alpha", true)]}).to_string(),
+                files: HashMap::from([(
+                    format!("{API}/v1/mods/1/files/11"),
+                    json!({ "data": era.clone() }).to_string(),
+                )]),
+                zips: HashMap::from([(
+                    download_url(11),
+                    zip_of(&[("Alpha/Alpha.lua", "alpha era")]),
+                )]),
+                ..Routes::default()
+            };
+
+            let outcomes =
+                update_addons(&fx.installation, &client(routes()), &no_overrides(), &[1]).unwrap();
+            assert_eq!(outcomes[0].status, OutcomeStatus::Skipped, "{outcomes:?}");
+
+            let overrides = VersionOverrides::from([(1, CLASSIC_ERA)]);
+            let outcomes =
+                update_addons(&fx.installation, &client(routes()), &overrides, &[1]).unwrap();
+            assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "{outcomes:?}");
+            assert_eq!(
+                fs::read_to_string(fx.addons.join("Alpha").join("Alpha.lua")).unwrap(),
+                "alpha era"
+            );
+        }
+
+        #[test]
         fn a_failed_check_changes_nothing() {
             let fx = fixture(&[("Alpha", "alpha v1")]);
             let client = CurseForgeClient::new(Routes::default(), None);
-            assert!(update_addons(&fx.installation, &client, &[1]).is_err());
+            assert!(update_addons(&fx.installation, &client, &no_overrides(), &[1]).is_err());
             assert_eq!(names(&fx.addons), ["Alpha"]);
         }
 
@@ -1138,7 +1300,9 @@ mod tests {
                 .filter_map(|id| id.trim().parse().ok())
                 .collect();
             if mod_ids.is_empty() {
-                for update in check_updates(&installation, &client).unwrap() {
+                for update in
+                    check_updates(&installation, &client, &VersionOverrides::new()).unwrap()
+                {
                     if let (Some(project), UpdateStatus::UpdateAvailable { latest }) =
                         (&update.project, &update.status)
                     {
@@ -1147,7 +1311,9 @@ mod tests {
                 }
                 return;
             }
-            for outcome in update_addons(&installation, &client, &mod_ids).unwrap() {
+            for outcome in
+                update_addons(&installation, &client, &VersionOverrides::new(), &mod_ids).unwrap()
+            {
                 println!("{outcome:?}");
                 assert_ne!(outcome.status, OutcomeStatus::Error, "{outcome:?}");
             }

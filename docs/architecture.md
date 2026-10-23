@@ -25,7 +25,7 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | Modulo | Responsabilità | Stato |
 | --- | --- | --- |
 | `config` | Legge `CURSEFORGE_API_KEY` dall'ambiente / `.env` | Esiste |
-| `commands` | Comandi Tauri esposti al frontend | Esiste (`app_status`, `list_installations`, `add_installation`, `remove_installation`, `list_addons`, `check_updates`, `update_addons`, `create_backup`, `list_backups`) |
+| `commands` | Comandi Tauri esposti al frontend | Esiste (`app_status`, `list_installations`, `add_installation`, `remove_installation`, `list_addons`, `check_updates`, `update_addons`, `list_version_types`, `set_version_override`, `clear_version_override`, `create_backup`, `list_backups`) |
 | `installations` | Trova e gestisce le installazioni di WoW, anche dentro prefissi Wine | Esiste (aggiunta manuale e validazione; scoperta automatica da fare) |
 | `addons::toc` | Legge i file `.toc` in `Interface/AddOns` (titolo, versione, `## Interface`) e sceglie il `.toc` giusto per il flavor dell'installazione | Esiste |
 | `addons::scan` | Legge le cartelle di `Interface/AddOns` e il loro `.toc`, senza modificare niente | Esiste |
@@ -35,7 +35,7 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | `updates` | Abbina gli addon ai progetti CurseForge e trova il file Release più recente per la versione del gioco (`check_updates`); aggiorna i progetti scelti rifacendo il controllo, scaricando il file e sostituendo le cartelle (`update_addons`); una cartella del file installato assente dal nuovo zip si toglie solo se è ancora sul disco con il fingerprint del modulo installato, non è un modulo di un altro progetto riconosciuto e nessun altro addon la dichiara tra le dipendenze del `.toc` | Esiste (Retail, Classic Era, Classic, Anniversary, WoW Forever; id verificati sull'API) |
 | `install` | Estrazione sicura dello zip in una cartella di staging accanto ad `AddOns` (niente percorsi assoluti, `..`, unità o link simbolici; limiti di voci e dimensione) e sostituzione delle cartelle con ripristino in caso di errore (D26) | Esiste (usato da `update_addons`; l'installazione di un addon nuovo è da fare) |
 | `backup` | Zip (deflate, in streaming) di `WTF` e `Interface` di un'installazione in `app_data_dir()/backups/<id-installazione>/<flavor>-AAAAMMGG-HHMMSS.zip` (ora UTC), scritto come file temporaneo e rinominato a fine scrittura; i link simbolici non si seguono; elenco dei backup dal più recente | Esiste (ripristino, backup automatico e rotazione da fare) |
-| `store` | Stato locale: addon installati, fonte, versione, versione del gioco forzata | Esiste per le installazioni (`installations.json`, D22) |
+| `store` | Stato locale: addon installati, fonte, versione, versione del gioco forzata | Esiste per le installazioni (`installations.json`, D22) e per la versione del gioco forzata per addon (`addon-settings.json`, D6); `check_updates` e `update_addons` la usano al posto di quella dell'installazione |
 
 ## API CurseForge usate
 
