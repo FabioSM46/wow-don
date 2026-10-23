@@ -164,8 +164,15 @@ pub fn evaluate(
     version_type: u32,
     overrides: &VersionOverrides,
 ) -> Vec<AddonUpdate> {
-    // Ogni fingerprint di cartella → il match del progetto che la contiene.
+    // Ogni fingerprint di cartella → il match del progetto che la contiene. Prima i match
+    // parziali (il primo file che contiene il fingerprint), poi gli esatti, che li
+    // sostituiscono: un match esatto vince sempre su uno parziale.
     let mut by_fingerprint: HashMap<u64, &FingerprintMatch> = HashMap::new();
+    for found in &matches.partial_matches {
+        for module in &found.file.modules {
+            by_fingerprint.entry(module.fingerprint).or_insert(found);
+        }
+    }
     for found in &matches.exact_matches {
         for module in &found.file.modules {
             by_fingerprint.insert(module.fingerprint, found);
@@ -271,7 +278,12 @@ fn scan_and_evaluate<T: Transport>(
     let matches = client
         .match_fingerprints(&fingerprints)
         .map_err(|e: CurseForgeError| e.to_string())?;
-    let mut mod_ids: Vec<u32> = matches.exact_matches.iter().map(|m| m.id).collect();
+    let mut mod_ids: Vec<u32> = matches
+        .exact_matches
+        .iter()
+        .chain(&matches.partial_matches)
+        .map(|m| m.id)
+        .collect();
     mod_ids.sort_unstable();
     mod_ids.dedup();
     let mods = client.get_mods(&mod_ids).map_err(|e| e.to_string())?;
@@ -666,6 +678,70 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_only_in_partial_matches_is_recognised() {
+        let mut published = file(20, "2026-09-01T00:00:00Z", 1, RETAIL, &[1, 2]);
+        published.modules[0].name = "DBM-Core".to_owned();
+        published.modules[1].name = "DBM-GUI".to_owned();
+        let found = FingerprintMatch {
+            id: 3,
+            file: published,
+            latest_files: vec![file(21, "2026-10-01T00:00:00Z", 1, RETAIL, &[])],
+        };
+        let partial = FingerprintMatches {
+            partial_matches: vec![found],
+            ..FingerprintMatches::default()
+        };
+        // DBM-GUI modificata: solo DBM-Core combacia con il file pubblicato.
+        let result = evaluate(
+            &[addon("DBM-Core", Some(1)), addon("DBM-GUI", Some(99))],
+            &partial,
+            &[project(3, Some(true))],
+            RETAIL,
+            &VersionOverrides::new(),
+        );
+        assert_eq!(result[0].project.as_ref().unwrap().id, 3);
+        assert_eq!(result[0].installed_file.as_ref().unwrap().id, 20);
+        assert_eq!(result[0].project_folders, ["DBM-Core", "DBM-GUI"]);
+        assert_eq!(result[0].installed_modules.len(), 2);
+        assert!(
+            matches!(&result[0].status, UpdateStatus::UpdateAvailable { latest } if latest.id == 21)
+        );
+        // Il fingerprint della cartella modificata non è tra i `modules`: resta sconosciuta.
+        assert_eq!(result[1].status, UpdateStatus::NotMatched);
+    }
+
+    #[test]
+    fn an_exact_match_wins_over_a_partial_one() {
+        let exact = FingerprintMatch {
+            id: 7,
+            file: file(10, "2026-10-01T00:00:00Z", 1, RETAIL, &[100]),
+            latest_files: Vec::new(),
+        };
+        let partial = FingerprintMatch {
+            id: 8,
+            file: file(30, "2026-10-01T00:00:00Z", 1, RETAIL, &[100, 200]),
+            latest_files: Vec::new(),
+        };
+        // L'ordine nella risposta non conta: l'esatto vince in entrambi i casi.
+        let both = FingerprintMatches {
+            exact_matches: vec![exact],
+            partial_matches: vec![partial],
+            ..FingerprintMatches::default()
+        };
+        let result = evaluate(
+            &[addon("Foo", Some(100)), addon("Bar", Some(200))],
+            &both,
+            &[project(7, Some(true)), project(8, Some(true))],
+            RETAIL,
+            &VersionOverrides::new(),
+        );
+        assert_eq!(result[0].project.as_ref().unwrap().id, 7);
+        assert_eq!(result[0].installed_file.as_ref().unwrap().id, 10);
+        // Una cartella presente solo nel match parziale usa quello.
+        assert_eq!(result[1].project.as_ref().unwrap().id, 8);
+    }
+
+    #[test]
     fn an_override_picks_the_classic_era_file_on_a_forever_installation() {
         // Un addon che pubblica per Classic Era ma non per Forever.
         let found = || FingerprintMatch {
@@ -1034,6 +1110,50 @@ mod tests {
             );
             // Nessuna cartella di lavoro rimasta accanto ad AddOns.
             assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
+        }
+
+        /// Un addon installato in parte (manca una cartella del file pubblicato) arriva solo in
+        /// `partialMatches`: si riconosce e si aggiorna come uno esatto.
+        #[test]
+        fn a_partially_installed_addon_is_updated() {
+            let fx = fixture(&[("Beta", "beta v1"), ("Other", "other")]);
+            let modules = [("Beta", fx.fingerprints["Beta"]), ("Beta_Extra", 4242)];
+            let current = file_json(2, 20, "2026-09-01T00:00:00Z", &modules);
+            let new_file = file_json(2, 21, "2026-10-01T00:00:00Z", &[]);
+            let routes = Routes {
+                fingerprints: json!({"data": {"exactMatches": [], "partialMatches": [
+                    {"id": 2, "file": current, "latestFiles": [new_file.clone()]}
+                ]}})
+                .to_string(),
+                mods: json!({"data": [project(2, "Beta", true)]}).to_string(),
+                files: HashMap::from([(
+                    format!("{API}/v1/mods/2/files/21"),
+                    json!({ "data": new_file }).to_string(),
+                )]),
+                zips: HashMap::from([(
+                    download_url(21),
+                    zip_of(&[
+                        ("Beta/Beta.toc", "## Title: Beta\nBeta.lua\n"),
+                        ("Beta/Beta.lua", "beta v2"),
+                        ("Beta_Extra/Beta_Extra.toc", "## Title: Beta_Extra\n"),
+                    ]),
+                )]),
+                ..Routes::default()
+            };
+            let client = client(routes);
+
+            let checked = check_updates(&fx.installation, &client, &no_overrides()).unwrap();
+            let beta = checked.iter().find(|u| u.folder == "Beta").unwrap();
+            assert_eq!(beta.project.as_ref().unwrap().name, "Beta");
+            assert_eq!(beta.project_folders, ["Beta", "Beta_Extra"]);
+
+            let outcomes = update_addons(&fx.installation, &client, &no_overrides(), &[2]).unwrap();
+            assert_eq!(outcomes[0].status, OutcomeStatus::Updated);
+            assert_eq!(names(&fx.addons), ["Beta", "Beta_Extra", "Other"]);
+            assert_eq!(
+                fs::read_to_string(fx.addons.join("Beta").join("Beta.lua")).unwrap(),
+                "beta v2"
+            );
         }
 
         #[test]

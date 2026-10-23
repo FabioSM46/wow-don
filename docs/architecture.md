@@ -41,7 +41,9 @@ mostra dati e chiama comandi, non conosce la chiave API.
 
 - `GET /v1/mods/search` (con `gameId = 1` per WoW): ricerca e filtri.
 - `GET /v1/mods/{modId}` e `GET /v1/mods/{modId}/files`: dettagli e versioni.
-- `POST /v1/fingerprints/1`: riconosce gli addon installati dai fingerprint delle cartelle.
+- `POST /v1/fingerprints/1`: riconosce gli addon installati dai fingerprint delle cartelle;
+  ogni cartella si abbina prima a `exactMatches` e, solo se lì non c'è, al file di
+  `partialMatches` i cui `modules` contengono il suo fingerprint (come WowUp).
 - `GET /v1/games/1/version-types`: tipi di versione del gioco (Retail, Classic, …).
 - Le versioni del gioco (Retail, Classic, beta) si leggono dall'API, non si scrivono
   a mano.

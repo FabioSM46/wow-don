@@ -309,6 +309,11 @@ pub struct FingerprintMatches {
     pub exact_matches: Vec<FingerprintMatch>,
     #[serde(deserialize_with = "null_as_default")]
     pub exact_fingerprints: Vec<u64>,
+    /// File di cui combacia solo una parte delle cartelle (un addon installato in parte, una
+    /// cartella modificata, versioni miste). Ogni cartella va abbinata al file i cui `modules`
+    /// contengono il suo fingerprint, e solo se non c'è un match esatto.
+    #[serde(deserialize_with = "null_as_default")]
+    pub partial_matches: Vec<FingerprintMatch>,
     #[serde(deserialize_with = "null_as_default")]
     pub unmatched_fingerprints: Vec<u64>,
 }
@@ -689,6 +694,37 @@ mod tests {
         assert_eq!(seen[0].2.as_deref(), Some(r#"{"fingerprints":[123,456]}"#));
     }
 
+    /// Forma di `FingerprintsMatchesResult` nella documentazione ufficiale: `partialMatches` è
+    /// una lista di `FingerprintMatch`, come `exactMatches`.
+    #[test]
+    fn partial_matches_are_parsed() {
+        let body = r#"{"data": {
+          "isCacheBuilt": true,
+          "exactMatches": [],
+          "exactFingerprints": [],
+          "partialMatches": [{
+            "id": 3358,
+            "file": {
+              "id": 7001, "modId": 3358, "displayName": "DBM 12.0.1",
+              "fileName": "DBM.zip", "fileDate": "2026-10-01T12:00:00Z", "releaseType": 1,
+              "modules": [{"name": "DBM-Core", "fingerprint": 11}, {"name": "DBM-GUI", "fingerprint": 22}]
+            },
+            "latestFiles": null
+          }],
+          "partialMatchFingerprints": {"7001": [11]},
+          "installedFingerprints": [11, 99],
+          "unmatchedFingerprints": [99]
+        }}"#;
+        let client = client(Ok((200, body)));
+        let result = client.match_fingerprints(&[11, 99]).unwrap();
+        assert!(result.exact_matches.is_empty());
+        assert_eq!(result.partial_matches.len(), 1);
+        let partial = &result.partial_matches[0];
+        assert_eq!(partial.id, 3358);
+        assert_eq!(partial.file.modules[1].name, "DBM-GUI");
+        assert!(partial.latest_files.is_empty());
+    }
+
     const MODS: &str = r#"{"data": [
           {"id": 1, "name": "Full", "slug": "full", "allowModDistribution": false,
            "links": {"websiteUrl": "https://www.curseforge.com/wow/addons/full"},
@@ -707,7 +743,18 @@ mod tests {
         )));
         let result = client.match_fingerprints(&[1]).unwrap();
         assert!(result.exact_matches.is_empty());
+        assert!(result.partial_matches.is_empty());
         assert!(result.unmatched_fingerprints.is_empty());
+
+        // `partialMatches` null o assente vale come lista vuota.
+        for body in [
+            r#"{"data":{"exactMatches":[],"partialMatches":null}}"#,
+            r#"{"data":{"exactMatches":[]}}"#,
+        ] {
+            let partial = self::client(Ok((200, body)));
+            let result = partial.match_fingerprints(&[1]).unwrap();
+            assert!(result.partial_matches.is_empty());
+        }
 
         let file = r#"{"id": 1, "modId": 2, "displayName": null, "fileName": null, "fileDate": null,
           "releaseType": 1, "gameVersions": null, "sortableGameVersions": null,
@@ -1112,7 +1159,8 @@ mod tests {
     }
 
     /// Prova `POST /v1/fingerprints/1` con la chiave reale. Un fingerprint inventato non deve
-    /// corrispondere a niente, ma la richiesta deve riuscire (non 404).
+    /// corrispondere a niente, ma la richiesta deve riuscire (non 404). Con
+    /// `WOW_DON_LIVE_FINGERPRINTS=<f1>,<f2>` stampa anche i match parziali trovati.
     ///
     /// `cargo test --manifest-path src-tauri/Cargo.toml live_fingerprint_matches -- --ignored --nocapture`
     #[test]
@@ -1123,14 +1171,37 @@ mod tests {
             ReqwestTransport::new().unwrap(),
             config.curseforge_api_key.clone(),
         );
+        // Fingerprint da `WOW_DON_LIVE_FINGERPRINTS` (numeri separati da virgole), per provare
+        // anche i match parziali con le cartelle di un addon reale; altrimenti uno inventato.
+        let fingerprints: Vec<u32> = std::env::var("WOW_DON_LIVE_FINGERPRINTS")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .map(|f| f.trim().parse().expect("fingerprint non numerico"))
+                    .collect()
+            })
+            .unwrap_or_else(|| vec![1]);
         let result = client
-            .match_fingerprints(&[1])
+            .match_fingerprints(&fingerprints)
             .expect("richiesta a CurseForge");
         println!(
-            "exact: {}, unmatched: {:?}",
+            "exact: {}, partial: {}, unmatched: {:?}",
             result.exact_matches.len(),
+            result.partial_matches.len(),
             result.unmatched_fingerprints
         );
+        for found in &result.partial_matches {
+            let modules: Vec<(&str, u64)> = found
+                .file
+                .modules
+                .iter()
+                .map(|m| (m.name.as_str(), m.fingerprint))
+                .collect();
+            println!(
+                "partial: mod {} file {} modules {modules:?}",
+                found.id, found.file.id
+            );
+        }
     }
 
     /// Interroga l'API reale con la chiave dell'ambiente (o di `.env` in debug) e stampa i
