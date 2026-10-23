@@ -7,6 +7,7 @@ import {
   type InstalledAddon,
   type Installation,
   type UpdateOutcome,
+  type VersionType,
 } from "../api";
 import {
   authorsOf,
@@ -44,6 +45,20 @@ const updateRuns = new Map<string, Set<number>>();
 const updateResults = new Map<string, UpdateResult>();
 
 type UpdateResult = { outcomes: UpdateOutcome[] } | { error: string };
+
+/**
+ * I tipi di versione del gioco non cambiano durante la sessione e il comando non usa la rete:
+ * una sola richiesta, condivisa da tutte le installazioni.
+ */
+let versionTypesRequest: Promise<VersionType[]> | null = null;
+function loadVersionTypes(): Promise<VersionType[]> {
+  versionTypesRequest ??= api.listVersionTypes().catch((err) => {
+    // Un errore non resta in cache: il prossimo montaggio riprova.
+    versionTypesRequest = null;
+    throw err;
+  });
+  return versionTypesRequest;
+}
 
 function byFolder(updates: AddonUpdate[]): Map<string, AddonUpdate> {
   return new Map(updates.map((update) => [update.folder, update]));
@@ -198,9 +213,58 @@ export function AddonTable({ installation }: Props) {
       });
   }
 
+  const [versionTypes, setVersionTypes] = useState<VersionType[]>([]);
+  const [versionTypesError, setVersionTypesError] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    loadVersionTypes()
+      .then((types) => current && setVersionTypes(types))
+      .catch((err) => current && setVersionTypesError(errorMessage(err)));
+    return () => {
+      current = false;
+    };
+  }, []);
+
+  // La versione del gioco che si sta salvando (progetto e scelta), ed errori per progetto.
+  const [versionSaving, setVersionSaving] = useState<VersionChoice | null>(null);
+  const [versionErrors, setVersionErrors] = useState<Map<number, string>>(new Map());
+
+  function changeVersion(modId: number, versionType: number | null) {
+    const id = installation.id;
+    setVersionSaving({ modId, versionType });
+    setVersionErrors((previous) => withoutKey(previous, modId));
+    const request =
+      versionType === null
+        ? api.clearVersionOverride(id, modId)
+        : api.setVersionOverride(id, modId, versionType);
+    request
+      .then(
+        () => {
+          // Gli stati di prima valgono per l'altra versione: come dopo un aggiornamento, la
+          // cache si svuota e il controllo riparte (o ripartirà tornando sull'installazione).
+          updatesCache.delete(id);
+          errorCache.delete(id);
+          autoChecked.delete(id);
+          if (!mounted.current || currentId.current !== id) return;
+          // L'etichetta cambia subito; lo stato dell'aggiornamento arriva dal controllo.
+          setUpdates((previous) => withOverride(previous, modId, versionType));
+          return runCheck();
+        },
+        (err) => {
+          if (!mounted.current || currentId.current !== id) return;
+          setVersionErrors((previous) => new Map(previous).set(modId, errorMessage(err)));
+        },
+      )
+      .finally(() => {
+        if (mounted.current && currentId.current === id) setVersionSaving(null);
+      });
+  }
+
   useEffect(() => {
     // Cambiando installazione in fretta, una risposta vecchia non deve sovrascrivere la nuova.
     let current = true;
+    setVersionSaving(null);
+    setVersionErrors(new Map());
     // Una rilettura partita per l'installazione precedente non vale più per questa.
     setRescanning(false);
     setRescanError(null);
@@ -290,7 +354,7 @@ export function AddonTable({ installation }: Props) {
             <button
               className="button"
               onClick={() => updateProjects(updatableIds)}
-              disabled={busy || checking}
+              disabled={busy || checking || versionSaving !== null}
             >
               {busy ? "Updating…" : `Update all (${updatableIds.length})`}
             </button>
@@ -309,6 +373,11 @@ export function AddonTable({ installation }: Props) {
         </p>
       )}
       {updateResult && <UpdateSummary result={updateResult} />}
+      {versionTypesError && (
+        <p className="message error" role="alert">
+          Could not load the game versions: {versionTypesError}
+        </p>
+      )}
 
       {load.state === "loading" && <p className="muted">Lettura degli addon…</p>}
       {load.state === "error" && (
@@ -450,12 +519,25 @@ export function AddonTable({ installation }: Props) {
                             {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
                           </td>
                           <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
-                          <ProjectCell update={update} />
+                          <ProjectCell
+                            update={update}
+                            versionTypes={versionTypes}
+                            saving={
+                              versionSaving !== null && versionSaving.modId === update?.project?.id
+                                ? versionSaving
+                                : null
+                            }
+                            versionError={
+                              update?.project ? versionErrors.get(update.project.id) : undefined
+                            }
+                            locked={versionSaving !== null || busy || checking}
+                            onVersionChange={changeVersion}
+                          />
                           <UpdateCell
                             update={update}
                             checking={checking}
                             updating={Boolean(update?.project && updating.has(update.project.id))}
-                            disabled={busy || checking}
+                            disabled={busy || checking || versionSaving !== null}
                             onUpdate={updateProjects}
                           />
                         </tr>
@@ -501,9 +583,61 @@ export function AddonTable({ installation }: Props) {
   );
 }
 
-function ProjectCell({ update }: { update?: AddonUpdate }) {
+function withoutKey<V>(map: Map<number, V>, key: number): Map<number, V> {
+  if (!map.has(key)) return map;
+  const next = new Map(map);
+  next.delete(key);
+  return next;
+}
+
+/** Gli stati con la nuova versione forzata per il progetto `modId`, prima del ricontrollo. */
+function withOverride(
+  updates: Map<string, AddonUpdate> | undefined,
+  modId: number,
+  versionOverride: number | null,
+): Map<string, AddonUpdate> | undefined {
+  if (!updates) return updates;
+  return new Map(
+    [...updates].map(([folder, update]) => [
+      folder,
+      update.project?.id === modId ? { ...update, versionOverride } : update,
+    ]),
+  );
+}
+
+function versionName(types: VersionType[], id: number): string {
+  return types.find((type) => type.id === id)?.name ?? `#${id}`;
+}
+
+type VersionChoice = { modId: number; versionType: number | null };
+
+type ProjectCellProps = {
+  update?: AddonUpdate;
+  versionTypes: VersionType[];
+  /** La scelta in salvataggio per questo progetto, mostrata nel menu finché non finisce. */
+  saving: VersionChoice | null;
+  versionError?: string;
+  /**
+   * Un salvataggio, un controllo o un aggiornamento in corso: il menu ignora le scelte. Non è
+   * `disabled` perché un controllo disabilitato perde il focus, e chi usa la tastiera
+   * ricomincerebbe dall'inizio della pagina dopo ogni scelta.
+   */
+  locked: boolean;
+  onVersionChange: (modId: number, versionType: number | null) => void;
+};
+
+function ProjectCell({
+  update,
+  versionTypes,
+  saving,
+  versionError,
+  locked,
+  onVersionChange,
+}: ProjectCellProps) {
   const project = update?.project;
   if (!project) return <td className="muted">—</td>;
+  const override = update?.versionOverride ?? null;
+  const selected = saving ? saving.versionType : override;
   return (
     <td>
       {project.url ? (
@@ -520,12 +654,48 @@ function ProjectCell({ update }: { update?: AddonUpdate }) {
       ) : (
         project.name || `#${project.id}`
       )}
+      {versionTypes.length > 0 && (
+        <select
+          className={`select compact version-select${saving || versionError ? " shown" : ""}`}
+          aria-label={`Game version for ${project.name || `#${project.id}`}`}
+          value={selected ?? ""}
+          aria-disabled={locked}
+          // Il menu non apre e chiude la riga del gruppo.
+          onClick={(event) => event.stopPropagation()}
+          onChange={(event) => {
+            // Il menu è controllato: una scelta ignorata torna da sola al valore attuale.
+            if (locked) return;
+            onVersionChange(project.id, event.target.value ? Number(event.target.value) : null);
+          }}
+        >
+          <option value="">Game version: Automatic</option>
+          {versionTypes.map((type) => (
+            <option key={type.id} value={type.id}>
+              {type.name}
+            </option>
+          ))}
+          {/* Una versione forzata che l'app non conosce più resta visibile come scelta attuale. */}
+          {selected !== null && !versionTypes.some((type) => type.id === selected) && (
+            <option value={selected}>{`#${selected}`}</option>
+          )}
+        </select>
+      )}
       {!project.allowModDistribution && (
         <span
           className="hint"
           title="L'autore non permette il download da app di terzi: andrà aggiornato dal sito."
         >
           solo dal sito
+        </span>
+      )}
+      {override !== null && (
+        <span className="hint" title="Updates for this addon use this game version">
+          Forced: {versionName(versionTypes, override)}
+        </span>
+      )}
+      {versionError && (
+        <span className="addon-error" role="alert">
+          Game version not changed: {versionError}
         </span>
       )}
     </td>
