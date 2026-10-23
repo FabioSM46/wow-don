@@ -94,7 +94,7 @@ function App() {
               aria-selected={tab === t.id}
               aria-controls={`panel-${t.id}`}
               tabIndex={tab === t.id ? 0 : -1}
-              onClick={() => setTab(t.id)}
+              onClick={() => focusTab(t.id)}
             >
               {t.label}
             </button>

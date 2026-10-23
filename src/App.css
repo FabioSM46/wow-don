@@ -231,10 +231,6 @@ button:focus-visible {
   padding: 10px 14px;
 }
 
-.installation:hover {
-  background: var(--hover);
-}
-
 .installation-name {
   font-weight: 500;
 }
