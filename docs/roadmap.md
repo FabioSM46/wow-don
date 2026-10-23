@@ -29,11 +29,12 @@ Ultimo aggiornamento: 2026-10-23.
 - Gli addon con `allowModDistribution = false` (per esempio Details!) si riconoscono e
   segnalano gli aggiornamenti, ma si aggiornano a mano dal sito (D13).
 
-## Interfaccia in inglese e tab
+## M3.5 — Interfaccia in inglese e tab (in corso, prima di M4)
 
 - Interfaccia solo in inglese, compresi i messaggi del backend (D27).
-- App divisa in tab: Installed e Options, con il selettore dell'installazione
-  nell'header; la gestione delle installazioni e i backup stanno in Options.
+- App divisa in tab: per ora Installed e Options, con il selettore dell'installazione
+  nell'header; la gestione delle installazioni e i backup stanno in Options. La tab Search
+  arriva con M4, che si appoggia a queste tab.
 
 ## M4 — Ricerca e catalogo
 
