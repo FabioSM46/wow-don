@@ -23,7 +23,7 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "Scegli la cartella _<flavor>_ di World of Warcraft",
+        title: "Choose the World of Warcraft _<flavor>_ folder",
       });
       // Selettore annullato: non succede niente.
       if (typeof selected !== "string") return;
@@ -55,9 +55,9 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
   return (
     <section className="installations" aria-labelledby="installations-title">
       <header className="section-header">
-        <h2 id="installations-title">Installazioni</h2>
+        <h2 id="installations-title">Installations</h2>
         <button className="button" onClick={add} disabled={busy}>
-          Aggiungi installazione
+          Add installation
         </button>
       </header>
 
@@ -69,8 +69,8 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
 
       {installations.length === 0 ? (
         <p className="empty">
-          Nessuna installazione. Aggiungi la cartella <code>_retail_</code>,{" "}
-          <code>_classic_era_</code> o un'altra cartella <code>_&lt;flavor&gt;_</code> dentro{" "}
+          No installations yet. Add the <code>_retail_</code> folder,{" "}
+          <code>_classic_era_</code> or another <code>_&lt;flavor&gt;_</code> folder inside{" "}
           <code>World of Warcraft</code>.
         </p>
       ) : (
@@ -129,12 +129,12 @@ function InstallationRow({
         </button>
         {confirming ? (
           <span className="confirm">
-            <span>Rimuovere?</span>
+            <span>Remove?</span>
             <button className="link danger" onClick={onRemove} disabled={busy}>
-              Rimuovi
+              Remove
             </button>
             <button className="link" onClick={onCancel}>
-              Annulla
+              Cancel
             </button>
           </span>
         ) : (
@@ -148,19 +148,19 @@ function InstallationRow({
               aria-busy={backups.creating}
               aria-label={
                 backups.creating
-                  ? `Backup di ${installation.name} in corso`
-                  : `Crea un backup di ${installation.name}`
+                  ? `Backing up ${installation.name}`
+                  : `Back up ${installation.name}`
               }
             >
-              {backups.creating ? "Backup in corso…" : "Backup"}
+              {backups.creating ? "Backing up…" : "Backup"}
             </button>
             <button
               className="link subtle"
               onClick={onConfirm}
               disabled={backups.creating}
-              aria-label={`Rimuovi ${installation.name}`}
+              aria-label={`Remove ${installation.name}`}
             >
-              Rimuovi
+              Remove
             </button>
           </span>
         )}
