@@ -33,7 +33,7 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | `sources` | Trait comune per le fonti (`search`, `versions`, `download`) | Da fare (oggi solo il modulo `curseforge`) |
 | `sources::curseforge` | Client per `https://api.curseforge.com/v1` con header `x-api-key`: fingerprint, mod, tipi di versione del gioco | Esiste |
 | `updates` | Abbina gli addon ai progetti CurseForge e trova il file Release più recente per la versione del gioco (`check_updates`) | Esiste (Retail, Classic Era, Classic, Anniversary, WoW Forever; id verificati sull'API) |
-| `install` | Download, estrazione zip, sostituzione atomica delle cartelle | Da fare |
+| `install` | Estrazione sicura dello zip in una cartella di staging accanto ad `AddOns` (niente percorsi assoluti, `..`, unità o link simbolici; limiti di voci e dimensione) e sostituzione delle cartelle con ripristino in caso di errore (D26) | Esiste (il download e il comando di installazione sono da fare) |
 | `store` | Stato locale: addon installati, fonte, versione, versione del gioco forzata | Esiste per le installazioni (`installations.json`, D22) |
 
 ## API CurseForge usate
