@@ -139,7 +139,12 @@ fn extract_with_limits(
         let file = archive
             .by_index_raw(index)
             .map_err(|_| "Lo zip è danneggiato.".to_string())?;
-        let name = String::from_utf8_lossy(file.name_raw()).into_owned();
+        // `name()` decodifica secondo il flag della voce (UTF-8 oppure CP437 per gli zip
+        // vecchi), così i nomi accentati restano quelli dell'archivio.
+        let name = file
+            .name()
+            .map_err(|_| "Lo zip è danneggiato.".to_string())?
+            .into_owned();
         if file.is_symlink() {
             return Err(format!("Lo zip contiene un link simbolico ({name})."));
         }
@@ -237,7 +242,8 @@ fn write_error(error: io::Error) -> String {
 }
 
 /// Divide il nome di una voce in componenti sicuri. Accetta `/` e `\` come separatori (gli zip
-/// creati su Windows a volte usano il secondo) e ignora i componenti vuoti e `.`.
+/// creati su Windows a volte usano il secondo) e ignora i componenti vuoti e `.`. Rifiuta `..`,
+/// i componenti con punto o spazio finale e quelli con `:`.
 fn entry_components(name: &str) -> Result<Vec<String>, String> {
     let unsafe_path = || Err(format!("Lo zip contiene un percorso non sicuro ({name})."));
     if name.contains('\0') || name.starts_with('/') || name.starts_with('\\') {
@@ -248,6 +254,9 @@ fn entry_components(name: &str) -> Result<Vec<String>, String> {
         match part {
             "" | "." => continue,
             ".." => return unsafe_path(),
+            // Windows toglie punti e spazi finali da ogni componente: `.. ` diventerebbe `..`
+            // e risalirebbe fuori dallo staging.
+            _ if part.ends_with(['.', ' ']) => return unsafe_path(),
             // `C:` è un prefisso di unità; altrove `:` apre uno stream alternativo su NTFS.
             _ if part.contains(':') => return unsafe_path(),
             _ => components.push(part.to_string()),
@@ -530,18 +539,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_absolute_and_drive_paths() {
+    fn rejects_absolute_drive_and_windows_trimmed_paths() {
         for name in [
             "/evil/x.lua",
             "\\evil\\x.lua",
             "C:/evil/x.lua",
             "C:evil/x.lua",
+            "Addon/.. /evil.lua",
+            "Addon/.. /.. /evil.lua",
+            "Addon/... /evil.lua",
+            "Addon/x.lua.",
+            "Addon /x.lua",
             "Addon/file:stream",
         ] {
             let bytes = zip_of(&[File(name, b"bad")]);
             let (error, _tmp) = extract_err(&bytes);
             assert!(error.contains("non sicuro"), "{name}: {error}");
         }
+    }
+
+    #[test]
+    fn decodes_legacy_cp437_names() {
+        let mut bytes = zip_of(&[File("Addon/caf_.lua", b"x")]);
+        // Senza il flag UTF-8 il nome è CP437: 0x82 è `é`. Il nome compare nell'intestazione
+        // locale e nella directory centrale; il CRC copre solo i dati.
+        let mut patched = 0;
+        for i in 0..bytes.len() - 3 {
+            if &bytes[i..i + 4] == b"caf_" {
+                bytes[i + 3] = 0x82;
+                patched += 1;
+            }
+        }
+        assert_eq!(patched, 2);
+        let tmp = TempDir::new();
+        let addons = addons_dir(&tmp);
+        let staging = WorkDir::staging(&addons).unwrap();
+        extract(&bytes, staging.path()).unwrap();
+        assert_eq!(listing(&staging.path().join("Addon")), ["café.lua"]);
     }
 
     #[test]
