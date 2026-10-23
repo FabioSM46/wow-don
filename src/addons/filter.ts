@@ -37,6 +37,25 @@ export type AddonGroup = {
 
 const lower = (s: string) => s.toLocaleLowerCase("it");
 
+/** I nomi di un `## Author`, separati da virgola, punto e virgola o `&`. */
+const authorNames = (author: string | null): Set<string> =>
+  new Set(
+    (author ?? "")
+      .split(/[,;&]/)
+      .map((name) => lower(name.trim()))
+      .filter(Boolean),
+  );
+
+/**
+ * Autori diversi: nessun nome in comune (`Elv, Simpy` e `fang2hou`). `Elv` e `Elv, Simpy` non
+ * lo sono, e un autore mancante non è una prova.
+ */
+function disjointAuthors(x: string | null, y: string | null): boolean {
+  const a = authorNames(x);
+  const b = authorNames(y);
+  return a.size > 0 && b.size > 0 && ![...a].some((name) => b.has(name));
+}
+
 /**
  * Raggruppa le cartelle che formano un solo addon. Le prove, dalla più forte:
  *
@@ -52,16 +71,16 @@ const lower = (s: string) => s.toLocaleLowerCase("it");
  * **Veto**, che prevale su tutte le prove: due cartelle non stanno mai nello stesso gruppo se
  * sono riconosciute come progetti diversi, se una è riconosciuta e il suo file non contiene
  * l'altra, o (senza il controllo a dire il contrario) se i loro `.toc` dichiarano
- * `X-Curse-Project-ID` diversi o autori diversi. Così un plugin di un altro autore (`ElvUI_WindTools` sotto
+ * `X-Curse-Project-ID` diversi o autori senza nomi in comune. Così un plugin di un altro autore (`ElvUI_WindTools` sotto
  * `ElvUI`) resta una riga sua. L'id Wago non è un confine: Wago elenca come progetti separati
  * cartelle che arrivano nello stesso file CurseForge (i plugin di Details).
  *
  * Gli archi si uniscono dal più forte al più debole e due gruppi si fondono solo se nessuna
  * coppia tra i loro membri è vietata: una cartella finisce in un solo gruppo. La principale è
  * la cartella indicata da `group`, se ce n'è una nel gruppo; poi, tra le cartelle che non sono
- * moduli `LoadOnDemand` (se ce ne sono), quelle che non richiedono un'altra cartella del gruppo
- * se non una che ne estende il nome (`Questie` richiede `QuestieDB`, `Details_Compare2`
- * richiede `Details`); a parità il nome più corto, poi l'ordine alfabetico.
+ * moduli `LoadOnDemand` (se ce ne sono), quelle che non richiedono una cartella del gruppo il
+ * cui nome è un prefisso del loro (`Details_Compare2` richiede `Details`; `Questie` che
+ * richiede `QuestieDB` resta candidata); a parità il nome più corto, poi l'ordine alfabetico.
  */
 export function groupAddons(
   addons: InstalledAddon[],
@@ -96,7 +115,7 @@ export function groupAddons(
     if (pa || pb) return false;
     const differ = (x: string | null, y: string | null) =>
       Boolean(x?.trim()) && Boolean(y?.trim()) && lower(x!.trim()) !== lower(y!.trim());
-    return differ(a.curseProjectId, b.curseProjectId) || differ(a.author, b.author);
+    return differ(a.curseProjectId, b.curseProjectId) || disjointAuthors(a.author, b.author);
   };
 
   // Archi per forza: 0 file pubblicato, 1 `## Group`, 2 dipendenza più prefisso.
@@ -156,13 +175,15 @@ function pickMain(group: InstalledAddon[]): InstalledAddon {
   const scope = leaders.length > 0 ? leaders : group;
   const loaded = scope.filter((a) => !a.loadOnDemand);
   const candidates = loaded.length > 0 ? loaded : scope;
-  // Un modulo richiede la cartella che estende (`Details_Compare2` → `Details`); la principale
-  // richiede al più le proprie estensioni (`Questie` → `QuestieDB`).
+  // Un modulo richiede una cartella del gruppo il cui nome è un prefisso del suo
+  // (`Details_Compare2` → `Details`); `Questie`, che richiede `QuestieDB`, non lo è.
   const inGroup = new Set(group.map((a) => lower(a.folder)));
-  const isModule = (a: InstalledAddon) =>
-    a.dependencies
+  const isModule = (a: InstalledAddon) => {
+    const self = lower(a.folder);
+    return a.dependencies
       .map(lower)
-      .some((d) => d !== lower(a.folder) && inGroup.has(d) && !d.startsWith(lower(a.folder)));
+      .some((d) => d !== self && inGroup.has(d) && self.startsWith(d));
+  };
   const notModules = candidates.filter((a) => !isModule(a));
   const pool = notModules.length > 0 ? notModules : candidates;
   return [...pool].sort(

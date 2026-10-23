@@ -186,8 +186,37 @@ describe("groupAddons", () => {
       addon("ElvUI_WindTools", { author: "fang2hou", dependencies: ["ElvUI"] }),
       // A missing author is no evidence either way.
       addon("ElvUI_Libraries", { dependencies: ["ElvUI"] }),
+      // One shared name is enough: a module often lists fewer authors than the main folder.
+      addon("ElvUI_Skins", { author: "Simpy & Elv", dependencies: ["ElvUI"] }),
+      addon("ElvUI_Data", { author: "Elv", dependencies: ["ElvUI"] }),
     ];
-    assert.deepEqual(layout(addons), ["ElvUI ElvUI_Libraries ElvUI_Options", "ElvUI_WindTools"]);
+    assert.deepEqual(layout(addons), [
+      "ElvUI ElvUI_Data ElvUI_Libraries ElvUI_Options ElvUI_Skins",
+      "ElvUI_WindTools",
+    ]);
+  });
+
+  it("leads with the folder no other one extends, whatever the requirements", () => {
+    // Same published file, no name prefix: the main is not demoted for requiring the other.
+    const addons = [addon("Auctioneer", { dependencies: ["BeanCounter"] }), addon("BeanCounter")];
+    const updates = checked(addons, {
+      Auctioneer: [5, ["Auctioneer", "BeanCounter"]],
+      BeanCounter: [5, ["Auctioneer", "BeanCounter"]],
+    });
+    assert.deepEqual(layout(addons, updates), ["Auctioneer BeanCounter"]);
+    // DBM: the modules require DBM-Core, which leads.
+    const dbm = [
+      addon("DBM-StatusBarTimers", { dependencies: ["DBM-Core"] }),
+      addon("DBM-Core"),
+      addon("DBM-GUI", { dependencies: ["DBM-Core"], loadOnDemand: true }),
+    ];
+    const published = ["DBM-Core", "DBM-GUI", "DBM-StatusBarTimers"];
+    const dbmUpdates = checked(dbm, {
+      "DBM-Core": [3358, published],
+      "DBM-GUI": [3358, published],
+      "DBM-StatusBarTimers": [3358, published],
+    });
+    assert.equal(groupAddons(dbm, dbmUpdates)[0].main.folder, "DBM-Core");
   });
 
   it("does not treat different Wago ids as a boundary", () => {
