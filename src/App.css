@@ -7,7 +7,6 @@
   --border: #e4e4e7;
   --hover: #f0f0f2;
   --accent: #3b6ef5;
-  --accent-soft: #e8eefe;
   --danger: #d1242f;
   --radius: 8px;
 
@@ -30,7 +29,6 @@
     --border: #2a2a2f;
     --hover: #202024;
     --accent: #6d93ff;
-    --accent-soft: #1d2540;
     --danger: #ff6b6b;
   }
 }
@@ -81,13 +79,54 @@ h2 {
 }
 
 .app-header {
-  padding-top: 24px;
-  padding-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  border-bottom: 1px solid var(--border);
 }
 
 .app-main {
   flex: 1;
+  padding-top: 24px;
   padding-bottom: 32px;
+}
+
+/* Tab: solo testo; la tab attiva ha una linea sottile del colore d'accento, appoggiata sul
+   bordo dell'intestazione. */
+.tabs {
+  display: flex;
+  gap: 24px;
+}
+
+.tab {
+  font: inherit;
+  font-weight: 500;
+  padding: 18px 2px 16px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.tab:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Il selettore dell'installazione attiva sta a destra nell'intestazione. */
+.header-select {
+  margin-left: auto;
+  max-width: 16rem;
 }
 
 .app-footer {
@@ -190,24 +229,10 @@ button:focus-visible {
   align-items: flex-start;
   gap: 2px;
   padding: 10px 14px;
-  border: none;
-  background: none;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 
 .installation:hover {
   background: var(--hover);
-}
-
-.installation.active {
-  background: var(--accent-soft);
-}
-
-.installation.active .installation-name {
-  color: var(--accent);
 }
 
 .installation-name {
@@ -298,10 +323,6 @@ button:focus-visible {
 }
 
 /* Addon */
-
-.addons {
-  margin-top: 40px;
-}
 
 .count {
   font-size: 0.85rem;
