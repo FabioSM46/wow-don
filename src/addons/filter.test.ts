@@ -304,7 +304,7 @@ describe("groupAddons with the app's record of installed folders", () => {
 
   it("ignores record folders that are not installed", () => {
     const addons = recorded(dbm(), 3358, [...DBM_FOLDERS, "DBM-Gone"]);
-    assert.ok(addons[0].installedProject?.folders.includes("DBM-Gone"));
+    assert.equal(addons[0].installedProject?.folders.includes("DBM-Gone"), true);
     assert.deepEqual(layout(addons), ["DBM-Core DBM-GUI DBM-StatusBarTimers"]);
   });
 
