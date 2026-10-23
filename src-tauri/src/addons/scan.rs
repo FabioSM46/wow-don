@@ -251,13 +251,15 @@ mod tests {
             "dependencies",
             "optionalDeps",
             "loadOnDemand",
+            "group",
             "curseProjectId",
             "wagoId",
             "wowiId",
         ] {
             assert!(keys.contains(&key.to_owned()), "missing {key} in {keys:?}");
         }
-        assert_eq!(keys.len(), 16, "unexpected keys: {keys:?}");
+        assert_eq!(json["group"], serde_json::Value::Null);
+        assert_eq!(keys.len(), 17, "unexpected keys: {keys:?}");
     }
 
     #[test]

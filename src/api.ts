@@ -25,6 +25,8 @@ export type InstalledAddon = {
   dependencies: string[];
   optionalDeps: string[];
   loadOnDemand: boolean;
+  /** `## Group` del `.toc`: la cartella sotto cui il gioco raggruppa questo addon. */
+  group: string | null;
   curseProjectId: string | null;
   wagoId: string | null;
   wowiId: string | null;
