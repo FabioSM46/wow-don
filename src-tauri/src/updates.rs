@@ -252,6 +252,7 @@ mod tests {
                 })
                 .collect(),
             is_available: true,
+            download_url: None,
         }
     }
 
