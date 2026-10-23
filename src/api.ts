@@ -33,7 +33,15 @@ export type InstalledAddon = {
   modifiedMs: number | null;
   fingerprint: number | null;
   error: string | null;
+  /** Il progetto che l'app ha installato in questa cartella (`installed-addons.json`), se c'è. */
+  installedProject: InstalledProject | null;
 };
+
+/**
+ * Un progetto CurseForge installato dall'app: l'id e le sue cartelle ancora presenti, con il
+ * nome che hanno sul disco. Una cartella che compare nei record di più progetti non ne ha.
+ */
+export type InstalledProject = { id: number; folders: string[] };
 
 export type FileSummary = { id: number; name: string; date: string };
 

@@ -1,5 +1,6 @@
-//! Stato locale salvato su disco: l'elenco delle installazioni (`installations.json`) e le
-//! impostazioni degli addon (`addon-settings.json`, per ora la versione del gioco forzata, D6).
+//! Stato locale salvato su disco: l'elenco delle installazioni (`installations.json`), le
+//! impostazioni degli addon (`addon-settings.json`, per ora la versione del gioco forzata, D6)
+//! e i progetti installati dall'app con le loro cartelle (`installed-addons.json`, issue #62).
 //!
 //! I file stanno nella cartella di configurazione dell'app risolta da Tauri (D22). Si scrive in modo atomico: file temporaneo nella stessa cartella, poi `rename`.
 //! Un file mancante vuol dire nessuna installazione; un file illeggibile blocca le
@@ -275,6 +276,146 @@ fn read_addon_settings(file: &Path) -> Result<SettingsByInstallation, String> {
     if stored.version != ADDON_SETTINGS_VERSION {
         return Err(format!(
             "{ADDON_SETTINGS_FILE} has an unsupported version ({}): update the app or move the file away, then restart.",
+            stored.version
+        ));
+    }
+    Ok(stored.installations)
+}
+
+// ── Addon installati dall'app ───────────────────────────────────────────────
+
+pub const INSTALLED_ADDONS_FILE: &str = "installed-addons.json";
+const INSTALLED_ADDONS_VERSION: u32 = 1;
+
+/// Quello che l'app ha installato per un progetto CurseForge: il file e le cartelle del suo
+/// zip. Serve a ritrovare le cartelle di un progetto senza indovinarle dai `.toc` (issue #62).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledRecord {
+    pub file_id: u32,
+    /// I nomi delle cartelle di primo livello dello zip, come li ha restituiti l'estrazione.
+    pub folders: Vec<String>,
+}
+
+/// Id del progetto CurseForge → il suo record.
+pub type InstalledRecords = BTreeMap<u32, InstalledRecord>;
+
+/// Id dell'installazione → record dei progetti.
+type RecordsByInstallation = BTreeMap<String, InstalledRecords>;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredInstalledAddons {
+    version: u32,
+    installations: RecordsByInstallation,
+}
+
+/// I progetti installati dall'app, con le stesse regole di [`InstallationStore`]: rilettura
+/// prima di ogni modifica, scrittura atomica, file illeggibile che blocca le modifiche.
+#[derive(Debug)]
+pub struct InstalledAddonsStore {
+    file: PathBuf,
+    records: RecordsByInstallation,
+    load_error: Option<String>,
+}
+
+impl InstalledAddonsStore {
+    pub fn load(file: PathBuf) -> Self {
+        match read_installed_addons(&file) {
+            Ok(records) => Self {
+                file,
+                records,
+                load_error: None,
+            },
+            Err(error) => Self {
+                file,
+                records: RecordsByInstallation::new(),
+                load_error: Some(error),
+            },
+        }
+    }
+
+    /// I record di un'installazione; vuoto se l'app non vi ha ancora installato niente.
+    pub fn records_for(&self, installation_id: &str) -> Result<InstalledRecords, String> {
+        self.check_loaded()?;
+        Ok(self
+            .records
+            .get(installation_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// Registra (o sostituisce) quello che l'app ha appena installato per `mod_id`.
+    pub fn record(
+        &mut self,
+        installation_id: &str,
+        mod_id: u32,
+        record: InstalledRecord,
+    ) -> Result<(), String> {
+        self.reload()?;
+        let mut next = self.records.clone();
+        next.entry(installation_id.to_owned())
+            .or_default()
+            .insert(mod_id, record);
+        self.save(next)
+    }
+
+    /// Toglie tutti i record di un'installazione rimossa.
+    pub fn remove_installation(&mut self, installation_id: &str) -> Result<(), String> {
+        self.reload()?;
+        if !self.records.contains_key(installation_id) {
+            return Ok(());
+        }
+        let mut next = self.records.clone();
+        next.remove(installation_id);
+        self.save(next)
+    }
+
+    fn reload(&mut self) -> Result<(), String> {
+        self.check_loaded()?;
+        self.records = read_installed_addons(&self.file)?;
+        Ok(())
+    }
+
+    fn check_loaded(&self) -> Result<(), String> {
+        match &self.load_error {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
+    fn save(&mut self, records: RecordsByInstallation) -> Result<(), String> {
+        let stored = StoredInstalledAddons {
+            version: INSTALLED_ADDONS_VERSION,
+            installations: records,
+        };
+        write_atomically(&self.file, &stored).map_err(|error| {
+            format!(
+                "Could not save the installed addons list ({}).",
+                error.kind()
+            )
+        })?;
+        self.records = stored.installations;
+        Ok(())
+    }
+}
+
+fn read_installed_addons(file: &Path) -> Result<RecordsByInstallation, String> {
+    let text = match read_text(file) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Ok(RecordsByInstallation::new()),
+        Err(error) => {
+            return Err(format!(
+                "Could not read {INSTALLED_ADDONS_FILE} ({}).",
+                error.kind()
+            ));
+        }
+    };
+    let stored: StoredInstalledAddons = serde_json::from_str(&text).map_err(|_| {
+        format!("{INSTALLED_ADDONS_FILE} is damaged: fix it or move it away and restart the app.")
+    })?;
+    if stored.version != INSTALLED_ADDONS_VERSION {
+        return Err(format!(
+            "{INSTALLED_ADDONS_FILE} has an unsupported version ({}): update the app or move the file away, then restart.",
             stored.version
         ));
     }
@@ -625,6 +766,102 @@ mod tests {
                 .unwrap_err()
                 .contains("unsupported")
         );
+    }
+
+    // ── InstalledAddonsStore ────────────────────────────────────────────────
+
+    fn record(file_id: u32, folders: &[&str]) -> InstalledRecord {
+        InstalledRecord {
+            file_id,
+            folders: folders.iter().map(|f| (*f).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn missing_installed_addons_mean_no_records() {
+        let tmp = TempDir::new();
+        let store =
+            InstalledAddonsStore::load(tmp.path().join("config").join(INSTALLED_ADDONS_FILE));
+        assert!(store.records_for("a").unwrap().is_empty());
+    }
+
+    #[test]
+    fn records_survive_a_reload_and_are_per_installation() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join("config").join(INSTALLED_ADDONS_FILE);
+        let mut store = InstalledAddonsStore::load(file.clone());
+        store
+            .record("a", 7, record(70, &["Details", "Details_Compare2"]))
+            .unwrap();
+        store.record("b", 7, record(71, &["Details"])).unwrap();
+        // Un nuovo record dello stesso progetto sostituisce il precedente.
+        store.record("a", 7, record(72, &["Details"])).unwrap();
+
+        let reloaded = InstalledAddonsStore::load(file.clone());
+        assert_eq!(
+            reloaded.records_for("a").unwrap(),
+            InstalledRecords::from([(7, record(72, &["Details"]))])
+        );
+        assert_eq!(
+            reloaded.records_for("b").unwrap(),
+            InstalledRecords::from([(7, record(71, &["Details"]))])
+        );
+        assert!(!file.with_extension("json.tmp").exists());
+
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["version"], 1);
+        assert_eq!(
+            saved["installations"]["a"]["7"],
+            serde_json::json!({"fileId": 72, "folders": ["Details"]})
+        );
+    }
+
+    #[test]
+    fn removing_an_installation_removes_its_records() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLED_ADDONS_FILE);
+        let mut store = InstalledAddonsStore::load(file.clone());
+        store.record("a", 7, record(70, &["Alpha"])).unwrap();
+        store.record("b", 8, record(80, &["Beta"])).unwrap();
+        store.remove_installation("a").unwrap();
+        store.remove_installation("never-had-records").unwrap();
+
+        let reloaded = InstalledAddonsStore::load(file);
+        assert!(reloaded.records_for("a").unwrap().is_empty());
+        assert_eq!(reloaded.records_for("b").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_record_by_another_instance_is_not_lost() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLED_ADDONS_FILE);
+        let mut first = InstalledAddonsStore::load(file.clone());
+        let mut second = InstalledAddonsStore::load(file.clone());
+        first.record("a", 7, record(70, &["Alpha"])).unwrap();
+        second.record("a", 8, record(80, &["Beta"])).unwrap();
+        assert_eq!(
+            InstalledAddonsStore::load(file)
+                .records_for("a")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn corrupt_installed_addons_are_reported_and_left_untouched() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLED_ADDONS_FILE);
+        fs::write(&file, b"{ not json").unwrap();
+        let mut store = InstalledAddonsStore::load(file.clone());
+        assert!(store.records_for("a").unwrap_err().contains("damaged"));
+        assert!(store.record("a", 7, record(70, &["Alpha"])).is_err());
+        assert!(store.remove_installation("a").is_err());
+        assert_eq!(fs::read(&file).unwrap(), b"{ not json");
+
+        fs::write(&file, br#"{"version": 2, "installations": {}}"#).unwrap();
+        let store = InstalledAddonsStore::load(file);
+        assert!(store.records_for("a").unwrap_err().contains("unsupported"));
     }
 
     #[test]

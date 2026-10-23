@@ -17,6 +17,7 @@ use crate::sources::curseforge::{
     CurseForgeClient, CurseForgeError, File, FileModule, FingerprintMatch, FingerprintMatches, Mod,
     RELEASE_TYPE_RELEASE, Transport,
 };
+use crate::store::InstalledRecord;
 
 /// Tipi di versione del gioco di CurseForge (`gameVersionTypeId`), verificati il 2026-10-22 con
 /// il test `live_version_types` di `sources::curseforge` sull'API reale.
@@ -351,6 +352,7 @@ pub fn update_addons<T: Transport>(
     client: &CurseForgeClient<T>,
     overrides: &VersionOverrides,
     mod_ids: &[u32],
+    record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
 ) -> Result<Vec<UpdateOutcome>, String> {
     let (addons, updates) = scan_and_evaluate(installation, client, overrides)?;
     let addons_dir = installation.path.join("Interface").join("AddOns");
@@ -359,7 +361,7 @@ pub fn update_addons<T: Transport>(
         .iter()
         .copied()
         .filter(|id| seen.insert(*id))
-        .map(|mod_id| update_project(&addons, &updates, &addons_dir, client, mod_id))
+        .map(|mod_id| update_project(&addons, &updates, &addons_dir, client, mod_id, record))
         .collect())
 }
 
@@ -369,6 +371,7 @@ fn update_project<T: Transport>(
     addons_dir: &Path,
     client: &CurseForgeClient<T>,
     mod_id: u32,
+    record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
 ) -> UpdateOutcome {
     let folders: Vec<&AddonUpdate> = updates
         .iter()
@@ -405,15 +408,27 @@ fn update_project<T: Transport>(
         );
     }
     let old_modules = removable_modules(addons, updates, installed);
-    match install_file(client, &file, addons_dir, &old_modules) {
-        Ok(()) => UpdateOutcome {
-            mod_id,
-            name: name.to_owned(),
-            status: OutcomeStatus::Updated,
-            message: None,
-            file: Some(FileSummary::from(&file)),
+    let folders = match install_file(client, &file, addons_dir, &old_modules) {
+        Ok(folders) => folders,
+        Err(message) => return UpdateOutcome::error(mod_id, name, message),
+    };
+    // Le cartelle sono già sostituite: se il registro non si salva l'aggiornamento resta
+    // riuscito, e il messaggio lo dice.
+    let message = record(
+        mod_id,
+        InstalledRecord {
+            file_id: file.id,
+            folders,
         },
-        Err(message) => UpdateOutcome::error(mod_id, name, message),
+    )
+    .err()
+    .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
+    UpdateOutcome {
+        mod_id,
+        name: name.to_owned(),
+        status: OutcomeStatus::Updated,
+        message,
+        file: Some(FileSummary::from(&file)),
     }
 }
 
@@ -464,13 +479,14 @@ fn removable_modules(
 }
 
 /// Scarica `file`, lo estrae in staging e sostituisce le cartelle. Le cartelle di `old_modules`
-/// che il nuovo zip non contiene vengono tolte nello stesso `replace`.
+/// che il nuovo zip non contiene vengono tolte nello stesso `replace`. Restituisce le cartelle
+/// dello zip, ora installate.
 fn install_file<T: Transport>(
     client: &CurseForgeClient<T>,
     file: &File,
     addons_dir: &Path,
     old_modules: &[String],
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let bytes = client.download(file).map_err(|e| e.to_string())?;
     let staging = install::WorkDir::staging(addons_dir)?;
     let folders = install::extract(&bytes, staging.path())?;
@@ -480,7 +496,8 @@ fn install_file<T: Transport>(
         .filter(|m| !new.contains(&m.to_lowercase()))
         .cloned()
         .collect();
-    install::replace(addons_dir, staging.path(), &obsolete)
+    install::replace(addons_dir, staging.path(), &obsolete)?;
+    Ok(folders)
 }
 
 #[cfg(test)]
@@ -1039,6 +1056,16 @@ mod tests {
             VersionOverrides::new()
         }
 
+        /// `update_addons` senza registro, per i test che non lo guardano.
+        fn update_without_record<T: Transport>(
+            installation: &Installation,
+            client: &CurseForgeClient<T>,
+            overrides: &VersionOverrides,
+            mod_ids: &[u32],
+        ) -> Result<Vec<UpdateOutcome>, String> {
+            update_addons(installation, client, overrides, mod_ids, &mut |_, _| Ok(()))
+        }
+
         fn client(routes: Routes) -> CurseForgeClient<Routes> {
             CurseForgeClient::new(routes, Some("test-key".to_owned()))
         }
@@ -1082,7 +1109,8 @@ mod tests {
             };
             let client = client(routes);
 
-            let outcomes = update_addons(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
+            let outcomes =
+                update_without_record(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
 
             assert_eq!(
                 outcomes,
@@ -1147,7 +1175,8 @@ mod tests {
             assert_eq!(beta.project.as_ref().unwrap().name, "Beta");
             assert_eq!(beta.project_folders, ["Beta", "Beta_Extra"]);
 
-            let outcomes = update_addons(&fx.installation, &client, &no_overrides(), &[2]).unwrap();
+            let outcomes =
+                update_without_record(&fx.installation, &client, &no_overrides(), &[2]).unwrap();
             assert_eq!(outcomes[0].status, OutcomeStatus::Updated);
             assert_eq!(names(&fx.addons), ["Beta", "Beta_Extra", "Other"]);
             assert_eq!(
@@ -1209,7 +1238,8 @@ mod tests {
             };
             let client = client(routes);
 
-            let outcomes = update_addons(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
+            let outcomes =
+                update_without_record(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
 
             assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "{outcomes:?}");
             assert_eq!(
@@ -1246,7 +1276,8 @@ mod tests {
             };
             let client = client(routes);
 
-            let outcomes = update_addons(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
+            let outcomes =
+                update_without_record(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
 
             assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "{outcomes:?}");
             assert_eq!(names(&fx.addons), ["Alpha", "Beta", "LibShared"]);
@@ -1304,13 +1335,30 @@ mod tests {
             let log = Arc::clone(&routes.log);
             let client = client(routes);
 
+            let mut records = Vec::new();
             let outcomes = update_addons(
                 &fx.installation,
                 &client,
                 &no_overrides(),
                 &[2, 3, 1, 4, 99, 5, 1],
+                &mut |mod_id, record| {
+                    records.push((mod_id, record));
+                    Ok(())
+                },
             )
             .unwrap();
+
+            // Solo l'installazione riuscita è registrata, con le cartelle dello zip.
+            assert_eq!(
+                records,
+                [(
+                    1,
+                    InstalledRecord {
+                        file_id: 11,
+                        folders: vec!["Alpha".to_owned()],
+                    }
+                )]
+            );
 
             let summary: Vec<(u32, &str, OutcomeStatus)> = outcomes
                 .iter()
@@ -1408,12 +1456,14 @@ mod tests {
             };
 
             let outcomes =
-                update_addons(&fx.installation, &client(routes()), &no_overrides(), &[1]).unwrap();
+                update_without_record(&fx.installation, &client(routes()), &no_overrides(), &[1])
+                    .unwrap();
             assert_eq!(outcomes[0].status, OutcomeStatus::Skipped, "{outcomes:?}");
 
             let overrides = VersionOverrides::from([(1, CLASSIC_ERA)]);
             let outcomes =
-                update_addons(&fx.installation, &client(routes()), &overrides, &[1]).unwrap();
+                update_without_record(&fx.installation, &client(routes()), &overrides, &[1])
+                    .unwrap();
             assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "{outcomes:?}");
             assert_eq!(
                 fs::read_to_string(fx.addons.join("Alpha").join("Alpha.lua")).unwrap(),
@@ -1425,8 +1475,61 @@ mod tests {
         fn a_failed_check_changes_nothing() {
             let fx = fixture(&[("Alpha", "alpha v1")]);
             let client = CurseForgeClient::new(Routes::default(), None);
-            assert!(update_addons(&fx.installation, &client, &no_overrides(), &[1]).is_err());
+            let mut recorded = false;
+            let result = update_addons(
+                &fx.installation,
+                &client,
+                &no_overrides(),
+                &[1],
+                &mut |_, _| {
+                    recorded = true;
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            assert!(!recorded);
             assert_eq!(names(&fx.addons), ["Alpha"]);
+        }
+
+        #[test]
+        fn a_record_that_cannot_be_saved_leaves_the_update_done() {
+            let fx = fixture(&[("Alpha", "alpha v1")]);
+            let routes = Routes {
+                fingerprints: json!({"data": {"exactMatches": [
+                    installed(&fx, 1, &["Alpha"], true)
+                ]}})
+                .to_string(),
+                mods: json!({"data": [project(1, "Alpha", true)]}).to_string(),
+                files: HashMap::from([(
+                    format!("{API}/v1/mods/1/files/11"),
+                    json!({"data": file_json(1, 11, "2026-10-01T00:00:00Z", &[])}).to_string(),
+                )]),
+                zips: HashMap::from([(
+                    download_url(11),
+                    zip_of(&[("Alpha/Alpha.lua", "alpha v2")]),
+                )]),
+                ..Routes::default()
+            };
+
+            let outcomes = update_addons(
+                &fx.installation,
+                &client(routes),
+                &no_overrides(),
+                &[1],
+                &mut |_, _| Err("disk full".to_owned()),
+            )
+            .unwrap();
+
+            assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "{outcomes:?}");
+            assert!(outcomes[0].file.is_some());
+            assert_eq!(
+                outcomes[0].message.as_deref(),
+                Some("Installed, but the app could not remember its folders: disk full")
+            );
+            assert_eq!(
+                fs::read_to_string(fx.addons.join("Alpha").join("Alpha.lua")).unwrap(),
+                "alpha v2"
+            );
         }
 
         /// Aggiorna davvero gli addon di un'installazione reale: **modifica `Interface/AddOns`**,
@@ -1467,7 +1570,8 @@ mod tests {
                 return;
             }
             for outcome in
-                update_addons(&installation, &client, &VersionOverrides::new(), &mod_ids).unwrap()
+                update_without_record(&installation, &client, &VersionOverrides::new(), &mod_ids)
+                    .unwrap()
             {
                 println!("{outcome:?}");
                 assert_ne!(outcome.status, OutcomeStatus::Error, "{outcome:?}");

@@ -25,6 +25,7 @@ function addon(folder: string, fields: Partial<InstalledAddon> = {}): InstalledA
     modifiedMs: null,
     fingerprint: 1,
     error: null,
+    installedProject: null,
     ...fields,
   };
 }
