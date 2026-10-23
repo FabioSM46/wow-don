@@ -83,6 +83,10 @@ pub trait Transport: Send + Sync {
     ) -> Result<HttpResponse, TransportError>;
     /// Scarica un file **senza chiave**. Un corpo più lungo di `max_len` byte dà
     /// [`TransportError::TooLarge`] senza tenerne in memoria più di `max_len`.
+    ///
+    /// Non controlla l'URL: chi chiama deve averlo già validato con `is_download_url`, come fa
+    /// [`CurseForgeClient::download`]. Il trasporto reale applica la stessa regola solo ai
+    /// redirect.
     fn get_bytes(&self, url: &str, max_len: u64) -> Result<BytesResponse, TransportError>;
 }
 
@@ -143,9 +147,18 @@ fn transport_error(error: reqwest::Error) -> TransportError {
 }
 
 /// Legge al massimo `max_len` byte: appena il corpo li supererebbe si ferma con
-/// [`TransportError::TooLarge`], senza aggiungere il blocco di troppo.
-fn read_limited(reader: &mut impl Read, max_len: u64) -> Result<Vec<u8>, TransportError> {
-    let mut body = Vec::new();
+/// [`TransportError::TooLarge`], senza aggiungere il blocco di troppo. Anche la capacità del
+/// buffer resta entro `max_len`: la crescita raddoppia come quella di `Vec`, ma senza superare
+/// il limite. `declared` è il `Content-Length` già confrontato con il limite, usato per
+/// allocare una volta sola.
+fn read_limited(
+    reader: &mut impl Read,
+    max_len: u64,
+    declared: Option<u64>,
+) -> Result<Vec<u8>, TransportError> {
+    let limit = usize::try_from(max_len).unwrap_or(usize::MAX);
+    let initial = declared.map_or(0, |len| usize::try_from(len).unwrap_or(limit).min(limit));
+    let mut body = Vec::with_capacity(initial);
     let mut chunk = vec![0u8; 64 * 1024];
     loop {
         let read = match reader.read(&mut chunk) {
@@ -159,6 +172,11 @@ fn read_limited(reader: &mut impl Read, max_len: u64) -> Result<Vec<u8>, Transpo
         };
         if body.len() as u64 + read as u64 > max_len {
             return Err(TransportError::TooLarge);
+        }
+        let needed = body.len() + read;
+        if needed > body.capacity() {
+            let target = body.capacity().saturating_mul(2).max(needed).min(limit);
+            body.reserve_exact(target - body.len());
         }
         body.extend_from_slice(&chunk[..read]);
     }
@@ -193,10 +211,11 @@ impl Transport for ReqwestTransport {
     fn get_bytes(&self, url: &str, max_len: u64) -> Result<BytesResponse, TransportError> {
         let mut response = self.downloads.get(url).send().map_err(transport_error)?;
         let status = response.status().as_u16();
-        if response.content_length().is_some_and(|len| len > max_len) {
+        let declared = response.content_length();
+        if declared.is_some_and(|len| len > max_len) {
             return Err(TransportError::TooLarge);
         }
-        let body = read_limited(&mut response, max_len)?;
+        let body = read_limited(&mut response, max_len, declared)?;
         Ok(BytesResponse { status, body })
     }
 }
@@ -983,15 +1002,22 @@ mod tests {
     #[test]
     fn read_limited_stops_at_the_limit() {
         let data = vec![7u8; 200_000];
+        // Né la lunghezza né la capacità superano il limite, con o senza Content-Length.
+        for (max_len, declared) in [
+            (200_000, None),
+            (200_000, Some(200_000)),
+            (250_001, None),
+            (250_001, Some(10)),
+        ] {
+            let body = read_limited(&mut data.as_slice(), max_len, declared).unwrap();
+            assert_eq!(body, data);
+            assert!(body.capacity() as u64 <= max_len, "{}", body.capacity());
+        }
         assert_eq!(
-            read_limited(&mut data.as_slice(), 200_000).unwrap().len(),
-            200_000
-        );
-        assert_eq!(
-            read_limited(&mut data.as_slice(), 199_999),
+            read_limited(&mut data.as_slice(), 199_999, None),
             Err(TransportError::TooLarge)
         );
-        assert!(read_limited(&mut &b""[..], 0).unwrap().is_empty());
+        assert!(read_limited(&mut &b""[..], 0, None).unwrap().is_empty());
     }
 
     /// Un server HTTP locale che risponde a una sola richiesta con `response` e restituisce
