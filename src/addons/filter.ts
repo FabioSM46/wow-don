@@ -65,7 +65,11 @@ function disjointAuthors(x: InstalledAddon[], y: InstalledAddon[]): boolean {
  *
  * - **il file pubblicato** (dopo il controllo): le cartelle installate che compaiono nelle
  *   `projectFolders` di una cartella riconosciuta vanno con lei, anche se CurseForge non le
- *   riconosce una per una; le cartelle riconosciute come lo stesso progetto stanno insieme;
+ *   riconosce una per una; le cartelle riconosciute come lo stesso progetto stanno insieme.
+ *   **Il registro dell'app** (`installedProject`, le cartelle dello zip che l'app ha
+ *   installato) è una prova della stessa forza e vale anche prima del controllo; per una
+ *   cartella che il controllo riconosce prevale il file pubblicato, perché l'addon può essere
+ *   stato aggiornato con un altro gestore;
  * - **il campo `## Group`**, come fa il gioco: B va con A se il `group` di B è il nome di A
  *   (i moduli `EllesmereUI*` dichiarano `EllesmereUI`); se A non è installata, niente;
  * - **una dipendenza obbligatoria più il prefisso del nome**, in entrambe le direzioni: A
@@ -73,8 +77,9 @@ function disjointAuthors(x: InstalledAddon[], y: InstalledAddon[]): boolean {
  *   richiede A e il nome di B inizia con quello di A (`Details_Compare2` → `Details`).
  *
  * **Veto**, che prevale su tutte le prove: due cartelle non stanno mai nello stesso gruppo se
- * sono riconosciute come progetti diversi, se una è riconosciuta e il suo file non contiene
- * l'altra, o (senza il controllo a dire il contrario) se i loro `.toc` dichiarano
+ * sono riconosciute (dal controllo o dal registro) come progetti diversi, se una è riconosciuta
+ * e il suo file non contiene l'altra (anche quando l'altra ha un record dello stesso progetto:
+ * conta il file pubblicato), o (senza il controllo o il registro a dire il contrario) se i loro `.toc` dichiarano
  * `X-Curse-Project-ID` diversi o autori senza nomi in comune. Così un plugin di un altro autore (`ElvUI_WindTools` sotto
  * `ElvUI`) resta una riga sua. Il veto per autore vale solo nella direzione dei plugin, una
  * cartella che richiede la principale di cui estende il nome: non quando è la principale a
@@ -105,20 +110,31 @@ export function groupAddons(
     return current;
   };
 
-  // Il progetto riconosciuto e le cartelle del suo file, per cartella.
-  const recognised = new Map<string, { id: number; folders: Set<string> }>();
+  // Il progetto riconosciuto e le cartelle del suo file, per cartella: dal controllo, oppure
+  // dal registro dell'app per le cartelle che il controllo non riconosce (o prima del controllo).
+  const recognised = new Map<string, { id: number; folders: Set<string>; checked: boolean }>();
   for (const addon of addons) {
     const update = updates?.get(addon.folder);
-    if (!update?.project) continue;
+    const project = update?.project
+      ? { id: update.project.id, folders: update.projectFolders ?? [] }
+      : addon.installedProject;
+    if (!project) continue;
     recognised.set(addon.folder, {
-      id: update.project.id,
-      folders: new Set((update.projectFolders ?? []).map(lower)),
+      id: project.id,
+      folders: new Set(project.folders.map(lower)),
+      checked: Boolean(update?.project),
     });
   }
   const vetoed = (a: InstalledAddon, b: InstalledAddon): boolean => {
     const pa = recognised.get(a.folder);
     const pb = recognised.get(b.folder);
-    if (pa && pb) return pa.id !== pb.id;
+    if (pa && pb) {
+      if (pa.id !== pb.id) return true;
+      // Stesso progetto, una dal controllo e una dal registro: decide il file pubblicato.
+      if (pa.checked && !pb.checked) return !pa.folders.has(lower(b.folder));
+      if (pb.checked && !pa.checked) return !pb.folders.has(lower(a.folder));
+      return false;
+    }
     if (pa && !pa.folders.has(lower(b.folder))) return true;
     if (pb && !pb.folders.has(lower(a.folder))) return true;
     if (pa || pb) return false;
@@ -127,8 +143,8 @@ export function groupAddons(
     return differ(a.curseProjectId, b.curseProjectId);
   };
 
-  // Archi per forza: 0 file pubblicato, 1 `## Group`, 2 la principale richiede la cartella
-  // che ne estende il nome, 3 la cartella richiede la principale di cui estende il nome.
+  // Archi per forza: 0 file pubblicato o registro, 1 `## Group`, 2 la principale richiede la
+  // cartella che ne estende il nome, 3 la cartella richiede la principale di cui estende il nome.
   const edges: [number, InstalledAddon, InstalledAddon][] = [];
   const firstOfProject = new Map<number, InstalledAddon>();
   for (const addon of addons) {
@@ -164,7 +180,7 @@ export function groupAddons(
     const left = members.get(ra)!;
     const right = members.get(rb)!;
     if (left.some((x) => right.some((y) => vetoed(x, y)))) continue;
-    // Il veto per autore vale solo senza il controllo a dire il contrario.
+    // Il veto per autore vale solo senza il controllo o il registro a dire il contrario.
     const checked = [...left, ...right].some((x) => recognised.has(x.folder));
     if (strength === 3 && !checked && disjointAuthors(left, right)) continue;
     parent.set(rb, ra);
