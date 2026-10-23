@@ -608,7 +608,15 @@ button:focus-visible {
 }
 
 .addon-table tr:hover .version-select,
+.addon-table tr:focus-within .version-select,
 .version-select:focus,
 .version-select.shown {
   opacity: 1;
+}
+
+/* Senza un puntatore che passa sopra (schermo touch) il menu resta sempre visibile. */
+@media (hover: none) {
+  .version-select {
+    opacity: 1;
+  }
 }
