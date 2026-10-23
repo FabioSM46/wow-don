@@ -49,6 +49,8 @@ export type AddonUpdate = {
   folder: string;
   project: Project | null;
   installedFile: FileSummary | null;
+  /** Versione del gioco forzata per il progetto (`gameVersionTypeId`), se c'è. */
+  versionOverride: number | null;
 } & (
   | { status: "notMatched" }
   | { status: "upToDate" }
@@ -65,6 +67,9 @@ export type UpdateOutcome = {
   /** Il file installato, solo per `updated`. */
   file?: FileSummary;
 };
+
+/** Un tipo di versione del gioco che si può forzare per un addon (`list_version_types`). */
+export type VersionType = { id: number; name: string };
 
 /** Uno zip di backup di `WTF` e `Interface`. */
 export type BackupInfo = {
@@ -85,6 +90,11 @@ export const api = {
     invoke<AddonUpdate[]>("check_updates", { installationId }),
   updateAddons: (installationId: string, modIds: number[]) =>
     invoke<UpdateOutcome[]>("update_addons", { installationId, modIds }),
+  listVersionTypes: () => invoke<VersionType[]>("list_version_types"),
+  setVersionOverride: (installationId: string, modId: number, versionType: number) =>
+    invoke<void>("set_version_override", { installationId, modId, versionType }),
+  clearVersionOverride: (installationId: string, modId: number) =>
+    invoke<void>("clear_version_override", { installationId, modId }),
   createBackup: (installationId: string) =>
     invoke<BackupInfo>("create_backup", { installationId }),
   listBackups: (installationId: string) =>
