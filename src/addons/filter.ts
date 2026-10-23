@@ -37,22 +37,26 @@ export type AddonGroup = {
 
 const lower = (s: string) => s.toLocaleLowerCase("it");
 
-/** I nomi di un `## Author`, separati da virgola, punto e virgola o `&`. */
+/** I nomi di un `## Author`, separati da virgola, punto e virgola, `&` o `/`. */
 const authorNames = (author: string | null): Set<string> =>
   new Set(
     (author ?? "")
-      .split(/[,;&]/)
+      .split(/[,;&/]/)
       .map((name) => lower(name.trim()))
       .filter(Boolean),
   );
 
 /**
- * Autori diversi: nessun nome in comune (`Elv, Simpy` e `fang2hou`). `Elv` e `Elv, Simpy` non
- * lo sono, e un autore mancante non è una prova.
+ * Autori diversi tra due gruppi: nessun nome in comune tra tutti i nomi dell'uno e tutti quelli
+ * dell'altro (`Elv, Simpy` e `fang2hou`). `Elv` e `Elv, Simpy` non lo sono, e un gruppo senza
+ * autori non è una prova. Si confrontano i gruppi, non le singole cartelle: due moduli dello
+ * stesso addon possono citare autori diversi tra quelli del principale.
  */
-function disjointAuthors(x: string | null, y: string | null): boolean {
-  const a = authorNames(x);
-  const b = authorNames(y);
+function disjointAuthors(x: InstalledAddon[], y: InstalledAddon[]): boolean {
+  const names = (group: InstalledAddon[]) =>
+    new Set(group.flatMap((a) => [...authorNames(a.author)]));
+  const a = names(x);
+  const b = names(y);
   return a.size > 0 && b.size > 0 && ![...a].some((name) => b.has(name));
 }
 
@@ -72,7 +76,12 @@ function disjointAuthors(x: string | null, y: string | null): boolean {
  * sono riconosciute come progetti diversi, se una è riconosciuta e il suo file non contiene
  * l'altra, o (senza il controllo a dire il contrario) se i loro `.toc` dichiarano
  * `X-Curse-Project-ID` diversi o autori senza nomi in comune. Così un plugin di un altro autore (`ElvUI_WindTools` sotto
- * `ElvUI`) resta una riga sua. L'id Wago non è un confine: Wago elenca come progetti separati
+ * `ElvUI`) resta una riga sua. Il veto per autore vale solo nella direzione dei plugin, una
+ * cartella che richiede la principale di cui estende il nome: non quando è la principale a
+ * richiedere quella che ne estende il nome (`Questie` → `QuestieDB`), perché un addon non
+ * funziona senza le sue dipendenze obbligatorie, né con `## Group`, che è una dichiarazione
+ * seguita anche dal gioco. Il campo `## Author` è testo libero che due cartelle dello stesso
+ * addon scrivono in modo diverso. L'id Wago non è un confine: Wago elenca come progetti separati
  * cartelle che arrivano nello stesso file CurseForge (i plugin di Details).
  *
  * Gli archi si uniscono dal più forte al più debole e due gruppi si fondono solo se nessuna
@@ -115,10 +124,11 @@ export function groupAddons(
     if (pa || pb) return false;
     const differ = (x: string | null, y: string | null) =>
       Boolean(x?.trim()) && Boolean(y?.trim()) && lower(x!.trim()) !== lower(y!.trim());
-    return differ(a.curseProjectId, b.curseProjectId) || disjointAuthors(a.author, b.author);
+    return differ(a.curseProjectId, b.curseProjectId);
   };
 
-  // Archi per forza: 0 file pubblicato, 1 `## Group`, 2 dipendenza più prefisso.
+  // Archi per forza: 0 file pubblicato, 1 `## Group`, 2 la principale richiede la cartella
+  // che ne estende il nome, 3 la cartella richiede la principale di cui estende il nome.
   const edges: [number, InstalledAddon, InstalledAddon][] = [];
   const firstOfProject = new Map<number, InstalledAddon>();
   for (const addon of addons) {
@@ -142,18 +152,21 @@ export function groupAddons(
       if (!other || other === addon) continue;
       const [a, b] = [lower(addon.folder), lower(other.folder)];
       if (b.startsWith(a)) edges.push([2, addon, other]);
-      else if (a.startsWith(b)) edges.push([2, other, addon]);
+      else if (a.startsWith(b)) edges.push([3, other, addon]);
     }
   }
 
   edges.sort((x, y) => x[0] - y[0]);
-  for (const [, a, b] of edges) {
+  for (const [strength, a, b] of edges) {
     const ra = root(a.folder);
     const rb = root(b.folder);
     if (ra === rb) continue;
     const left = members.get(ra)!;
     const right = members.get(rb)!;
     if (left.some((x) => right.some((y) => vetoed(x, y)))) continue;
+    // Il veto per autore vale solo senza il controllo a dire il contrario.
+    const checked = [...left, ...right].some((x) => recognised.has(x.folder));
+    if (strength === 3 && !checked && disjointAuthors(left, right)) continue;
     parent.set(rb, ra);
     members.set(ra, [...left, ...right]);
     members.delete(rb);
