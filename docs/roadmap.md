@@ -1,6 +1,6 @@
 # Roadmap
 
-Ultimo aggiornamento: 2026-10-22.
+Ultimo aggiornamento: 2026-10-23.
 
 ## M0 — Scaffolding (fatto)
 
@@ -20,15 +20,24 @@ Ultimo aggiornamento: 2026-10-22.
 - Riconoscimento degli addon installati tramite fingerprint.
 - Controllo aggiornamenti per la versione del gioco dell'installazione.
 
-## M3 — Installazione e aggiornamento
+## M3 — Installazione e aggiornamento (fatto)
 
 - Download, estrazione sicura e sostituzione delle cartelle.
 - Aggiornamento singolo e "aggiorna tutto".
 - Versione del gioco forzata per singolo addon.
 - Backup delle cartelle `WTF` e `Interface`.
+- Gli addon con `allowModDistribution = false` (per esempio Details!) si riconoscono e
+  segnalano gli aggiornamenti, ma si aggiornano a mano dal sito (D13).
+
+## Interfaccia in inglese e tab
+
+- Interfaccia solo in inglese, compresi i messaggi del backend (D27).
+- App divisa in tab: Installed e Options, con il selettore dell'installazione
+  nell'header; la gestione delle installazioni e i backup stanno in Options.
 
 ## M4 — Ricerca e catalogo
 
+- Tab Search.
 - Ricerca nel catalogo CurseForge con filtri (categoria, versione del gioco,
   popolarità, data di aggiornamento) e ordinamenti.
 - Pagina di dettaglio dell'addon.
@@ -40,7 +49,11 @@ Ultimo aggiornamento: 2026-10-22.
 
 ## Dopo
 
-- Altre fonti: GitHub releases, WoWInterface, Wago.
+- Altre fonti: GitHub releases, WoWInterface, Wago. Wago richiede la chiave da abbonato
+  dell'utente (facoltativa, mai inclusa nell'app) e il permesso di usarla in un gestore
+  diverso da WowUp: in pausa per ora.
+- Opzioni: scelta del tema (sistema, chiaro, scuro) salvata dal backend; `color-scheme`
+  va dichiarato insieme ai colori del tema scelto.
 - Scoperta automatica dei prefissi Lutris.
 - Pacchetti di rilascio: `.deb` per Linux e installer NSIS per Windows (D24), costruiti
   dalla CI.
