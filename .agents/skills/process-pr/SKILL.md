@@ -132,7 +132,7 @@ il perché.
 | Area | Comando (da `$WORKTREE_DIR`) |
 | ---- | ---------------------------- |
 | `backend` | `cd src-tauri && cargo fmt --all --check && cargo clippy --all-targets --locked -- -D warnings && cargo build --locked && cargo test --locked` |
-| `frontend` | `pnpm install --frozen-lockfile && pnpm build` |
+| `frontend` | `pnpm install --frozen-lockfile && pnpm build && pnpm test` |
 | Ogni PR | tutta la suite `scripts/test/*.test.sh` (con il glob, mai riscrivendo la lista) più `python3 .github/scripts/test_deepseek_review.py`, con un flag di fallimento così che un test rosso sia lo stato di uscita del blocco, come in `$dev-issue` Passo 6 |
 
 La formattazione è il gate saltato più spesso e quello che arrossa più spesso la CI.

@@ -170,6 +170,7 @@ Controlli rapidi:
 
 ```bash
 pnpm build                              # type-check e build del frontend
+pnpm test                               # test del frontend (node --test, Node 22.18 o successivo)
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
