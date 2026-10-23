@@ -56,6 +56,16 @@ export type AddonUpdate = {
   | { status: "error"; message: string }
 );
 
+/** Esito di `update_addons` per un progetto; `message` spiega `skipped` ed `error`. */
+export type UpdateOutcome = {
+  modId: number;
+  name: string;
+  status: "updated" | "skipped" | "error";
+  message?: string;
+  /** Il file installato, solo per `updated`. */
+  file?: FileSummary;
+};
+
 /** Uno zip di backup di `WTF` e `Interface`. */
 export type BackupInfo = {
   name: string;
@@ -73,6 +83,8 @@ export const api = {
     invoke<InstalledAddon[]>("list_addons", { installationId }),
   checkUpdates: (installationId: string) =>
     invoke<AddonUpdate[]>("check_updates", { installationId }),
+  updateAddons: (installationId: string, modIds: number[]) =>
+    invoke<UpdateOutcome[]>("update_addons", { installationId, modIds }),
   createBackup: (installationId: string) =>
     invoke<BackupInfo>("create_backup", { installationId }),
   listBackups: (installationId: string) =>
