@@ -6,6 +6,7 @@ import {
   type AddonUpdate,
   type InstalledAddon,
   type Installation,
+  type UpdateOutcome,
 } from "../api";
 import {
   authorsOf,
@@ -33,6 +34,16 @@ const updatesCache = new Map<string, AddonUpdate[]>();
 const autoChecked = new Set<string>();
 /** L'ultimo errore del controllo per installazione, per mostrarlo anche tornandoci. */
 const errorCache = new Map<string, string>();
+/**
+ * Progetti in aggiornamento per installazione. Fuori dal componente come le cache sopra:
+ * tornando su un'installazione con un aggiornamento ancora in corso, le righe restano bloccate
+ * e non parte un secondo aggiornamento dello stesso progetto.
+ */
+const updateRuns = new Map<string, Set<number>>();
+/** L'esito dell'ultimo aggiornamento per installazione, mostrato sopra la tabella. */
+const updateResults = new Map<string, UpdateResult>();
+
+type UpdateResult = { outcomes: UpdateOutcome[] } | { error: string };
 
 function byFolder(updates: AddonUpdate[]): Map<string, AddonUpdate> {
   return new Map(updates.map((update) => [update.folder, update]));
@@ -77,11 +88,11 @@ export function AddonTable({ installation }: Props) {
   const currentId = useRef(installation.id);
   currentId.current = installation.id;
 
-  const runCheck = useCallback(() => {
+  const runCheck = useCallback((): Promise<void> => {
     const id = installation.id;
     setChecking(true);
     setCheckError(null);
-    api
+    return api
       .checkUpdates(id)
       .then((result) => {
         updatesCache.set(id, result);
@@ -108,7 +119,7 @@ export function AddonTable({ installation }: Props) {
     setCheckError(errorCache.get(installation.id) ?? null);
     if (!cached && !autoChecked.has(installation.id)) {
       autoChecked.add(installation.id);
-      runCheck();
+      void runCheck();
     }
   }, [installation.id, runCheck]);
 
@@ -116,17 +127,17 @@ export function AddonTable({ installation }: Props) {
   // serve dopo aver installato o tolto addon fuori dall'app.
   const [rescanning, setRescanning] = useState(false);
   const [rescanError, setRescanError] = useState<string | null>(null);
-  function rescan() {
+  function rescan(): Promise<void> {
     const id = installation.id;
     setRescanning(true);
     setRescanError(null);
-    api
+    return api
       .listAddons(id)
       .then((addons) => {
         if (currentId.current !== id) return;
         setLoad({ state: "ready", addons });
         // Gli stati di aggiornamento si riferivano alla lista di prima: si ricontrolla.
-        runCheck();
+        return runCheck();
       })
       .catch((err) => {
         if (currentId.current !== id) return;
@@ -141,12 +152,60 @@ export function AddonTable({ installation }: Props) {
       });
   }
 
+  // Progetti (`mod_id`) in aggiornamento: le loro righe mostrano "Updating…" e tutti i pulsanti
+  // di aggiornamento restano disabilitati finché la lista e gli stati non sono riletti.
+  const [updating, setUpdating] = useState<Set<number>>(new Set());
+  const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
+  // `currentId` sopravvive allo smontaggio: serve un segnale a parte per non rileggere la lista
+  // di un componente che non c'è più.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  function updateProjects(modIds: number[]) {
+    const id = installation.id;
+    const ids = new Set(modIds);
+    if (ids.size === 0 || updateRuns.has(id)) return;
+    updateRuns.set(id, ids);
+    updateResults.delete(id);
+    setUpdating(ids);
+    setUpdateResult(null);
+    api
+      .updateAddons(id, [...ids])
+      .then(
+        (outcomes): UpdateResult => ({ outcomes }),
+        (err): UpdateResult => ({ error: errorMessage(err) }),
+      )
+      .then((result) => {
+        updateResults.set(id, result);
+        // Gli stati di prima non valgono più: senza cache il prossimo controllo li rilegge.
+        updatesCache.delete(id);
+        errorCache.delete(id);
+        // Con la cache vuota serve un nuovo controllo anche se ora si guarda altro: tornando
+        // sulla tabella il controllo automatico ripartirà.
+        autoChecked.delete(id);
+        if (!mounted.current || currentId.current !== id) return;
+        setUpdateResult(result);
+        return rescan();
+      })
+      .finally(() => {
+        updateRuns.delete(id);
+        if (mounted.current && currentId.current === id) setUpdating(new Set());
+      });
+  }
+
   useEffect(() => {
     // Cambiando installazione in fretta, una risposta vecchia non deve sovrascrivere la nuova.
     let current = true;
     // Una rilettura partita per l'installazione precedente non vale più per questa.
     setRescanning(false);
     setRescanError(null);
+    setUpdating(updateRuns.get(installation.id) ?? new Set());
+    setUpdateResult(updateResults.get(installation.id) ?? null);
     setLoad({ state: "loading" });
     setFilters(defaultFilters);
     setExpanded(new Set());
@@ -170,6 +229,17 @@ export function AddonTable({ installation }: Props) {
   const updateCount = groups.filter(
     (g) => groupUpdate(g, updates)?.status === "updateAvailable",
   ).length;
+  // "Update all" conta i progetti che l'app può aggiornare da sola: un `mod_id` per gruppo,
+  // senza ripetizioni, così il numero sul pulsante è quello degli id inviati.
+  const updatableIds = [
+    ...new Set(
+      groups.flatMap((g) => {
+        const update = groupUpdate(g, updates);
+        return update && isUpdatable(update) ? [update.project!.id] : [];
+      }),
+    ),
+  ];
+  const busy = updating.size > 0;
 
   function update(patch: Partial<Filters>) {
     setFilters((previous) => ({ ...previous, ...patch }));
@@ -204,18 +274,27 @@ export function AddonTable({ installation }: Props) {
           <button
             className="button secondary"
             onClick={rescan}
-            disabled={rescanning || load.state === "loading"}
+            disabled={rescanning || busy || load.state === "loading"}
             title="Rilegge la cartella Interface/AddOns"
           >
             {rescanning ? "Lettura…" : "Rileggi addon"}
           </button>
           <button
             className="button secondary"
-            onClick={() => runCheck()}
-            disabled={checking}
+            onClick={() => void runCheck()}
+            disabled={checking || busy}
           >
             {checking ? "Controllo in corso…" : "Controlla aggiornamenti"}
           </button>
+          {(busy || updatableIds.length > 0) && (
+            <button
+              className="button"
+              onClick={() => updateProjects(updatableIds)}
+              disabled={busy || checking}
+            >
+              {busy ? "Updating…" : `Update all (${updatableIds.length})`}
+            </button>
+          )}
         </div>
       </header>
 
@@ -229,6 +308,7 @@ export function AddonTable({ installation }: Props) {
           {rescanError}
         </p>
       )}
+      {updateResult && <UpdateSummary result={updateResult} />}
 
       {load.state === "loading" && <p className="muted">Lettura degli addon…</p>}
       {load.state === "error" && (
@@ -371,7 +451,13 @@ export function AddonTable({ installation }: Props) {
                           </td>
                           <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
                           <ProjectCell update={update} />
-                          <UpdateCell update={update} checking={checking} />
+                          <UpdateCell
+                            update={update}
+                            checking={checking}
+                            updating={Boolean(update?.project && updating.has(update.project.id))}
+                            disabled={busy || checking}
+                            onUpdate={updateProjects}
+                          />
                         </tr>
                         {open &&
                           others.map((other) => (
@@ -446,13 +532,41 @@ function ProjectCell({ update }: { update?: AddonUpdate }) {
   );
 }
 
-function UpdateCell({ update, checking }: { update?: AddonUpdate; checking: boolean }) {
+/** Un aggiornamento che l'app può installare da sola: i progetti non distribuibili no (D13). */
+function isUpdatable(update: AddonUpdate): boolean {
+  return update.status === "updateAvailable" && Boolean(update.project?.allowModDistribution);
+}
+
+type UpdateCellProps = {
+  update?: AddonUpdate;
+  checking: boolean;
+  /** Il progetto di questa riga è nell'aggiornamento in corso. */
+  updating: boolean;
+  disabled: boolean;
+  onUpdate: (modIds: number[]) => void;
+};
+
+function UpdateCell({ update, checking, updating, disabled, onUpdate }: UpdateCellProps) {
+  if (updating) return <td className="muted nowrap">Updating…</td>;
   if (!update) return <td className="muted">{checking ? "…" : ""}</td>;
   switch (update.status) {
     case "updateAvailable":
       return (
-        <td className="update-available" title={installedTitle(update, update.latest.date)}>
-          {update.latest.name}
+        <td title={installedTitle(update, update.latest.date)}>
+          <span className="update-available">{update.latest.name}</span>
+          {isUpdatable(update) && (
+            <button
+              className="button secondary small row-action"
+              disabled={disabled}
+              onClick={(event) => {
+                // Il pulsante non apre e chiude la riga del gruppo.
+                event.stopPropagation();
+                onUpdate([update.project!.id]);
+              }}
+            >
+              Update
+            </button>
+          )}
         </td>
       );
     case "upToDate":
@@ -473,4 +587,41 @@ function installedTitle(update: AddonUpdate, latestDate?: string): string | unde
   const installed = update.installedFile ? `Installato: ${update.installedFile.name}` : undefined;
   const latest = latestDate ? `Nuovo file del ${latestDate.slice(0, 10)}` : undefined;
   return [installed, latest].filter(Boolean).join("\n") || undefined;
+}
+
+/** Riepilogo dell'ultimo aggiornamento, con il motivo di ogni progetto saltato o in errore. */
+function UpdateSummary({ result }: { result: UpdateResult }) {
+  if ("error" in result) {
+    return (
+      <p className="message error" role="alert">
+        Update failed: {result.error}
+      </p>
+    );
+  }
+  const count = (status: UpdateOutcome["status"]) =>
+    result.outcomes.filter((o) => o.status === status).length;
+  const updated = count("updated");
+  const skipped = count("skipped");
+  const errors = count("error");
+  const parts = [
+    updated > 0 && `${updated} updated`,
+    skipped > 0 && `${skipped} skipped`,
+    errors > 0 && `${errors} ${errors === 1 ? "error" : "errors"}`,
+  ].filter(Boolean);
+  const details = result.outcomes.filter((o) => o.status !== "updated");
+  return (
+    <div className="message update-summary" role="status">
+      <p>{parts.length > 0 ? parts.join(", ") : "Nothing was updated"}</p>
+      {details.length > 0 && (
+        <ul>
+          {details.map((outcome) => (
+            <li key={outcome.modId} className={outcome.status === "error" ? "error" : "muted"}>
+              {outcome.name || `#${outcome.modId}`}
+              {outcome.message && `: ${outcome.message}`}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
