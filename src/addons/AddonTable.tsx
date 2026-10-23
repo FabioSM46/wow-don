@@ -156,6 +156,15 @@ export function AddonTable({ installation }: Props) {
   // di aggiornamento restano disabilitati finché la lista e gli stati non sono riletti.
   const [updating, setUpdating] = useState<Set<number>>(new Set());
   const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
+  // `currentId` sopravvive allo smontaggio: serve un segnale a parte per non rileggere la lista
+  // di un componente che non c'è più.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   function updateProjects(modIds: number[]) {
     const id = installation.id;
@@ -176,17 +185,16 @@ export function AddonTable({ installation }: Props) {
         // Gli stati di prima non valgono più: senza cache il prossimo controllo li rilegge.
         updatesCache.delete(id);
         errorCache.delete(id);
-        if (currentId.current !== id) {
-          // Tornando su questa installazione il controllo automatico ripartirà.
-          autoChecked.delete(id);
-          return;
-        }
+        // Con la cache vuota serve un nuovo controllo anche se ora si guarda altro: tornando
+        // sulla tabella il controllo automatico ripartirà.
+        autoChecked.delete(id);
+        if (!mounted.current || currentId.current !== id) return;
         setUpdateResult(result);
         return rescan();
       })
       .finally(() => {
         updateRuns.delete(id);
-        if (currentId.current === id) setUpdating(new Set());
+        if (mounted.current && currentId.current === id) setUpdating(new Set());
       });
   }
 
@@ -221,11 +229,16 @@ export function AddonTable({ installation }: Props) {
   const updateCount = groups.filter(
     (g) => groupUpdate(g, updates)?.status === "updateAvailable",
   ).length;
-  // "Update all" conta i gruppi che l'app può aggiornare da sola: un `mod_id` per gruppo.
-  const updatableIds = groups.flatMap((g) => {
-    const update = groupUpdate(g, updates);
-    return update && isUpdatable(update) ? [update.project!.id] : [];
-  });
+  // "Update all" conta i progetti che l'app può aggiornare da sola: un `mod_id` per gruppo,
+  // senza ripetizioni, così il numero sul pulsante è quello degli id inviati.
+  const updatableIds = [
+    ...new Set(
+      groups.flatMap((g) => {
+        const update = groupUpdate(g, updates);
+        return update && isUpdatable(update) ? [update.project!.id] : [];
+      }),
+    ),
+  ];
   const busy = updating.size > 0;
 
   function update(patch: Partial<Filters>) {
