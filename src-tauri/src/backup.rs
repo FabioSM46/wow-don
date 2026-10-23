@@ -8,6 +8,8 @@
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -68,11 +70,24 @@ fn create_backup_at(
     })?;
 
     let stem = format!("{}-{}", installation.flavor, timestamp(now));
-    let final_path = free_name(backups_dir, &stem);
-    let name = file_name(&final_path);
-    let temp = TempFile(backups_dir.join(format!(".{name}.tmp")));
+    // Il temporaneo ha un nome unico (pid e contatore) e si apre con `create_new`: due backup
+    // contemporanei non scrivono mai nello stesso file.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let temp = TempFile(backups_dir.join(format!(
+        ".{stem}-{}-{}.zip.tmp",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )));
 
     write_zip(&temp.0, &roots)?;
+
+    // Scelta del nome e `rename` stanno sotto lo stesso lock: due backup finiti nello stesso
+    // secondo non scelgono lo stesso nome, e il secondo non sovrascrive il primo.
+    static FINALIZE: Mutex<()> = Mutex::new(());
+    let _guard = FINALIZE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let final_path = free_name(backups_dir, &stem);
     // Il nome finale compare solo a scrittura completa.
     fs::rename(&temp.0, &final_path)
         .map_err(|error| format!("Impossibile completare il backup ({}).", error.kind()))?;
@@ -147,7 +162,10 @@ fn find_child_dir(parent: &Path, wanted: &str) -> Option<(String, PathBuf)> {
 }
 
 fn write_zip(target: &Path, roots: &[(String, PathBuf)]) -> Result<(), String> {
-    let file = File::create(target)
+    let file = File::options()
+        .write(true)
+        .create_new(true)
+        .open(target)
         .map_err(|error| format!("Impossibile creare il file del backup ({}).", error.kind()))?;
     let mut writer = ZipWriter::new(BufWriter::new(file));
     for (name, path) in roots {
@@ -525,6 +543,31 @@ mod tests {
         assert_eq!(first.name, "classic_era-20240229-235958.zip");
         // Stesso secondo: il primo non viene sovrascritto.
         assert_eq!(second.name, "classic_era-20240229-235958-2.zip");
+    }
+
+    #[test]
+    fn concurrent_backups_in_the_same_second_keep_both_zips() {
+        let tmp = TempDir::new();
+        let inst = installation(&tmp);
+        for n in 0..20 {
+            write(&inst.path.join(format!("WTF/file{n}.lua")), &[b'x'; 4096]);
+        }
+        let backups = tmp.path().join("backups");
+        let when = UNIX_EPOCH + Duration::from_secs(1_709_251_198);
+        let names: Vec<String> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| scope.spawn(|| create_backup_at(&inst, &backups, when).unwrap().name))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let mut sorted = names.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 4, "{names:?}");
+        assert_eq!(only_zip_files(&backups), sorted);
+        for name in &sorted {
+            assert_eq!(read_zip(&backups.join(name)).len(), 21);
+        }
     }
 
     #[test]
