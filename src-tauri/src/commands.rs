@@ -35,7 +35,7 @@ type Store<'a> = State<'a, Mutex<InstallationStore>>;
 fn locked<'a>(store: &'a Store<'_>) -> Result<MutexGuard<'a, InstallationStore>, String> {
     store
         .lock()
-        .map_err(|_| "Stato delle installazioni non disponibile: riavvia l'app.".to_owned())
+        .map_err(|_| "Installations are not available: restart the app.".to_owned())
 }
 
 type Settings<'a> = State<'a, Mutex<AddonSettingsStore>>;
@@ -118,13 +118,13 @@ pub async fn list_addons(
         .list()?
         .into_iter()
         .find(|installation| installation.id == installation_id)
-        .ok_or_else(|| "Installazione non trovata.".to_owned())?;
+        .ok_or_else(|| "Installation not found.".to_owned())?;
     tauri::async_runtime::spawn_blocking(move || {
         scan::scan_addons(&installation.path, &installation.flavor)
     })
     .await
     // L'errore di Tauri dice se il compito è andato in panic o è stato annullato.
-    .map_err(|error| format!("La lettura degli addon si è interrotta ({error})."))?
+    .map_err(|error| format!("Reading the addons was interrupted ({error})."))?
 }
 
 /// Riconosce gli addon su CurseForge e indica quali hanno un aggiornamento. Scansione e rete
@@ -144,7 +144,7 @@ pub async fn check_updates(
         .list()?
         .into_iter()
         .find(|installation| installation.id == installation_id)
-        .ok_or_else(|| "Installazione non trovata.".to_owned())?;
+        .ok_or_else(|| "Installation not found.".to_owned())?;
     let overrides = overrides_for(&settings, &installation.id)?;
     tauri::async_runtime::spawn_blocking(move || {
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
@@ -153,7 +153,7 @@ pub async fn check_updates(
         updates::check_updates(&installation, &client, &overrides)
     })
     .await
-    .map_err(|error| format!("Il controllo degli aggiornamenti si è interrotto ({error})."))?
+    .map_err(|error| format!("The update check was interrupted ({error})."))?
 }
 
 /// Aggiorna i progetti `mod_ids` dell'installazione: rifà il controllo, scarica e installa.
@@ -187,7 +187,7 @@ fn find_installation(store: &Store<'_>, installation_id: &str) -> Result<Install
         .list()?
         .into_iter()
         .find(|installation| installation.id == installation_id)
-        .ok_or_else(|| "Installazione non trovata.".to_owned())
+        .ok_or_else(|| "Installation not found.".to_owned())
 }
 
 /// `app_data_dir()/backups/<id-installazione>/`: la cartella la sceglie Tauri.
@@ -195,7 +195,7 @@ fn backups_dir(app: &AppHandle, installation_id: &str) -> Result<PathBuf, String
     let data = app
         .path()
         .app_data_dir()
-        .map_err(|_| "Cartella dei dati dell'app non disponibile.".to_owned())?;
+        .map_err(|_| "The app data folder is not available.".to_owned())?;
     Ok(data.join("backups").join(installation_id))
 }
 
@@ -211,7 +211,7 @@ pub async fn create_backup(
     let dir = backups_dir(&app, &installation.id)?;
     tauri::async_runtime::spawn_blocking(move || backup::create_backup(&installation, &dir))
         .await
-        .map_err(|error| format!("Il backup si è interrotto ({error})."))?
+        .map_err(|error| format!("The backup was interrupted ({error})."))?
 }
 
 /// I backup di un'installazione, dal più recente.
@@ -225,5 +225,5 @@ pub async fn list_backups(
     let dir = backups_dir(&app, &installation.id)?;
     tauri::async_runtime::spawn_blocking(move || backup::list_backups(&dir))
         .await
-        .map_err(|error| format!("La lettura dei backup si è interrotta ({error})."))?
+        .map_err(|error| format!("Reading the backups was interrupted ({error})."))?
 }

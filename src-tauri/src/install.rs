@@ -52,7 +52,7 @@ impl WorkDir {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let parent = addons_dir
             .parent()
-            .ok_or_else(|| "La cartella AddOns non ha una cartella padre.".to_string())?;
+            .ok_or_else(|| "The AddOns folder has no parent folder.".to_string())?;
         let name = format!(
             ".wow-don-{kind}-{}-{}",
             std::process::id(),
@@ -63,7 +63,7 @@ impl WorkDir {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).map_err(|error| {
             format!(
-                "Impossibile creare la cartella temporanea di installazione ({}).",
+                "Could not create the temporary install folder ({}).",
                 error.kind()
             )
         })?;
@@ -105,23 +105,18 @@ fn extract_with_limits(
     limits: Limits,
 ) -> Result<Vec<String>, String> {
     let not_empty = fs::read_dir(staging_dir)
-        .map_err(|error| {
-            format!(
-                "Impossibile leggere la cartella di staging ({}).",
-                error.kind()
-            )
-        })?
+        .map_err(|error| format!("Could not read the staging folder ({}).", error.kind()))?
         .next()
         .is_some();
     if not_empty {
-        return Err("La cartella di staging non è vuota.".to_string());
+        return Err("The staging folder is not empty.".to_string());
     }
 
     let mut archive = ZipArchive::new(Cursor::new(zip_bytes))
-        .map_err(|_| "Il file scaricato non è uno zip valido.".to_string())?;
+        .map_err(|_| "The downloaded file is not a valid zip.".to_string())?;
     if archive.len() > limits.entries {
         return Err(format!(
-            "Lo zip ha troppe voci ({}, massimo {}).",
+            "The zip has too many entries ({}, maximum {}).",
             archive.len(),
             limits.entries
         ));
@@ -135,27 +130,27 @@ fn extract_with_limits(
     for index in 0..archive.len() {
         let file = archive
             .by_index_raw(index)
-            .map_err(|_| "Lo zip è danneggiato.".to_string())?;
+            .map_err(|_| "The zip is damaged.".to_string())?;
         // `name()` decodifica secondo il flag della voce (UTF-8 oppure CP437 per gli zip
         // vecchi), così i nomi accentati restano quelli dell'archivio.
         let name = file
             .name()
-            .map_err(|_| "Lo zip è danneggiato.".to_string())?
+            .map_err(|_| "The zip is damaged.".to_string())?
             .into_owned();
         if file.is_symlink() {
-            return Err(format!("Lo zip contiene un link simbolico ({name})."));
+            return Err(format!("The zip contains a symbolic link ({name})."));
         }
         if file.encrypted() {
-            return Err("Lo zip contiene file cifrati.".to_string());
+            return Err("The zip contains encrypted files.".to_string());
         }
         let components = entry_components(&name)?;
         if file.enclosed_name().is_none() {
-            return Err(format!("Lo zip contiene un percorso non sicuro ({name})."));
+            return Err(format!("The zip contains an unsafe path ({name})."));
         }
         let is_dir = file.is_dir();
         if components.len() == 1 && !is_dir {
             return Err(format!(
-                "Lo zip contiene un file fuori da una cartella ({name}): ogni addon deve stare in una cartella."
+                "The zip contains a file outside a folder ({name}): every addon must be in a folder."
             ));
         }
         declared = declared.saturating_add(file.size());
@@ -167,7 +162,7 @@ fn extract_with_limits(
             folders.push(folder.clone());
         } else if !folders.contains(folder) {
             return Err(format!(
-                "Lo zip contiene cartelle che differiscono solo per maiuscole e minuscole ({folder})."
+                "The zip contains folders that differ only in letter case ({folder})."
             ));
         }
         entries.push(Entry {
@@ -177,7 +172,7 @@ fn extract_with_limits(
         });
     }
     if folders.is_empty() {
-        return Err("Lo zip è vuoto.".to_string());
+        return Err("The zip is empty.".to_string());
     }
 
     // Secondo passaggio: scrittura, contando i byte reali (la dimensione dichiarata può mentire).
@@ -188,7 +183,7 @@ fn extract_with_limits(
             .iter()
             .fold(staging_dir.to_path_buf(), |path, part| path.join(part));
         if !target.starts_with(staging_dir) {
-            return Err("Lo zip contiene un percorso non sicuro.".to_string());
+            return Err("The zip contains an unsafe path.".to_string());
         }
         if entry.is_dir {
             fs::create_dir_all(&target).map_err(write_error)?;
@@ -199,14 +194,14 @@ fn extract_with_limits(
         }
         let file = archive
             .by_index(entry.index)
-            .map_err(|_| "Lo zip è danneggiato.".to_string())?;
+            .map_err(|_| "The zip is damaged.".to_string())?;
         let mut out = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&target)
             .map_err(|error| match error.kind() {
                 io::ErrorKind::AlreadyExists => format!(
-                    "Lo zip contiene due volte lo stesso file ({}).",
+                    "The zip contains the same file twice ({}).",
                     entry.components.join("/")
                 ),
                 _ => write_error(error),
@@ -214,7 +209,7 @@ fn extract_with_limits(
         let written =
             io::copy(&mut file.take(remaining.saturating_add(1)), &mut out).map_err(|error| {
                 match error.kind() {
-                    io::ErrorKind::InvalidData => "Lo zip è danneggiato.".to_string(),
+                    io::ErrorKind::InvalidData => "The zip is damaged.".to_string(),
                     _ => write_error(error),
                 }
             })?;
@@ -229,20 +224,20 @@ fn extract_with_limits(
 
 fn too_big(limits: Limits) -> String {
     format!(
-        "Lo zip estratto supera il limite di {} MiB.",
+        "The extracted zip exceeds the {} MiB limit.",
         limits.total_bytes / (1 << 20)
     )
 }
 
 fn write_error(error: io::Error) -> String {
-    format!("Impossibile estrarre lo zip ({}).", error.kind())
+    format!("Could not extract the zip ({}).", error.kind())
 }
 
 /// Divide il nome di una voce in componenti sicuri. Accetta `/` e `\` come separatori (gli zip
 /// creati su Windows a volte usano il secondo) e ignora i componenti vuoti e `.`. Rifiuta `..`,
 /// i componenti con punto o spazio finale e quelli con `:`.
 fn entry_components(name: &str) -> Result<Vec<String>, String> {
-    let unsafe_path = || Err(format!("Lo zip contiene un percorso non sicuro ({name})."));
+    let unsafe_path = || Err(format!("The zip contains an unsafe path ({name})."));
     if name.contains('\0') || name.starts_with('/') || name.starts_with('\\') {
         return unsafe_path();
     }
@@ -285,18 +280,16 @@ fn replace_with(
 ) -> Result<(), String> {
     for name in remove {
         if entry_components(name).map(|parts| parts.len()) != Ok(1) || name.contains(['/', '\\']) {
-            return Err(format!(
-                "Nome di cartella da rimuovere non valido ({name})."
-            ));
+            return Err(format!("Invalid name for a folder to remove ({name})."));
         }
     }
 
     let new_folders = folder_names(staging_dir)?;
     if new_folders.is_empty() {
-        return Err("Non c'è niente da installare.".to_string());
+        return Err("There is nothing to install.".to_string());
     }
     fs::create_dir_all(addons_dir)
-        .map_err(|error| format!("Impossibile creare la cartella AddOns ({}).", error.kind()))?;
+        .map_err(|error| format!("Could not create the AddOns folder ({}).", error.kind()))?;
 
     let wanted: HashSet<String> = new_folders
         .iter()
@@ -333,7 +326,7 @@ fn replace_with(
                 let kept = backup.path().to_path_buf();
                 std::mem::forget(backup);
                 message.push_str(&format!(
-                    " Non è stato possibile ripristinare tutte le cartelle originali: si trovano in {}.",
+                    " Not all original folders could be restored: they are in {}.",
                     kept.display()
                 ));
             }
@@ -348,7 +341,7 @@ fn replace_with(
 /// Nomi delle voci di una cartella (cartelle e file), in ordine alfabetico.
 fn folder_names(dir: &Path) -> Result<Vec<String>, String> {
     let read_error =
-        |error: io::Error| format!("Impossibile leggere {} ({}).", dir.display(), error.kind());
+        |error: io::Error| format!("Could not read {} ({}).", dir.display(), error.kind());
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -360,7 +353,7 @@ fn folder_names(dir: &Path) -> Result<Vec<String>, String> {
         let name = entry
             .file_name()
             .into_string()
-            .map_err(|_| format!("Nome non leggibile in {}.", dir.display()))?;
+            .map_err(|_| format!("Unreadable name in {}.", dir.display()))?;
         names.push(name);
     }
     names.sort();
@@ -371,12 +364,9 @@ fn folder_names(dir: &Path) -> Result<Vec<String>, String> {
 /// in quel caso si chiede di chiudere WoW.
 fn rename_error(error: &io::Error) -> String {
     if is_locked(error) {
-        "Alcuni file dell'addon sono in uso: chiudi World of Warcraft e riprova.".to_string()
+        "Some addon files are in use: close World of Warcraft and try again.".to_string()
     } else {
-        format!(
-            "Impossibile spostare le cartelle degli addon ({}).",
-            error.kind()
-        )
+        format!("Could not move the addon folders ({}).", error.kind())
     }
 }
 
@@ -525,7 +515,7 @@ mod tests {
         ] {
             let bytes = zip_of(&[File("Good/Good.toc", b"ok"), File(name, b"bad")]);
             let (error, tmp) = extract_err(&bytes);
-            assert!(error.contains("non sicuro"), "{name}: {error}");
+            assert!(error.contains("unsafe path"), "{name}: {error}");
             assert!(!tmp.path().join("evil").exists());
             assert!(
                 !tmp.path()
@@ -551,7 +541,7 @@ mod tests {
         ] {
             let bytes = zip_of(&[File(name, b"bad")]);
             let (error, _tmp) = extract_err(&bytes);
-            assert!(error.contains("non sicuro"), "{name}: {error}");
+            assert!(error.contains("unsafe path"), "{name}: {error}");
         }
     }
 
@@ -582,29 +572,29 @@ mod tests {
             Symlink("Addon/link", "../../../../etc"),
         ]);
         let (error, _tmp) = extract_err(&bytes);
-        assert!(error.contains("link simbolico"), "{error}");
+        assert!(error.contains("symbolic link"), "{error}");
     }
 
     #[test]
     fn rejects_a_loose_file_at_the_root() {
         let bytes = zip_of(&[File("Addon/Addon.toc", b"ok"), File("README.txt", b"hi")]);
         let (error, _tmp) = extract_err(&bytes);
-        assert!(error.contains("fuori da una cartella"), "{error}");
+        assert!(error.contains("outside a folder"), "{error}");
     }
 
     #[test]
     fn rejects_an_empty_zip_and_garbage() {
         let (error, _tmp) = extract_err(&zip_of(&[]));
-        assert!(error.contains("vuoto"), "{error}");
+        assert!(error.contains("empty"), "{error}");
         let (error, _tmp) = extract_err(b"not a zip at all");
-        assert!(error.contains("non è uno zip"), "{error}");
+        assert!(error.contains("not a valid zip"), "{error}");
     }
 
     #[test]
     fn rejects_folders_that_differ_only_by_case() {
         let bytes = zip_of(&[File("Addon/a.lua", b"a"), File("addon/b.lua", b"b")]);
         let (error, _tmp) = extract_err(&bytes);
-        assert!(error.contains("maiuscole"), "{error}");
+        assert!(error.contains("letter case"), "{error}");
     }
 
     #[test]
@@ -622,7 +612,7 @@ mod tests {
             total_bytes: MAX_TOTAL_BYTES,
         };
         let error = extract_with_limits(&bytes, staging.path(), limits).unwrap_err();
-        assert!(error.contains("troppe voci"), "{error}");
+        assert!(error.contains("too many entries"), "{error}");
         assert!(listing(staging.path()).is_empty());
     }
 
@@ -637,7 +627,7 @@ mod tests {
             total_bytes: 1000,
         };
         let error = extract_with_limits(&bytes, staging.path(), limits).unwrap_err();
-        assert!(error.contains("supera il limite"), "{error}");
+        assert!(error.contains("exceeds the"), "{error}");
         assert!(listing(staging.path()).is_empty());
     }
 
@@ -648,7 +638,7 @@ mod tests {
         let staging = WorkDir::staging(&addons).unwrap();
         write(&staging.path().join("Old/x.lua"), "x");
         let error = extract(&zip_of(&[File("A/a.lua", b"a")]), staging.path()).unwrap_err();
-        assert!(error.contains("non è vuota"), "{error}");
+        assert!(error.contains("not empty"), "{error}");
     }
 
     #[test]
@@ -753,7 +743,7 @@ mod tests {
                 },
             )
             .unwrap_err();
-            assert!(error.contains("Impossibile spostare"), "{error}");
+            assert!(error.contains("Could not move"), "{error}");
             assert_eq!(listing(&addons), ["DBM-Core", "DBM-Obsolete", "Other"]);
             assert_eq!(read(&addons.join("DBM-Core/old.lua")), "old");
             assert_eq!(read(&addons.join("DBM-Obsolete/x.lua")), "x");
@@ -779,7 +769,7 @@ mod tests {
             }
         })
         .unwrap_err();
-        assert!(error.contains("ripristinare"), "{error}");
+        assert!(error.contains("could be restored"), "{error}");
         let backup = interface_listing(&addons)
             .into_iter()
             .find(|name| name.starts_with(".wow-don-backup-"))
@@ -797,7 +787,7 @@ mod tests {
         let staging = staged(&addons, &[File("A/a.lua", b"a")]);
         for name in ["..", "", "../Keep", "Keep/x.lua", "Keep\\x.lua", "C:", "."] {
             let error = replace(&addons, staging.path(), &[name.to_string()]).unwrap_err();
-            assert!(error.contains("non valido"), "{name}: {error}");
+            assert!(error.contains("Invalid name"), "{name}: {error}");
         }
         assert_eq!(listing(&addons), ["Keep"]);
     }
@@ -808,7 +798,7 @@ mod tests {
         let addons = addons_dir(&tmp);
         let staging = WorkDir::staging(&addons).unwrap();
         let error = replace(&addons, staging.path(), &[]).unwrap_err();
-        assert!(error.contains("niente da installare"), "{error}");
+        assert!(error.contains("nothing to install"), "{error}");
     }
 
     #[test]
@@ -822,10 +812,7 @@ mod tests {
     fn a_locked_file_asks_to_close_the_game() {
         for code in [5, 32, 33] {
             let error = rename_error(&io::Error::from_raw_os_error(code));
-            assert!(
-                error.contains("chiudi World of Warcraft"),
-                "{code}: {error}"
-            );
+            assert!(error.contains("close World of Warcraft"), "{code}: {error}");
         }
     }
 }

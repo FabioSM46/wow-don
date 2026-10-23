@@ -260,33 +260,33 @@ impl fmt::Display for CurseForgeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingKey => {
-                f.write_str("Chiave CurseForge mancante: imposta CURSEFORGE_API_KEY nel file .env.")
+                f.write_str("CurseForge key missing: set CURSEFORGE_API_KEY in the .env file.")
             }
             Self::KeyRejected => {
-                f.write_str("CurseForge ha rifiutato la chiave: controlla CURSEFORGE_API_KEY.")
+                f.write_str("CurseForge rejected the key: check CURSEFORGE_API_KEY.")
             }
             Self::RateLimited => {
-                f.write_str("Troppe richieste a CurseForge: riprova tra qualche minuto.")
+                f.write_str("Too many requests to CurseForge: try again in a few minutes.")
             }
             Self::Http(status) => {
-                write!(f, "CurseForge ha risposto con un errore (HTTP {status}).")
+                write!(f, "CurseForge responded with an error (HTTP {status}).")
             }
             Self::Network(TransportError::Timeout) => {
-                f.write_str("CurseForge non ha risposto in tempo.")
+                f.write_str("CurseForge did not respond in time.")
             }
             Self::Network(_) => {
-                f.write_str("Impossibile raggiungere CurseForge: controlla la connessione.")
+                f.write_str("Could not reach CurseForge: check the connection.")
             }
-            Self::InvalidResponse => f.write_str("Risposta di CurseForge non riconosciuta."),
+            Self::InvalidResponse => f.write_str("Unrecognized response from CurseForge."),
             Self::DownloadNotAllowed => f.write_str(
-                "L'autore non permette il download da app di terzi: scarica l'addon dal sito di CurseForge.",
+                "The author does not allow downloads from third-party apps: download the addon from the CurseForge website.",
             ),
             Self::DownloadUrlRejected => f.write_str(
-                "CurseForge ha indicato un indirizzo di download non riconosciuto: download annullato.",
+                "CurseForge gave an unrecognized download address: download cancelled.",
             ),
             Self::DownloadTooLarge => write!(
                 f,
-                "Il file da scaricare supera il limite di {} MiB: download annullato.",
+                "The file to download exceeds the {} MiB limit: download cancelled.",
                 MAX_DOWNLOAD_BYTES / (1024 * 1024)
             ),
         }
@@ -913,7 +913,7 @@ mod tests {
         assert!(
             CurseForgeError::DownloadNotAllowed
                 .to_string()
-                .contains("non permette il download da app di terzi")
+                .contains("does not allow downloads from third-party apps")
         );
         assert!(client.transport.seen_bytes.lock().unwrap().is_empty());
     }
@@ -1204,7 +1204,7 @@ mod tests {
                     Some(true),
                     "progetto distribuibile ma senza downloadUrl"
                 );
-                println!("download non permesso dall'autore");
+                println!("download not allowed by the author");
             }
             Err(error) => panic!("{error}"),
         }
