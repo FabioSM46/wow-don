@@ -18,12 +18,22 @@ use store::{
     InstallationStore, InstalledAddonsStore,
 };
 use tauri::Manager;
+use tauri_plugin_window_state::StateFlags;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Remember only size, position and maximized state of the main window (D28): the
+        // default flags would also restore visibility, decorations and fullscreen, and
+        // without the filter every future window would be tracked too.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
+                .with_filter(|label| label == "main")
+                .build(),
+        )
         .manage(Config::load())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
