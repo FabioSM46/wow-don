@@ -11,6 +11,8 @@
   --danger: #d1242f;
   --radius: 8px;
 
+  /* I controlli nativi (select, lista delle opzioni, barre di scorrimento) seguono il tema. */
+  color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 15px;
   line-height: 1.5;
@@ -259,12 +261,33 @@ button:focus-visible {
 
 .search,
 .select {
+  box-sizing: border-box;
+  height: 36px;
   font: inherit;
   color: inherit;
-  background: var(--surface);
+  background-color: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 6px 10px;
+  padding: 0 10px;
+}
+
+/* Aspetto nativo tolto: stessa altezza della ricerca e freccia nei colori del tema. */
+.select {
+  appearance: none;
+  padding-right: 30px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    right 15px center,
+    right 10px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.select option {
+  color: var(--text);
+  background-color: var(--surface);
 }
 
 .search {
