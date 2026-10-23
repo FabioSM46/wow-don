@@ -139,19 +139,21 @@ function InstallationRow({
           </span>
         ) : (
           <span className="installation-actions">
-            {backups.creating ? (
-              <span className="busy" role="status">
-                Backup in corso…
-              </span>
-            ) : (
-              <button
-                className="link subtle"
-                onClick={() => void backups.create()}
-                aria-label={`Crea un backup di ${installation.name}`}
-              >
-                Backup
-              </button>
-            )}
+            {/* Il pulsante resta montato mentre il backup gira: il focus non salta e lo
+                stato si legge sul controllo stesso. */}
+            <button
+              className={backups.creating ? "link subtle busy" : "link subtle"}
+              onClick={() => void backups.create()}
+              disabled={backups.creating}
+              aria-busy={backups.creating}
+              aria-label={
+                backups.creating
+                  ? `Backup di ${installation.name} in corso`
+                  : `Crea un backup di ${installation.name}`
+              }
+            >
+              {backups.creating ? "Backup in corso…" : "Backup"}
+            </button>
             <button
               className="link subtle"
               onClick={onConfirm}

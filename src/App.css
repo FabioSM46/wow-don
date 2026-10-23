@@ -242,9 +242,10 @@ button:focus-visible {
   white-space: nowrap;
 }
 
-.busy {
-  padding: 2px 4px;
-  color: var(--muted);
+/* Un backup in corso resta visibile anche senza passaggio del mouse. */
+.installation .link.subtle.busy {
+  opacity: 1;
+  cursor: default;
 }
 
 /* Backup: elenco compatto sotto la riga, allineato al nome dell'installazione. */

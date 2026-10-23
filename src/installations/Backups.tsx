@@ -28,18 +28,23 @@ function formatSize(bytes: number): string {
 }
 
 export type Backups = {
-  /** `null` finché la prima lettura non è finita. */
+  /** `null` finché la prima lettura non è riuscita. */
   list: BackupInfo[] | null;
-  error: string | null;
+  /** Errore dell'ultima lettura dell'elenco; si azzera alla lettura successiva riuscita. */
+  listError: string | null;
+  /** Errore dell'ultima azione (Backup, Apri cartella); si azzera all'azione successiva. */
+  actionError: string | null;
   creating: boolean;
+  reload: () => Promise<void>;
   create: () => Promise<void>;
   reveal: (backup: BackupInfo) => Promise<void>;
 };
 
-/** Stato dei backup di un'installazione: elenco, creazione in corso ed errore in linea. */
+/** Stato dei backup di un'installazione: elenco, creazione in corso ed errori in linea. */
 export function useBackups(installationId: string): Backups {
   const [list, setList] = useState<BackupInfo[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   // Vale solo l'ultima lettura chiesta: una risposta vecchia non sovrascrive una più nuova.
   const request = useRef(0);
@@ -48,9 +53,12 @@ export function useBackups(installationId: string): Backups {
     const id = ++request.current;
     try {
       const backups = await api.listBackups(installationId);
-      if (id === request.current) setList(backups);
+      if (id === request.current) {
+        setList(backups);
+        setListError(null);
+      }
     } catch (err) {
-      if (id === request.current) setError(errorMessage(err));
+      if (id === request.current) setListError(errorMessage(err));
     }
   }, [installationId]);
 
@@ -63,12 +71,12 @@ export function useBackups(installationId: string): Backups {
   }, [reload]);
 
   const create = useCallback(async () => {
-    setError(null);
+    setActionError(null);
     setCreating(true);
     try {
       await api.createBackup(installationId);
     } catch (err) {
-      setError(errorMessage(err));
+      setActionError(errorMessage(err));
     } finally {
       setCreating(false);
     }
@@ -78,32 +86,42 @@ export function useBackups(installationId: string): Backups {
   }, [installationId, reload]);
 
   const reveal = useCallback(async (backup: BackupInfo) => {
-    setError(null);
+    setActionError(null);
     try {
       await revealItemInDir(backup.path);
     } catch (err) {
-      setError(errorMessage(err));
+      setActionError(errorMessage(err));
     }
   }, []);
 
-  return { list, error, creating, create, reveal };
+  return { list, listError, actionError, creating, reload, create, reveal };
 }
 
 /** L'elenco compatto degli ultimi backup, sotto la riga dell'installazione. */
 export function BackupList({ backups }: { backups: Backups }) {
-  const { list, error, reveal } = backups;
+  const { list, listError, actionError, reload, reveal } = backups;
+  // `list_backups` restituisce i backup dal più recente (ordinati nel backend, `backup.rs`):
+  // i primi `VISIBLE` sono gli ultimi fatti.
   const hidden = list ? list.length - VISIBLE : 0;
 
   return (
     <div className="backups">
-      {error && (
+      {actionError && (
         <p className="backups-error error" role="alert">
-          {error}
+          {actionError}
+        </p>
+      )}
+      {listError && (
+        <p className="backups-error error" role="alert">
+          {listError}{" "}
+          <button className="link inline" onClick={() => void reload()}>
+            Riprova
+          </button>
         </p>
       )}
       {list === null ? (
         // Prima lettura fallita: basta l'errore, senza una frase che direbbe "nessun backup".
-        !error && <p className="backups-note">Lettura dei backup…</p>
+        !listError && <p className="backups-note">Lettura dei backup…</p>
       ) : list.length === 0 ? (
         <p className="backups-note">
           Nessun backup. Usa «Backup» per salvare <code>WTF</code> e <code>Interface</code> prima
