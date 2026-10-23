@@ -37,20 +37,50 @@ export type AddonGroup = {
 
 const lower = (s: string) => s.toLocaleLowerCase("it");
 
+/** I nomi di un `## Author`, separati da virgola, punto e virgola o `&`. */
+const authorNames = (author: string | null): Set<string> =>
+  new Set(
+    (author ?? "")
+      .split(/[,;&]/)
+      .map((name) => lower(name.trim()))
+      .filter(Boolean),
+  );
+
 /**
- * Raggruppa le cartelle che formano un solo addon. Tre regole:
+ * Autori diversi: nessun nome in comune (`Elv, Simpy` e `fang2hou`). `Elv` e `Elv, Simpy` non
+ * lo sono, e un autore mancante non è una prova.
+ */
+function disjointAuthors(x: string | null, y: string | null): boolean {
+  const a = authorNames(x);
+  const b = authorNames(y);
+  return a.size > 0 && b.size > 0 && ![...a].some((name) => b.has(name));
+}
+
+/**
+ * Raggruppa le cartelle che formano un solo addon. Le prove, dalla più forte:
  *
- * - **dai `.toc`, senza rete**: B va con A se A dichiara B tra le dipendenze obbligatorie e il
- *   nome di B inizia con il nome di A (`Questie` richiede `QuestieDB`);
- * - **dal campo `## Group`**, come fa il gioco: B va con A se il `group` di B è il nome di A
+ * - **il file pubblicato** (dopo il controllo): le cartelle installate che compaiono nelle
+ *   `projectFolders` di una cartella riconosciuta vanno con lei, anche se CurseForge non le
+ *   riconosce una per una; le cartelle riconosciute come lo stesso progetto stanno insieme;
+ * - **il campo `## Group`**, come fa il gioco: B va con A se il `group` di B è il nome di A
  *   (i moduli `EllesmereUI*` dichiarano `EllesmereUI`); se A non è installata, niente;
- * - **da CurseForge**, se c'è il risultato del controllo: le cartelle dello stesso progetto.
+ * - **una dipendenza obbligatoria più il prefisso del nome**, in entrambe le direzioni: A
+ *   richiede B e il nome di B inizia con quello di A (`Questie` → `QuestieDB`), oppure B
+ *   richiede A e il nome di B inizia con quello di A (`Details_Compare2` → `Details`).
  *
- * Una cartella finisce in un solo gruppo. La principale è la cartella indicata da `group`, se
- * ce n'è una nel gruppo; poi, tra le cartelle che non sono moduli `LoadOnDemand` (se ce ne
- * sono), quella che nessun'altra del gruppo richiede; a parità il nome più corto, poi l'ordine
- * alfabetico. Così `EllesmereUI` guida i suoi moduli, `Questie` guida `QuestieDB` e `DBM-Core`
- * guida i moduli di DBM che caricano su richiesta.
+ * **Veto**, che prevale su tutte le prove: due cartelle non stanno mai nello stesso gruppo se
+ * sono riconosciute come progetti diversi, se una è riconosciuta e il suo file non contiene
+ * l'altra, o (senza il controllo a dire il contrario) se i loro `.toc` dichiarano
+ * `X-Curse-Project-ID` diversi o autori senza nomi in comune. Così un plugin di un altro autore (`ElvUI_WindTools` sotto
+ * `ElvUI`) resta una riga sua. L'id Wago non è un confine: Wago elenca come progetti separati
+ * cartelle che arrivano nello stesso file CurseForge (i plugin di Details).
+ *
+ * Gli archi si uniscono dal più forte al più debole e due gruppi si fondono solo se nessuna
+ * coppia tra i loro membri è vietata: una cartella finisce in un solo gruppo. La principale è
+ * la cartella indicata da `group`, se ce n'è una nel gruppo; poi, tra le cartelle che non sono
+ * moduli `LoadOnDemand` (se ce ne sono), quelle che non richiedono una cartella del gruppo il
+ * cui nome è un prefisso del loro (`Details_Compare2` richiede `Details`; `Questie` che
+ * richiede `QuestieDB` resta candidata); a parità il nome più corto, poi l'ordine alfabetico.
  */
 export function groupAddons(
   addons: InstalledAddon[],
@@ -58,46 +88,77 @@ export function groupAddons(
 ): AddonGroup[] {
   const byFolder = new Map(addons.map((a) => [lower(a.folder), a]));
   const parent = new Map<string, string>(addons.map((a) => [a.folder, a.folder]));
+  const members = new Map<string, InstalledAddon[]>(addons.map((a) => [a.folder, [a]]));
   const root = (folder: string): string => {
     let current = folder;
     while (parent.get(current) !== current) current = parent.get(current)!;
     parent.set(folder, current);
     return current;
   };
-  const join = (a: string, b: string) => {
-    const ra = root(a);
-    const rb = root(b);
-    if (ra !== rb) parent.set(rb, ra);
+
+  // Il progetto riconosciuto e le cartelle del suo file, per cartella.
+  const recognised = new Map<string, { id: number; folders: Set<string> }>();
+  for (const addon of addons) {
+    const update = updates?.get(addon.folder);
+    if (!update?.project) continue;
+    recognised.set(addon.folder, {
+      id: update.project.id,
+      folders: new Set((update.projectFolders ?? []).map(lower)),
+    });
+  }
+  const vetoed = (a: InstalledAddon, b: InstalledAddon): boolean => {
+    const pa = recognised.get(a.folder);
+    const pb = recognised.get(b.folder);
+    if (pa && pb) return pa.id !== pb.id;
+    if (pa && !pa.folders.has(lower(b.folder))) return true;
+    if (pb && !pb.folders.has(lower(a.folder))) return true;
+    if (pa || pb) return false;
+    const differ = (x: string | null, y: string | null) =>
+      Boolean(x?.trim()) && Boolean(y?.trim()) && lower(x!.trim()) !== lower(y!.trim());
+    return differ(a.curseProjectId, b.curseProjectId) || disjointAuthors(a.author, b.author);
   };
 
+  // Archi per forza: 0 file pubblicato, 1 `## Group`, 2 dipendenza più prefisso.
+  const edges: [number, InstalledAddon, InstalledAddon][] = [];
+  const firstOfProject = new Map<number, InstalledAddon>();
   for (const addon of addons) {
-    for (const dependency of addon.dependencies) {
-      const other = byFolder.get(lower(dependency));
-      if (other && other !== addon && lower(other.folder).startsWith(lower(addon.folder))) {
-        join(addon.folder, other.folder);
-      }
+    const project = recognised.get(addon.folder);
+    if (!project) continue;
+    const first = firstOfProject.get(project.id);
+    if (first) edges.push([0, first, addon]);
+    else firstOfProject.set(project.id, addon);
+    for (const name of project.folders) {
+      const other = byFolder.get(name);
+      if (other && other !== addon) edges.push([0, addon, other]);
     }
   }
   for (const addon of addons) {
     const target = addon.group ? byFolder.get(lower(addon.group)) : undefined;
-    if (target && target !== addon) join(target.folder, addon.folder);
+    if (target && target !== addon) edges.push([1, target, addon]);
   }
-  if (updates) {
-    const firstOfProject = new Map<number, string>();
-    for (const addon of addons) {
-      const project = updates.get(addon.folder)?.project;
-      if (!project) continue;
-      const first = firstOfProject.get(project.id);
-      if (first) join(first, addon.folder);
-      else firstOfProject.set(project.id, addon.folder);
+  for (const addon of addons) {
+    for (const dependency of addon.dependencies) {
+      const other = byFolder.get(lower(dependency));
+      if (!other || other === addon) continue;
+      const [a, b] = [lower(addon.folder), lower(other.folder)];
+      if (b.startsWith(a)) edges.push([2, addon, other]);
+      else if (a.startsWith(b)) edges.push([2, other, addon]);
     }
   }
 
-  const members = new Map<string, InstalledAddon[]>();
-  for (const addon of addons) {
-    const key = root(addon.folder);
-    members.set(key, [...(members.get(key) ?? []), addon]);
+  edges.sort((x, y) => x[0] - y[0]);
+  for (const [, a, b] of edges) {
+    const ra = root(a.folder);
+    const rb = root(b.folder);
+    if (ra === rb) continue;
+    const left = members.get(ra)!;
+    const right = members.get(rb)!;
+    if (left.some((x) => right.some((y) => vetoed(x, y)))) continue;
+    parent.set(rb, ra);
+    members.set(ra, [...left, ...right]);
+    members.delete(rb);
   }
+
   return [...members.values()].map((group) => {
     const main = pickMain(group);
     const others = group
@@ -114,11 +175,17 @@ function pickMain(group: InstalledAddon[]): InstalledAddon {
   const scope = leaders.length > 0 ? leaders : group;
   const loaded = scope.filter((a) => !a.loadOnDemand);
   const candidates = loaded.length > 0 ? loaded : scope;
-  const required = new Set(
-    candidates.flatMap((a) => a.dependencies.map(lower)).filter(Boolean),
-  );
-  const notRequired = candidates.filter((a) => !required.has(lower(a.folder)));
-  const pool = notRequired.length > 0 ? notRequired : candidates;
+  // Un modulo richiede una cartella del gruppo il cui nome è un prefisso del suo
+  // (`Details_Compare2` → `Details`); `Questie`, che richiede `QuestieDB`, non lo è.
+  const inGroup = new Set(group.map((a) => lower(a.folder)));
+  const isModule = (a: InstalledAddon) => {
+    const self = lower(a.folder);
+    return a.dependencies
+      .map(lower)
+      .some((d) => d !== self && inGroup.has(d) && self.startsWith(d));
+  };
+  const notModules = candidates.filter((a) => !isModule(a));
+  const pool = notModules.length > 0 ? notModules : candidates;
   return [...pool].sort(
     (a, b) => a.folder.length - b.folder.length || a.folder.localeCompare(b.folder),
   )[0];

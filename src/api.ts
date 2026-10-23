@@ -51,6 +51,8 @@ export type AddonUpdate = {
   installedFile: FileSummary | null;
   /** Versione del gioco forzata per il progetto (`gameVersionTypeId`), se c'è. */
   versionOverride: number | null;
+  /** Le cartelle del file riconosciuto per questa cartella; vuoto se non riconosciuta. */
+  projectFolders: string[];
 } & (
   | { status: "notMatched" }
   | { status: "upToDate" }

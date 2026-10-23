@@ -443,7 +443,7 @@ thread).
 - [ ] **Formattazione** — `cargo fmt --all --check` (in `src-tauri/`)
 - [ ] **Lint** — `cargo clippy --all-targets --locked -- -D warnings`
 - [ ] **Build** — `cargo build --locked` e `pnpm build` (`tsc && vite build`)
-- [ ] **Test** — `cargo test --locked`
+- [ ] **Test** — `cargo test --locked` e `pnpm test` (`node --test`, test delle funzioni pure del frontend)
 - [ ] **Automazione** — `scripts/test/*.test.sh` e `python3 .github/scripts/test_deepseek_review.py`
 - [ ] **Nessuna stampa di debug** nei percorsi di produzione
 - [ ] **Nessun segreto** — niente chiavi, token, password o credenziali nel codice o nei test
@@ -463,7 +463,7 @@ Se un gate fallisce, l'implementazione non è finita.
 | `detect`     | Controlli di privacy sull'albero e sui commit della PR, poi classifica i file cambiati con `scripts/changed-areas.sh` |
 | `backend`    | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` (con le librerie di sistema di Tauri) |
 | `backend-windows` | `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` su `windows-latest` (D23); stesso selettore di `backend` |
-| `frontend`   | `pnpm install --frozen-lockfile`, `pnpm build` |
+| `frontend`   | `pnpm install --frozen-lockfile`, `pnpm build`, `pnpm test` |
 | `automation` | Tutta la suite `scripts/test/*.test.sh` più `test_deepseek_review.py` |
 | `ci-gate`    | L'unico check stabile: verifica che ogni job selezionato abbia avuto successo e ogni salto fosse autorizzato |
 

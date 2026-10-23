@@ -225,10 +225,11 @@ Dentro il worktree, per **ogni** area toccata dal diff
 | Area | Comando |
 | ---- | ------- |
 | backend (`src-tauri/**`) | `cd src-tauri && cargo fmt --all --check && cargo clippy --all-targets --locked -- -D warnings && cargo build --locked && cargo test --locked` |
-| frontend (`src/**`, `public/**`, `index.html`, `vite.config.ts`, `tsconfig*.json`) | `pnpm install --frozen-lockfile && pnpm build` |
+| frontend (`src/**`, `public/**`, `index.html`, `vite.config.ts`, `tsconfig*.json`) | `pnpm install --frozen-lockfile && pnpm build && pnpm test` |
 | `package.json` / `pnpm-lock.yaml` | entrambe le righe sopra |
 
-`pnpm build` è `tsc && vite build`: type-check e bundle insieme.
+`pnpm build` è `tsc && vite build`: type-check e bundle insieme. `pnpm test` esegue i
+`src/**/*.test.ts` con `node --test` (Node 22.18 o successivo toglie i tipi da solo).
 
 **Il verdetto di un gate è il suo exit status, e quello di una pipeline è dell'ultimo
 comando.** `cargo clippy ... 2>&1 | tail -5 && echo OK` stampa `OK` su un clippy fallito: clippy

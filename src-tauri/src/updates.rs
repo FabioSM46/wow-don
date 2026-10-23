@@ -144,6 +144,10 @@ pub struct AddonUpdate {
     /// La versione del gioco forzata per il progetto, se c'è: è quella usata per cercare il
     /// file più recente al posto di quella dell'installazione.
     pub version_override: Option<u32>,
+    /// I nomi delle cartelle del file riconosciuto per questa cartella (vuoto se non
+    /// riconosciuta): il frontend li usa per raggruppare le cartelle dello stesso file, anche
+    /// quelle che CurseForge non riconosce una per una.
+    pub project_folders: Vec<String>,
     /// Le cartelle (`modules`) del file installato, con il loro fingerprint: servono
     /// all'aggiornamento per togliere quelle che la versione nuova non ha più. Restano nel
     /// backend.
@@ -178,6 +182,7 @@ pub fn evaluate(
                 installed_file: None,
                 status: UpdateStatus::NotMatched,
                 version_override: None,
+                project_folders: Vec::new(),
                 installed_modules: Vec::new(),
             };
             let Some(fingerprint) = addon.fingerprint else {
@@ -200,6 +205,7 @@ pub fn evaluate(
             });
             update.installed_file = Some(FileSummary::from(&found.file));
             update.installed_modules = found.file.modules.clone();
+            update.project_folders = found.file.modules.iter().map(|m| m.name.clone()).collect();
             update.version_override = overrides.get(&found.id).copied();
             let target = update.version_override.unwrap_or(version_type);
             update.status = match newest_release(found, target) {
@@ -633,6 +639,33 @@ mod tests {
     }
 
     #[test]
+    fn project_folders_come_from_the_recognised_file() {
+        let mut published = file(20, "2026-10-01T00:00:00Z", 1, RETAIL, &[1, 2]);
+        published.modules[0].name = "Details".to_owned();
+        published.modules[1].name = "Details_Compare2".to_owned();
+        let found = FingerprintMatch {
+            id: 61284,
+            file: published,
+            latest_files: Vec::new(),
+        };
+        let result = evaluate(
+            &[
+                addon("Details", Some(1)),
+                addon("Details_Streamer", Some(99)),
+                addon("Broken", None),
+            ],
+            &matches(vec![found]),
+            &[project(61284, Some(true))],
+            RETAIL,
+            &VersionOverrides::new(),
+        );
+        assert_eq!(result[0].project_folders, ["Details", "Details_Compare2"]);
+        // Non riconosciuta o non leggibile: nessuna cartella del progetto.
+        assert!(result[1].project_folders.is_empty());
+        assert!(result[2].project_folders.is_empty());
+    }
+
+    #[test]
     fn an_override_picks_the_classic_era_file_on_a_forever_installation() {
         // Un addon che pubblica per Classic Era ma non per Forever.
         let found = || FingerprintMatch {
@@ -731,6 +764,7 @@ mod tests {
                 },
             },
             version_override: Some(FOREVER),
+            project_folders: vec!["Foo".to_owned()],
             installed_modules: vec![FileModule {
                 name: "Foo".to_owned(),
                 fingerprint: 1,
@@ -742,6 +776,7 @@ mod tests {
         assert_eq!(json["installedFile"], serde_json::Value::Null);
         assert_eq!(json["versionOverride"], FOREVER);
         assert!(json.get("installedModules").is_none());
+        assert_eq!(json["projectFolders"], serde_json::json!(["Foo"]));
         let json = serde_json::to_value(UpdateStatus::NotMatched).unwrap();
         assert_eq!(json["status"], "notMatched");
     }
