@@ -23,10 +23,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         // Remember only size, position and maximized state of the main window (D28): the
-        // default flags would also restore visibility, decorations and fullscreen.
+        // default flags would also restore visibility, decorations and fullscreen, and
+        // without the filter every future window would be tracked too.
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
+                .with_filter(|label| label == "main")
                 .build(),
         )
         .manage(Config::load())

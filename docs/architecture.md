@@ -81,15 +81,19 @@ installazioni a mano e, più avanti, cercarle nei prefissi Lutris noti.
 ## Finestra
 
 La finestra principale (`main`, definita in `tauri.conf.json` senza `center` né posizione
-fissa) ricorda dimensione, posizione e stato massimizzato con `tauri-plugin-window-state`
-(D28), registrato in `lib.rs` con i soli flag `SIZE`, `POSITION` e `MAXIMIZED`: visibilità,
-decorazioni e schermo intero non si salvano. Il plugin ripristina lo stato quando la finestra
-è pronta, lo aggiorna a ogni spostamento e ridimensionamento e lo scrive all'uscita in
-`.window-state.json` dentro `app_config_dir()` (D22). La dimensione salvata è quella della
-finestra non massimizzata, così togliere la massimizzazione la riporta com'era. Se il monitor
-su cui stava la finestra non c'è più, la posizione salvata si ignora e la finestra si apre
-dove la mette il sistema, su un monitor presente. Il frontend non ha permessi per i comandi
-del plugin: lo usa solo il backend.
+fissa e senza `label`, quindi con l'etichetta predefinita `main`) ricorda dimensione,
+posizione e stato massimizzato con `tauri-plugin-window-state` (D28), registrato in `lib.rs`
+con i soli flag `SIZE`, `POSITION` e `MAXIMIZED` e con un filtro sull'etichetta `main`: una
+finestra aggiunta in futuro non eredita il comportamento senza una scelta esplicita;
+visibilità, decorazioni e schermo intero non si salvano. Il plugin ripristina lo stato quando
+la finestra è pronta, lo aggiorna a ogni spostamento e ridimensionamento e lo scrive all'uscita
+in `.window-state.json` dentro `app_config_dir()` (D22). La dimensione salvata è quella della
+finestra non massimizzata: nella 2.5.0 sia il gestore di `Resized` sia `update_state` saltano
+dimensione e posizione quando `is_maximized()` è vero, così togliere la massimizzazione riporta
+la finestra com'era. Se il monitor su cui stava la finestra non c'è più, la posizione salvata
+si ignora (si imposta solo se il rettangolo salvato interseca uno di `available_monitors()`) e
+la finestra si apre dove la mette il sistema, su un monitor presente. Il frontend non ha
+permessi per i comandi del plugin: lo usa solo il backend.
 
 **Limite su Linux con Wayland**: il compositor non permette alle applicazioni di leggere né
 di impostare la posizione delle proprie finestre, quindi lì si ripristinano solo la dimensione
