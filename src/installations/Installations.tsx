@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage, type Installation } from "../api";
+import { BackupList, useBackups } from "./Backups";
 
 type Props = {
   installations: Installation[];
@@ -74,49 +75,97 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
         </p>
       ) : (
         <ul className="installation-list">
-          {installations.map((installation) => {
-            const active = installation.id === activeId;
-            const confirming = installation.id === confirmingId;
-            return (
-              <li key={installation.id} className={active ? "installation active" : "installation"}>
-                <button
-                  className="installation-main"
-                  onClick={() => onSelect(installation.id)}
-                  aria-pressed={active}
-                >
-                  <span className="installation-name">{installation.name}</span>
-                  <span className="installation-path" title={installation.path}>
-                    {installation.path}
-                  </span>
-                </button>
-                {confirming ? (
-                  <span className="confirm">
-                    <span>Rimuovere?</span>
-                    <button
-                      className="link danger"
-                      onClick={() => remove(installation.id)}
-                      disabled={busy}
-                    >
-                      Rimuovi
-                    </button>
-                    <button className="link" onClick={() => setConfirmingId(null)}>
-                      Annulla
-                    </button>
-                  </span>
-                ) : (
-                  <button
-                    className="link subtle"
-                    onClick={() => setConfirmingId(installation.id)}
-                    aria-label={`Rimuovi ${installation.name}`}
-                  >
-                    Rimuovi
-                  </button>
-                )}
-              </li>
-            );
-          })}
+          {installations.map((installation) => (
+            <InstallationRow
+              key={installation.id}
+              installation={installation}
+              active={installation.id === activeId}
+              confirming={installation.id === confirmingId}
+              busy={busy}
+              onSelect={() => onSelect(installation.id)}
+              onConfirm={() => setConfirmingId(installation.id)}
+              onCancel={() => setConfirmingId(null)}
+              onRemove={() => remove(installation.id)}
+            />
+          ))}
         </ul>
       )}
     </section>
+  );
+}
+
+type RowProps = {
+  installation: Installation;
+  active: boolean;
+  confirming: boolean;
+  busy: boolean;
+  onSelect: () => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onRemove: () => void;
+};
+
+/** Una riga: selezione, azioni secondarie (Backup, Rimuovi) e sotto gli ultimi backup. */
+function InstallationRow({
+  installation,
+  active,
+  confirming,
+  busy,
+  onSelect,
+  onConfirm,
+  onCancel,
+  onRemove,
+}: RowProps) {
+  const backups = useBackups(installation.id);
+
+  return (
+    <li className={active ? "installation active" : "installation"}>
+      <div className="installation-row">
+        <button className="installation-main" onClick={onSelect} aria-pressed={active}>
+          <span className="installation-name">{installation.name}</span>
+          <span className="installation-path" title={installation.path}>
+            {installation.path}
+          </span>
+        </button>
+        {confirming ? (
+          <span className="confirm">
+            <span>Rimuovere?</span>
+            <button className="link danger" onClick={onRemove} disabled={busy}>
+              Rimuovi
+            </button>
+            <button className="link" onClick={onCancel}>
+              Annulla
+            </button>
+          </span>
+        ) : (
+          <span className="installation-actions">
+            {/* Il pulsante resta montato mentre il backup gira: il focus non salta e lo
+                stato si legge sul controllo stesso. */}
+            <button
+              className={backups.creating ? "link subtle busy" : "link subtle"}
+              onClick={() => void backups.create()}
+              disabled={backups.creating}
+              aria-busy={backups.creating}
+              aria-label={
+                backups.creating
+                  ? `Backup di ${installation.name} in corso`
+                  : `Crea un backup di ${installation.name}`
+              }
+            >
+              {backups.creating ? "Backup in corso…" : "Backup"}
+            </button>
+            <button
+              className="link subtle"
+              onClick={onConfirm}
+              disabled={backups.creating}
+              aria-label={`Rimuovi ${installation.name}`}
+            >
+              Rimuovi
+            </button>
+          </span>
+        )}
+      </div>
+      <BackupList backups={backups} />
+    </li>
   );
 }
