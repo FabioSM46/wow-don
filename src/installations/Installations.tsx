@@ -5,12 +5,12 @@ import { BackupList, useBackups } from "./Backups";
 
 type Props = {
   installations: Installation[];
-  activeId: string | null;
-  onSelect: (id: string) => void;
+  /** L'installazione appena aggiunta diventa quella attiva (il selettore è nell'header). */
+  onAdded: (id: string) => void;
   onChange: (installations: Installation[]) => void;
 };
 
-export function Installations({ installations, activeId, onSelect, onChange }: Props) {
+export function Installations({ installations, onAdded, onChange }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -30,7 +30,7 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
       const added = await api.addInstallation(selected);
       // La lista si rilegge dal backend invece di aggiungere a quella vista all'inizio.
       onChange(await api.listInstallations());
-      onSelect(added.id);
+      onAdded(added.id);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -79,10 +79,8 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
             <InstallationRow
               key={installation.id}
               installation={installation}
-              active={installation.id === activeId}
               confirming={installation.id === confirmingId}
               busy={busy}
-              onSelect={() => onSelect(installation.id)}
               onConfirm={() => setConfirmingId(installation.id)}
               onCancel={() => setConfirmingId(null)}
               onRemove={() => remove(installation.id)}
@@ -96,22 +94,18 @@ export function Installations({ installations, activeId, onSelect, onChange }: P
 
 type RowProps = {
   installation: Installation;
-  active: boolean;
   confirming: boolean;
   busy: boolean;
-  onSelect: () => void;
   onConfirm: () => void;
   onCancel: () => void;
   onRemove: () => void;
 };
 
-/** Una riga: selezione, azioni secondarie (Backup, Rimuovi) e sotto gli ultimi backup. */
+/** Una riga: nome e percorso, azioni secondarie (Backup, Rimuovi) e sotto gli ultimi backup. */
 function InstallationRow({
   installation,
-  active,
   confirming,
   busy,
-  onSelect,
   onConfirm,
   onCancel,
   onRemove,
@@ -119,14 +113,14 @@ function InstallationRow({
   const backups = useBackups(installation.id);
 
   return (
-    <li className={active ? "installation active" : "installation"}>
+    <li className="installation">
       <div className="installation-row">
-        <button className="installation-main" onClick={onSelect} aria-pressed={active}>
+        <div className="installation-main">
           <span className="installation-name">{installation.name}</span>
           <span className="installation-path" title={installation.path}>
             {installation.path}
           </span>
-        </button>
+        </div>
         {confirming ? (
           <span className="confirm">
             <span>Remove?</span>
