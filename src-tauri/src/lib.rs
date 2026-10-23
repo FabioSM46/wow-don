@@ -1,6 +1,7 @@
 mod addons;
 mod commands;
 mod config;
+mod install;
 mod installations;
 mod sources;
 mod store;
