@@ -95,6 +95,27 @@ describe("groupAddons", () => {
     assert.deepEqual(layout(addons), ["Questie QuestieDB"]);
   });
 
+  it("joins Questie + QuestieDB whatever their ## Author fields say", () => {
+    // The real `.toc` fields: free text, names separated by `/`, different prefixes.
+    const addons = [
+      addon("Questie", {
+        author: "Aero/Logon/Muehe/TheCrux(BreakBB)/Drejjmit/Dyaxler/Cheeq/TechnoHunter/Yttrium/Everyone else",
+        dependencies: ["QuestieDB"],
+        curseProjectId: "334372",
+      }),
+      addon("QuestieDB", {
+        author: "Code: Logonz Data: Muehe/TheCrux(BreakBB)/Drejjmit/Dyaxler/Cheeq/TechnoHunter/Yttrium/Everyone else",
+      }),
+    ];
+    assert.deepEqual(layout(addons), ["Questie QuestieDB"]);
+    // Even with no name in common, the main folder requiring its own data folder wins.
+    const strangers = [
+      addon("Questie", { author: "Aero", dependencies: ["QuestieDB"] }),
+      addon("QuestieDB", { author: "Logonz" }),
+    ];
+    assert.deepEqual(layout(strangers), ["Questie QuestieDB"]);
+  });
+
   it("joins the modules that declare ## Group (EllesmereUI)", () => {
     const addons = [
       addon("EllesmereUI", { curseProjectId: "1477613" }),
@@ -189,9 +210,11 @@ describe("groupAddons", () => {
       // One shared name is enough: a module often lists fewer authors than the main folder.
       addon("ElvUI_Skins", { author: "Simpy & Elv", dependencies: ["ElvUI"] }),
       addon("ElvUI_Data", { author: "Elv", dependencies: ["ElvUI"] }),
+      // `/` separates names too.
+      addon("ElvUI_Extras", { author: "Simpy/Merathilis", dependencies: ["ElvUI"] }),
     ];
     assert.deepEqual(layout(addons), [
-      "ElvUI ElvUI_Data ElvUI_Libraries ElvUI_Options ElvUI_Skins",
+      "ElvUI ElvUI_Data ElvUI_Extras ElvUI_Libraries ElvUI_Options ElvUI_Skins",
       "ElvUI_WindTools",
     ]);
   });
