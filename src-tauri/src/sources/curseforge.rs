@@ -1197,8 +1197,10 @@ mod tests {
                 .iter()
                 .map(|m| (m.name.as_str(), m.fingerprint))
                 .collect();
+            // `evaluate` calcola lo stato di aggiornamento da `latestFiles`: va visto anche qui.
+            let latest: Vec<u32> = found.latest_files.iter().map(|f| f.id).collect();
             println!(
-                "partial: mod {} file {} modules {modules:?}",
+                "partial: mod {} file {} modules {modules:?} latestFiles {latest:?}",
                 found.id, found.file.id
             );
         }
