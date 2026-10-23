@@ -171,7 +171,7 @@ button:focus-visible {
   overflow: hidden;
 }
 
-.installation {
+.installation-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -233,12 +233,67 @@ button:focus-visible {
   opacity: 1;
 }
 
-.confirm {
+.confirm,
+.installation-actions {
   display: flex;
   align-items: center;
   gap: 4px;
   font-size: 0.9rem;
   white-space: nowrap;
+}
+
+.busy {
+  padding: 2px 4px;
+  color: var(--muted);
+}
+
+/* Backup: elenco compatto sotto la riga, allineato al nome dell'installazione. */
+
+.backups {
+  padding: 0 12px 10px 14px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.backups-note,
+.backups-error {
+  margin: 0;
+}
+
+.backups-error {
+  color: var(--danger);
+}
+
+.backups-error + .backups-note,
+.backups-error + .backup-list {
+  margin-top: 4px;
+}
+
+.backup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.backup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 24px;
+}
+
+.backup-date {
+  min-width: 11em;
+}
+
+.backup-size {
+  min-width: 5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.backup .link {
+  font-size: inherit;
 }
 
 /* Addon */
