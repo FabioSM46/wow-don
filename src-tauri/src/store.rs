@@ -274,7 +274,7 @@ fn read_addon_settings(file: &Path) -> Result<SettingsByInstallation, String> {
     })?;
     if stored.version != ADDON_SETTINGS_VERSION {
         return Err(format!(
-            "{ADDON_SETTINGS_FILE} has an unsupported version ({}).",
+            "{ADDON_SETTINGS_FILE} has an unsupported version ({}): update the app or move the file away, then restart.",
             stored.version
         ));
     }
@@ -557,6 +557,13 @@ mod tests {
         assert_eq!(
             store.overrides_for("a").unwrap(),
             VersionOverrides::from([(8, RETAIL)])
+        );
+
+        // La lettura non tocca il file: il tipo sconosciuto resta finché non si salva.
+        let before: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(
+            before["installations"]["a"]["7"],
+            serde_json::json!({"gameVersionTypeId": 1})
         );
 
         // Il salvataggio successivo lo toglie dal file.
