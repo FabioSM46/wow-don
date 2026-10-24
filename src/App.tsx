@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { api, errorMessage, type AppStatus, type Installation, type Theme } from "./api";
 import { AddonTable } from "./addons/AddonTable";
+import { Discovered } from "./installations/Discovered";
 import { Installations } from "./installations/Installations";
 import { Appearance } from "./options/Appearance";
 import { applyTheme } from "./options/theme";
@@ -203,6 +204,14 @@ function App() {
           aria-labelledby="tab-options"
           hidden={tab !== "options"}
         >
+          {installations !== null && (
+            <Discovered
+              active={tab === "options"}
+              installations={installations}
+              onAdded={setActiveId}
+              onChange={changeInstallations}
+            />
+          )}
           {installations !== null && (
             <Installations
               installations={installations}

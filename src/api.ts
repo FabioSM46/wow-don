@@ -20,6 +20,17 @@ export type Installation = {
   name: string;
 };
 
+/**
+ * Un'installazione trovata sul computer e non ancora aggiunta (`discover_installations`): gli
+ * stessi `path`, `flavor` e `name` di `Installation`, più da dove viene (testo in inglese).
+ */
+export type DiscoveredInstallation = {
+  path: string;
+  flavor: string;
+  name: string;
+  origin: string;
+};
+
 export type InstalledAddon = {
   folder: string;
   tocFile: string | null;
@@ -180,6 +191,8 @@ export const api = {
   appStatus: () => invoke<AppStatus>("app_status"),
   listInstallations: () => invoke<Installation[]>("list_installations"),
   addInstallation: (path: string) => invoke<Installation>("add_installation", { path }),
+  /** Le installazioni già aggiunte sono escluse dal backend; nessuna trovata è una lista vuota. */
+  discoverInstallations: () => invoke<DiscoveredInstallation[]>("discover_installations"),
   removeInstallation: (id: string) => invoke<void>("remove_installation", { id }),
   listAddons: (installationId: string) =>
     invoke<InstalledAddon[]>("list_addons", { installationId }),
