@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   api,
   errorMessage,
@@ -11,6 +12,8 @@ import {
 } from "../api";
 import { AddonDetailView } from "./AddonDetail";
 import { CatalogTable } from "./CatalogTable";
+import { InstallAction, InstallResult, type InstallRun } from "./InstallAction";
+import { installedIds, summarizeInstall, withInstalled } from "./install";
 import {
   RequestTracker,
   SEARCH_DELAY_MS,
@@ -32,6 +35,8 @@ type Props = {
   active: boolean;
   /** `false` quando la chiave CurseForge manca; `null` finché lo stato non è noto. */
   keyConfigured: boolean | null;
+  /** Un'installazione ha messo almeno un progetto nell'installazione (la tab Installed). */
+  onInstalled?: () => void;
 };
 
 /** I risultati: quelli mostrati restano visibili mentre arriva una ricerca nuova. */
@@ -47,7 +52,12 @@ type VersionChoice = { installationId: string; versionType: number | null };
 /** L'addon aperto nel dettaglio vale per l'installazione in cui è stato aperto. */
 type Selection = { installationId: string; addon: CatalogAddon };
 
-export function Search({ installation, active, keyConfigured }: Props) {
+/** Installazioni e progetti installati valgono per installazione: la chiave le tiene insieme. */
+function installKey(installationId: string, modId: number): string {
+  return `${installationId}:${modId}`;
+}
+
+export function Search({ installation, active, keyConfigured, onInstalled }: Props) {
   const [started, setStarted] = useState(active);
   if (active && !started) setStarted(true);
 
@@ -87,13 +97,76 @@ export function Search({ installation, active, keyConfigured }: Props) {
 
   const missingKey = keyConfigured === false;
 
+  // Le installazioni avviate nella sessione e i progetti installati dopo la risposta della
+  // ricerca, che il segno "installato" della risposta non conosce ancora.
+  const [runs, setRuns] = useState<Map<string, InstallRun>>(new Map());
+  const [installedKeys, setInstalledKeys] = useState<Set<string>>(new Set());
+  // L'ultima installazione avviata: il suo esito si mostra sopra i risultati.
+  const [lastInstall, setLastInstall] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const installedHere = useMemo(() => {
+    const prefix = `${installation.id}:`;
+    const ids = new Set<number>();
+    for (const key of installedKeys) {
+      if (key.startsWith(prefix)) ids.add(Number(key.slice(prefix.length)));
+    }
+    return ids;
+  }, [installedKeys, installation.id]);
+
+  function install(addon: CatalogAddon) {
+    const id = installation.id;
+    const key = installKey(id, addon.id);
+    if (runs.get(key)?.status === "running") return;
+    const setRun = (run: InstallRun) => setRuns((previous) => new Map(previous).set(key, run));
+    setRun({ status: "running" });
+    setLastInstall(key);
+    setPageError(null);
+    api.installAddon(id, addon.id).then(
+      (outcomes) => {
+        const ids = installedIds(outcomes);
+        if (ids.length > 0) {
+          setInstalledKeys((previous) => {
+            const next = new Set(previous);
+            for (const modId of ids) next.add(installKey(id, modId));
+            return next;
+          });
+          onInstalled?.();
+        }
+        setRun({ status: "done", summary: summarizeInstall(outcomes, addon) });
+      },
+      (err) => setRun({ status: "failed", message: errorMessage(err) }),
+    );
+  }
+
+  function openPage(url: string) {
+    setPageError(null);
+    openUrl(url).catch((err) => setPageError(`The page could not be opened: ${errorMessage(err)}`));
+  }
+
+  function renderInstall(variant: "row" | "detail") {
+    return (addon: CatalogAddon) => (
+      <InstallAction
+        addon={addon}
+        run={runs.get(installKey(installation.id, addon.id))}
+        variant={variant}
+        onInstall={install}
+        onOpenPage={openPage}
+      />
+    );
+  }
+
   function openDetail(addon: CatalogAddon) {
     if (!selected) savedScroll.current = window.scrollY;
     setSelection({ installationId: installation.id, addon });
     setLastSelectedId(addon.id);
+    setPageError(null);
   }
 
-  const closeDetail = useCallback(() => setSelection(null), []);
+  // L'errore di un link aperto nel dettaglio non riguarda i risultati, e viceversa.
+  const closeDetail = useCallback(() => {
+    setSelection(null);
+    setPageError(null);
+  }, []);
 
   // Prima del disegno: il dettaglio parte dall'alto, i risultati tornano dove erano, con il
   // focus sulla riga da cui si era partiti.
@@ -200,6 +273,10 @@ export function Search({ installation, active, keyConfigured }: Props) {
 
   const options = categoryOptions(categories);
   const results = load.results;
+  const shownAddons = results?.addons.map((addon) => withInstalled(addon, installedHere)) ?? [];
+  const lastRun =
+    lastInstall?.startsWith(`${installation.id}:`) ? runs.get(lastInstall) : undefined;
+  const selectedRun = selected ? runs.get(installKey(installation.id, selected.id)) : undefined;
   const sortLabel = SORTS.find((s) => s.id === params.sort)?.label ?? "";
   const ascending = params.sortOrder === "asc";
 
@@ -208,12 +285,20 @@ export function Search({ installation, active, keyConfigured }: Props) {
       {selected && (
         <AddonDetailView
           installationId={installation.id}
-          addon={selected}
+          addon={withInstalled(selected, installedHere)}
           versionType={versionType}
           versionTypes={versionTypes}
           active={active}
           onBack={closeDetail}
-        />
+          renderActions={renderInstall("detail")}
+        >
+          {pageError && (
+            <p className="message error" role="alert">
+              {pageError}
+            </p>
+          )}
+          {selectedRun && <InstallResult run={selectedRun} />}
+        </AddonDetailView>
       )}
 
       <div ref={resultsRef} hidden={selected !== null}>
@@ -297,6 +382,13 @@ export function Search({ installation, active, keyConfigured }: Props) {
           </div>
         </div>
 
+        {pageError && (
+          <p className="message error" role="alert">
+            {pageError}
+          </p>
+        )}
+        {lastRun && <InstallResult run={lastRun} />}
+
         {categoriesError && (
           <p className="message hint" role="status">
             Categories are unavailable: {categoriesError}
@@ -337,9 +429,10 @@ export function Search({ installation, active, keyConfigured }: Props) {
               </p>
             ) : (
               <CatalogTable
-                addons={results.addons}
+                addons={shownAddons}
                 onSelect={openDetail}
                 selectedId={lastSelectedId}
+                renderActions={renderInstall("row")}
               />
             )}
             {hasMore(results) && (

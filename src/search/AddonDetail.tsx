@@ -23,6 +23,8 @@ type Props = {
   onBack: () => void;
   /** Le azioni sull'addon (per esempio Install), a destra dell'intestazione. */
   renderActions?: (addon: CatalogAddon) => ReactNode;
+  /** Messaggi sull'addon (per esempio l'esito di un'installazione), sotto l'intestazione. */
+  children?: ReactNode;
 };
 
 type Load =
@@ -39,6 +41,7 @@ export function AddonDetailView({
   active,
   onBack,
   renderActions,
+  children,
 }: Props) {
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [retry, setRetry] = useState(0);
@@ -75,8 +78,12 @@ export function AddonDetailView({
   }, [active, onBack]);
 
   const detail = load.status === "ready" ? load.detail : null;
-  // Dopo il caricamento valgono i dati del dettaglio, più recenti di quelli della riga.
-  const shown: CatalogAddon = detail ?? addon;
+  // Dopo il caricamento valgono i dati del dettaglio, più recenti di quelli della riga; il segno
+  // "installato" della riga vale anche dopo, perché un'installazione fatta dopo il caricamento
+  // lo cambia solo lì.
+  const shown: CatalogAddon = detail
+    ? { ...detail, installed: detail.installed || addon.installed }
+    : addon;
   const name = shown.name || `#${shown.id}`;
 
   return (
@@ -131,6 +138,8 @@ export function AddonDetailView({
         </div>
         {renderActions && <div className="detail-actions">{renderActions(shown)}</div>}
       </header>
+
+      {children}
 
       {load.status === "loading" && <p className="muted">Loading details…</p>}
 
