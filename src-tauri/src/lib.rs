@@ -16,8 +16,8 @@ use std::sync::Mutex;
 
 use config::Config;
 use store::{
-    ADDON_SETTINGS_FILE, AddonSettingsStore, INSTALLATIONS_FILE, INSTALLED_ADDONS_FILE,
-    InstallationStore, InstalledAddonsStore,
+    ADDON_SETTINGS_FILE, APP_SETTINGS_FILE, AddonSettingsStore, AppSettingsStore,
+    INSTALLATIONS_FILE, INSTALLED_ADDONS_FILE, InstallationStore, InstalledAddonsStore,
 };
 use tauri::Manager;
 use tauri_plugin_window_state::StateFlags;
@@ -49,6 +49,9 @@ pub fn run() {
             app.manage(Mutex::new(InstalledAddonsStore::load(
                 config_dir.join(INSTALLED_ADDONS_FILE),
             )));
+            app.manage(Mutex::new(AppSettingsStore::load(
+                config_dir.join(APP_SETTINGS_FILE),
+            )));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -68,6 +71,8 @@ pub fn run() {
             commands::addon_detail,
             commands::create_backup,
             commands::list_backups,
+            commands::get_settings,
+            commands::set_theme,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
