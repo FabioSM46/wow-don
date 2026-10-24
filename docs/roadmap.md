@@ -47,6 +47,17 @@ Ultimo aggiornamento: 2026-10-24.
   obbligatorie installate in automatico come in WowUp; gli addon con
   `allowModDistribution = false` rimandano al sito (D13).
 
+## M4.5 — macOS, ricerca delle installazioni e tema (fatto)
+
+- L'app funziona anche su macOS con il client nativo (D29); job `backend-macos` in CI sulle
+  PR verso `main` e su quelle che toccano `ci.yml`.
+- Pacchetto `.dmg` universale (Apple Silicon e Intel), non firmato, nella release (D24).
+- Ricerca automatica delle installazioni: percorsi standard e registro di Battle.net su
+  Windows (D30), `Applications` su macOS, prefissi Wine su Linux (`~/.wine`, Lutris, Bottles,
+  Steam/Proton). Le installazioni trovate si propongono in Options con "Add", mai aggiunte da
+  sole.
+- Options: scelta del tema (sistema, chiaro, scuro) salvata dal backend.
+
 ## M5 — Richiesta chiave per applicazioni di terzi
 
 - Inviare a CurseForge/Overwolf il form per la chiave da applicazione.
@@ -54,12 +65,10 @@ Ultimo aggiornamento: 2026-10-24.
 
 ## Dopo
 
-- Altre fonti: GitHub releases, WoWInterface, Wago. Wago richiede la chiave da abbonato
-  dell'utente (facoltativa, mai inclusa nell'app) e il permesso di usarla in un gestore
-  diverso da WowUp: in pausa per ora.
-- Opzioni: scelta del tema (sistema, chiaro, scuro) salvata dal backend; `color-scheme`
-  va dichiarato insieme ai colori del tema scelto.
-- Scoperta automatica dei prefissi Wine su Linux (`~/.wine`, Lutris, Bottles, Steam/Proton):
-  backend fatto (issue #88); la proposta nell'interfaccia è la issue #89.
-- Pacchetti di rilascio: `.deb` per Linux e installer NSIS per Windows (D24), costruiti
-  dalla CI.
+- Altre fonti: GitHub releases, WoWInterface, Wago. Wago richiede la "Wago Access Key" da abbonato
+  Patreon dell'utente (facoltativa, mai inclusa nell'app; l'API usata da WowUp è
+  `addons.wago.io/api/external`, non documentata) e il permesso di usarla in un gestore
+  diverso da WowUp: in attesa della chiave. GitHub releases non aiuta per Details (nessuno
+  zip dal 2021).
+- Primo rilascio provato: `.deb`, installer NSIS e `.dmg` costruiti dalla CI (D24) al primo
+  tag su `main`.
