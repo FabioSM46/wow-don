@@ -1,5 +1,6 @@
 mod addons;
 mod backup;
+mod catalog;
 mod commands;
 mod config;
 mod install;
@@ -59,6 +60,8 @@ pub fn run() {
             commands::clear_version_override,
             commands::check_updates,
             commands::update_addons,
+            commands::search_catalog,
+            commands::list_categories,
             commands::create_backup,
             commands::list_backups,
         ])

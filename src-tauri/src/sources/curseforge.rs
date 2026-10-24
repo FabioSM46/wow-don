@@ -447,6 +447,150 @@ pub struct GameVersionType {
     pub slug: String,
 }
 
+/// Un mod come lo restituisce la ricerca: [`Mod`] più i campi descrittivi del catalogo.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogMod {
+    #[serde(flatten)]
+    pub project: Mod,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub summary: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub authors: Vec<ModAuthor>,
+    #[serde(default, deserialize_with = "count")]
+    pub download_count: u64,
+    /// Data ISO 8601 dell'ultima modifica del progetto.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub date_modified: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub categories: Vec<Category>,
+    #[serde(default)]
+    pub logo: Option<ModAsset>,
+}
+
+/// Un conteggio descrittivo: `null` vale 0, e un numero con la virgola (l'API ne manda per
+/// alcuni progetti) si tronca invece di far fallire tutta la risposta.
+fn count<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Number>::deserialize(deserializer)?;
+    Ok(value.map_or(0, |n| {
+        n.as_u64().unwrap_or_else(|| {
+            // `as` satura: un negativo diventa 0, un valore enorme `u64::MAX`.
+            n.as_f64().map_or(0, |f| f as u64)
+        })
+    }))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModAuthor {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModAsset {
+    pub thumbnail_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Category {
+    pub id: u32,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub name: String,
+    #[serde(default)]
+    pub parent_category_id: Option<u32>,
+    /// Le classi sono le categorie di primo livello (per esempio "Addons" in altri giochi).
+    #[serde(default)]
+    pub is_class: Option<bool>,
+}
+
+/// La paginazione di `GET /v1/mods/search`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pagination {
+    pub index: u32,
+    pub page_size: u32,
+    pub result_count: u32,
+    pub total_count: u64,
+}
+
+/// Una pagina di risultati della ricerca.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SearchPage {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub data: Vec<CatalogMod>,
+    pub pagination: Pagination,
+}
+
+/// `sortOrder` della ricerca.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+
+impl SortOrder {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
+}
+
+/// I parametri di `GET /v1/mods/search` oltre a `gameId`: quelli a `None` non si mandano.
+/// `sort_field` è il numero di `ModsSearchSortField` della documentazione.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModSearch {
+    pub search_filter: Option<String>,
+    pub category_id: Option<u32>,
+    pub game_version_type_id: Option<u32>,
+    pub sort_field: Option<u32>,
+    pub sort_order: Option<SortOrder>,
+    pub index: Option<u32>,
+    pub page_size: Option<u32>,
+}
+
+impl ModSearch {
+    /// L'URL della ricerca, con i valori codificati.
+    fn url(&self) -> String {
+        let mut url = reqwest::Url::parse(&format!("{BASE_URL}/v1/mods/search"))
+            .expect("BASE_URL è un URL valido");
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("gameId", &WOW_GAME_ID.to_string());
+            if let Some(filter) = &self.search_filter {
+                query.append_pair("searchFilter", filter);
+            }
+            let numbers = [
+                ("categoryId", self.category_id),
+                ("gameVersionTypeId", self.game_version_type_id),
+                ("sortField", self.sort_field),
+            ];
+            for (name, value) in numbers {
+                if let Some(value) = value {
+                    query.append_pair(name, &value.to_string());
+                }
+            }
+            if let Some(order) = self.sort_order {
+                query.append_pair("sortOrder", order.as_str());
+            }
+            for (name, value) in [("index", self.index), ("pageSize", self.page_size)] {
+                if let Some(value) = value {
+                    query.append_pair(name, &value.to_string());
+                }
+            }
+        }
+        url.into()
+    }
+}
+
 #[derive(Serialize)]
 struct FingerprintsRequest<'a> {
     fingerprints: &'a [u32],
@@ -484,6 +628,12 @@ impl<T: Transport> CurseForgeClient<T> {
                 .filter(|k| !k.is_empty())
                 .map(ApiKey::new),
         }
+    }
+
+    /// Il trasporto, per i test di altri moduli che usano un trasporto finto.
+    #[cfg(test)]
+    pub fn transport(&self) -> &T {
+        &self.transport
     }
 
     fn key(&self) -> Result<&ApiKey, CurseForgeError> {
@@ -526,6 +676,19 @@ impl<T: Transport> CurseForgeClient<T> {
         decode(self.transport.get(&url, key))
     }
 
+    /// Una pagina della ricerca nel catalogo di WoW (`GET /v1/mods/search`).
+    pub fn search_mods(&self, search: &ModSearch) -> Result<SearchPage, CurseForgeError> {
+        let key = self.key()?;
+        decode_body(self.transport.get(&search.url(), key))
+    }
+
+    /// Le categorie degli addon di WoW (`GET /v1/categories`).
+    pub fn categories(&self) -> Result<Vec<Category>, CurseForgeError> {
+        let key = self.key()?;
+        let url = format!("{BASE_URL}/v1/categories?gameId={WOW_GAME_ID}");
+        decode(self.transport.get(&url, key))
+    }
+
     /// Il dettaglio di un file di un mod (`GET /v1/mods/{modId}/files/{fileId}`).
     pub fn get_file(&self, mod_id: u32, file_id: u32) -> Result<File, CurseForgeError> {
         let key = self.key()?;
@@ -562,14 +725,22 @@ impl<T: Transport> CurseForgeClient<T> {
     }
 }
 
+/// Il campo `data` della risposta.
 fn decode<D: DeserializeOwned>(
+    response: Result<HttpResponse, TransportError>,
+) -> Result<D, CurseForgeError> {
+    decode_body::<Envelope<D>>(response).map(|envelope| envelope.data)
+}
+
+/// Tutto il corpo della risposta, per le risposte che hanno altro accanto a `data`.
+fn decode_body<D: DeserializeOwned>(
     response: Result<HttpResponse, TransportError>,
 ) -> Result<D, CurseForgeError> {
     let response = response.map_err(CurseForgeError::Network)?;
     match response.status {
-        200..=299 => serde_json::from_str::<Envelope<D>>(&response.body)
-            .map(|envelope| envelope.data)
-            .map_err(|_| CurseForgeError::InvalidResponse),
+        200..=299 => {
+            serde_json::from_str::<D>(&response.body).map_err(|_| CurseForgeError::InvalidResponse)
+        }
         401 | 403 => Err(CurseForgeError::KeyRejected),
         429 => Err(CurseForgeError::RateLimited),
         status => Err(CurseForgeError::Http(status)),
@@ -886,6 +1057,131 @@ mod tests {
         );
         client.version_types().unwrap();
         assert_eq!(client.transport.seen.lock().unwrap()[0].1, KEY);
+    }
+
+    const SEARCH: &str = r#"{
+      "data": [
+        {"id": 61284, "name": "Details! Damage Meter", "slug": "details",
+         "summary": "Meter", "authors": [{"id": 1, "name": "Terciob", "url": null}],
+         "downloadCount": 123456789.0, "dateModified": "2026-10-01T12:00:00Z",
+         "categories": [{"id": 1, "gameId": 1, "name": "Combat", "parentCategoryId": 2, "isClass": false}],
+         "logo": {"id": 5, "modId": 61284, "thumbnailUrl": "https://media.forgecdn.net/thumb.png"},
+         "allowModDistribution": true,
+         "latestFilesIndexes": [{"gameVersion": "12.1.5", "fileId": 9, "releaseType": 1, "gameVersionTypeId": 517}]},
+        {"id": 2, "name": "Bare", "summary": null, "authors": null, "downloadCount": null,
+         "dateModified": null, "categories": null, "logo": null}
+      ],
+      "pagination": {"index": 50, "pageSize": 50, "resultCount": 2, "totalCount": 52}
+    }"#;
+
+    #[test]
+    fn search_reads_mods_and_pagination() {
+        let client = client(Ok((200, SEARCH)));
+        let search = ModSearch {
+            search_filter: Some("deadly boss & mods".to_owned()),
+            category_id: Some(1),
+            game_version_type_id: Some(517),
+            sort_field: Some(2),
+            sort_order: Some(SortOrder::Desc),
+            index: Some(50),
+            page_size: Some(50),
+        };
+        let page = client.search_mods(&search).unwrap();
+        assert_eq!(
+            page.pagination,
+            Pagination {
+                index: 50,
+                page_size: 50,
+                result_count: 2,
+                total_count: 52
+            }
+        );
+        let details = &page.data[0];
+        assert_eq!(details.project.id, 61284);
+        assert_eq!(details.project.allow_mod_distribution, Some(true));
+        assert_eq!(details.project.latest_files_indexes[0].file_id, 9);
+        assert_eq!(details.authors[0].name, "Terciob");
+        assert_eq!(details.download_count, 123_456_789);
+        assert_eq!(details.categories[0].parent_category_id, Some(2));
+        assert_eq!(
+            details.logo.as_ref().unwrap().thumbnail_url.as_deref(),
+            Some("https://media.forgecdn.net/thumb.png")
+        );
+        // I campi descrittivi `null` valgono come vuoti.
+        let bare = &page.data[1];
+        assert!(bare.summary.is_empty() && bare.authors.is_empty());
+        assert!(bare.categories.is_empty() && bare.date_modified.is_empty());
+        assert_eq!((bare.download_count, bare.logo.clone()), (0, None));
+
+        let seen = client.transport.seen.lock().unwrap();
+        assert_eq!(
+            seen[0].0,
+            "https://api.curseforge.com/v1/mods/search?gameId=1&searchFilter=deadly+boss+%26+mods\
+             &categoryId=1&gameVersionTypeId=517&sortField=2&sortOrder=desc&index=50&pageSize=50"
+        );
+        assert_eq!((seen[0].1.as_str(), seen[0].2.as_ref()), (KEY, None));
+    }
+
+    #[test]
+    fn search_omits_unset_parameters() {
+        let client = client(Ok((200, SEARCH)));
+        client.search_mods(&ModSearch::default()).unwrap();
+        assert_eq!(
+            client.transport.seen.lock().unwrap()[0].0,
+            "https://api.curseforge.com/v1/mods/search?gameId=1"
+        );
+    }
+
+    #[test]
+    fn search_without_pagination_is_invalid() {
+        for body in [r#"{"data": []}"#, r#"{"data": [], "pagination": null}"#] {
+            assert_eq!(
+                client(Ok((200, body))).search_mods(&ModSearch::default()),
+                Err(CurseForgeError::InvalidResponse)
+            );
+        }
+        assert_eq!(
+            client(Ok((429, ""))).search_mods(&ModSearch::default()),
+            Err(CurseForgeError::RateLimited)
+        );
+        let missing = CurseForgeClient::new(Fake::new(Ok((200, SEARCH))), None);
+        assert_eq!(
+            missing.search_mods(&ModSearch::default()),
+            Err(CurseForgeError::MissingKey)
+        );
+        assert!(missing.transport.seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn categories_are_read_with_a_get() {
+        let client = client(Ok((
+            200,
+            r#"{"data": [
+              {"id": 1, "gameId": 1, "name": "Combat", "slug": "combat", "parentCategoryId": 2,
+               "isClass": false, "classId": 2, "displayIndex": 0},
+              {"id": 2, "name": null, "parentCategoryId": null, "isClass": true}
+            ]}"#,
+        )));
+        let categories = client.categories().unwrap();
+        assert_eq!(
+            categories[0],
+            Category {
+                id: 1,
+                name: "Combat".to_owned(),
+                parent_category_id: Some(2),
+                is_class: Some(false)
+            }
+        );
+        assert!(categories[1].name.is_empty());
+        assert_eq!(categories[1].is_class, Some(true));
+        let seen = client.transport.seen.lock().unwrap();
+        assert_eq!(
+            seen[0].0,
+            "https://api.curseforge.com/v1/categories?gameId=1"
+        );
+        assert_eq!(seen[0].2, None);
+        // Gli identificativi restano rigorosi.
+        assert!(serde_json::from_str::<Category>(r#"{"id": null}"#).is_err());
     }
 
     const FILE: &str = r#"{"data": {
@@ -1222,6 +1518,44 @@ mod tests {
         let types = client.version_types().expect("richiesta a CurseForge");
         for t in types {
             println!("{:>6}  {:<40} {}", t.id, t.name, t.slug);
+        }
+    }
+
+    /// Cerca "details" tra gli addon Retail per popolarità e legge le categorie, con la chiave
+    /// reale: conferma i parametri della ricerca, la paginazione e la forma delle categorie.
+    ///
+    /// `cargo test --manifest-path src-tauri/Cargo.toml live_search_and_categories -- --ignored --nocapture`
+    #[test]
+    #[ignore = "usa la rete e la chiave CurseForge reale"]
+    fn live_search_and_categories() {
+        let config = crate::config::Config::load();
+        let client = CurseForgeClient::new(
+            ReqwestTransport::new().unwrap(),
+            config.curseforge_api_key.clone(),
+        );
+        let page = client
+            .search_mods(&ModSearch {
+                search_filter: Some("details".to_owned()),
+                game_version_type_id: Some(crate::updates::RETAIL),
+                sort_field: Some(2),
+                sort_order: Some(SortOrder::Desc),
+                index: Some(0),
+                page_size: Some(5),
+                ..ModSearch::default()
+            })
+            .expect("richiesta a CurseForge");
+        println!("{:?}", page.pagination);
+        assert!(page.pagination.result_count as usize == page.data.len());
+        for found in &page.data {
+            println!(
+                "{:>8}  {:<40} {:>12}  {}",
+                found.project.id, found.project.name, found.download_count, found.date_modified
+            );
+        }
+        let categories = client.categories().expect("richiesta a CurseForge");
+        assert!(!categories.is_empty());
+        for category in categories.iter().take(10) {
+            println!("{category:?}");
         }
     }
 
