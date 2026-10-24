@@ -268,26 +268,39 @@ pub(crate) fn installed_projects(
     records: &InstalledRecords,
 ) -> HashSet<u32> {
     let addons_dir = installation.path.join("Interface").join("AddOns");
-    // Nome in minuscolo → id dichiarato dal `.toc`, se c'è.
-    let mut folders: HashMap<String, Option<u32>> = HashMap::new();
+    // Nome in minuscolo → nome sul disco, solo cartelle.
+    let mut folders: HashMap<String, String> = HashMap::new();
     if let Ok(entries) = fs::read_dir(&addons_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             if name.starts_with('.') || !entry.path().is_dir() {
                 continue;
             }
-            let declared = declared_project(&entry.path(), &name, &installation.flavor);
-            folders.insert(name.to_lowercase(), declared);
+            folders.insert(name.to_lowercase(), name);
         }
     }
-    let mut projects: HashSet<u32> = folders.values().flatten().copied().collect();
+    // Prima i record, in memoria: le cartelle che un record reclama non servono al `.toc`.
+    let mut projects = HashSet::new();
+    let mut claimed = HashSet::new();
     for (mod_id, record) in records {
-        if record
+        let present: Vec<String> = record
             .folders
             .iter()
-            .any(|folder| folders.contains_key(&folder.to_lowercase()))
-        {
+            .map(|folder| folder.to_lowercase())
+            .filter(|folder| folders.contains_key(folder))
+            .collect();
+        if !present.is_empty() {
             projects.insert(*mod_id);
+            claimed.extend(present);
+        }
+    }
+    // Poi il `.toc`, solo per le cartelle che nessun record conosce.
+    for (lower, name) in &folders {
+        if claimed.contains(lower) {
+            continue;
+        }
+        if let Some(id) = declared_project(&addons_dir.join(name), name, &installation.flavor) {
+            projects.insert(id);
         }
     }
     projects
