@@ -37,6 +37,7 @@ pub fn run() {
                 .build(),
         )
         .manage(Config::load())
+        .manage(commands::InstallLock::default())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             app.manage(Mutex::new(InstallationStore::load(

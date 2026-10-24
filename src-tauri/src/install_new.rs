@@ -4,13 +4,14 @@
 //! sicura in staging, sostituzione con ripristino. In più, prima di toccare il disco:
 //! - un progetto già presente (stessa regola del flag `installed` della ricerca,
 //!   [`catalog::installed_projects`]) si salta senza nessuna chiamata di rete;
-//! - una cartella dello zip che esiste già e appartiene, nei record di `installed-addons.json`,
-//!   a un altro progetto fa fallire l'installazione; una cartella esistente non registrata
+//! - una cartella dello zip che esiste già e appartiene a un altro progetto (nei record di
+//!   `installed-addons.json` o, senza record, per il `## X-Curse-Project-ID` del suo `.toc`)
+//!   fa fallire l'installazione; una cartella esistente senza record né id di progetto
 //!   (installata a mano) si sostituisce.
 //!
 //! Bloccante: va chiamato fuori dal thread principale.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -185,7 +186,9 @@ fn install_checked<T: Transport>(
 ) -> InstallOutcome {
     let mod_id = file.mod_id;
     let addons_dir = installation.path.join("Interface").join("AddOns");
-    let check = |folders: &[String]| check_foreign_folders(&addons_dir, records, mod_id, folders);
+    let flavor = installation.flavor.as_str();
+    let check =
+        |folders: &[String]| check_foreign_folders(&addons_dir, flavor, records, mod_id, folders);
     let folders = match updates::install_file(client, file, &addons_dir, &[], &check) {
         Ok(folders) => folders,
         Err(message) => return InstallOutcome::error(mod_id, name, message),
@@ -210,12 +213,16 @@ fn install_checked<T: Transport>(
     }
 }
 
-/// Rifiuta lo zip se una delle sue cartelle esiste già in `AddOns` e un record di un altro
-/// progetto la elenca. Nomi confrontati senza distinguere maiuscole e minuscole, come fa il
-/// gioco. Una cartella `AddOns` che non esiste vale come vuota; una illeggibile fa fallire
-/// l'installazione, perché non si potrebbe sapere cosa si sostituisce.
+/// Rifiuta lo zip se una delle sue cartelle esiste già in `AddOns` e appartiene a un altro
+/// progetto: lo dice un record, oppure, per una cartella senza record, il
+/// `## X-Curse-Project-ID` del suo `.toc` per il flavor (la stessa regola di
+/// [`catalog::installed_projects`]). Una cartella senza record né id si sostituisce. Nomi
+/// confrontati senza distinguere maiuscole e minuscole, come fa il gioco. Una cartella `AddOns`
+/// che non esiste vale come vuota; una illeggibile fa fallire l'installazione, perché non si
+/// potrebbe sapere cosa si sostituisce.
 fn check_foreign_folders(
     addons_dir: &Path,
+    flavor: &str,
     records: &InstalledRecords,
     mod_id: u32,
     folders: &[String],
@@ -223,13 +230,22 @@ fn check_foreign_folders(
     let on_disk = folder_names(addons_dir)?;
     for folder in folders {
         let lower = folder.to_lowercase();
-        if !on_disk.contains(&lower) {
+        let Some(disk_name) = on_disk.get(&lower) else {
             continue;
-        }
-        let owner = records.iter().find(|(id, record)| {
-            **id != mod_id && record.folders.iter().any(|f| f.to_lowercase() == lower)
-        });
-        if let Some((owner, _)) = owner {
+        };
+        let recorded: Vec<u32> = records
+            .iter()
+            .filter(|(_, record)| record.folders.iter().any(|f| f.to_lowercase() == lower))
+            .map(|(id, _)| *id)
+            .collect();
+        // Il `.toc` conta solo per le cartelle che nessun record conosce, come nella ricerca.
+        let owner = if recorded.is_empty() {
+            catalog::declared_project(&addons_dir.join(disk_name), disk_name, flavor)
+                .filter(|id| *id != mod_id)
+        } else {
+            recorded.into_iter().find(|id| *id != mod_id)
+        };
+        if let Some(owner) = owner {
             return Err(format!(
                 "The folder \"{folder}\" belongs to another installed addon (CurseForge project {owner}): nothing was changed."
             ));
@@ -238,11 +254,11 @@ fn check_foreign_folders(
     Ok(())
 }
 
-/// I nomi delle cartelle in `AddOns`, in minuscolo.
-fn folder_names(addons_dir: &Path) -> Result<HashSet<String>, String> {
+/// Le cartelle in `AddOns`: nome in minuscolo → nome sul disco.
+fn folder_names(addons_dir: &Path) -> Result<HashMap<String, String>, String> {
     let entries = match fs::read_dir(addons_dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
         Err(error) => {
             return Err(format!(
                 "Could not read the AddOns folder ({}).",
@@ -250,12 +266,13 @@ fn folder_names(addons_dir: &Path) -> Result<HashSet<String>, String> {
             ));
         }
     };
-    let mut names = HashSet::new();
+    let mut names = HashMap::new();
     for entry in entries {
         let entry = entry
             .map_err(|error| format!("Could not read the AddOns folder ({}).", error.kind()))?;
         if entry.path().is_dir() {
-            names.insert(entry.file_name().to_string_lossy().to_lowercase());
+            let name = entry.file_name().to_string_lossy().into_owned();
+            names.insert(name.to_lowercase(), name);
         }
     }
     Ok(names)
@@ -640,6 +657,31 @@ mod tests {
             "old"
         );
         assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
+    }
+
+    #[test]
+    fn an_unrecorded_folder_of_another_project_leaves_the_disk_unchanged() {
+        let fx = fixture();
+        // Nessun record, ma il `.toc` dice che `SharedLib` è del progetto 2.
+        write_folder(&fx.addons, "sharedlib", "## X-Curse-Project-ID: 2\n");
+        let routes = routes(
+            1,
+            10,
+            &[("Alpha/Alpha.toc", ""), ("SharedLib/SharedLib.toc", "new")],
+        );
+
+        let (outcome, written) = install(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(outcome.status, InstallStatus::Error);
+        let message = outcome.message.unwrap();
+        assert!(message.contains("\"SharedLib\""), "{message}");
+        assert!(message.contains("project 2"), "{message}");
+        assert!(written.is_empty());
+        assert_eq!(names(&fx.addons), ["sharedlib"]);
+        assert_eq!(
+            fs::read_to_string(fx.addons.join("sharedlib").join("sharedlib.lua")).unwrap(),
+            "old"
+        );
     }
 
     #[test]
