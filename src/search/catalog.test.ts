@@ -90,6 +90,26 @@ describe("categories", () => {
       ],
     );
   });
+
+  it("keeps categories the two levels cannot reach", () => {
+    const options = categoryOptions([
+      { id: 1, name: "Addons", parentCategoryId: null },
+      { id: 11, name: "Combat", parentCategoryId: 1 },
+      { id: 12, name: "Boss Encounters", parentCategoryId: 11 },
+      { id: 20, name: "Loop A", parentCategoryId: 21 },
+      { id: 21, name: "Loop B", parentCategoryId: 20 },
+    ]);
+    assert.deepEqual(
+      options.map((o) => [o.name, o.depth]),
+      [
+        ["Addons", 0],
+        ["Combat", 1],
+        ["Boss Encounters", 0],
+        ["Loop A", 0],
+        ["Loop B", 0],
+      ],
+    );
+  });
 });
 
 describe("pages", () => {
@@ -157,6 +177,9 @@ describe("formatting", () => {
 
   it("dates, with a dash for missing or invalid ones", () => {
     assert.equal(formatDate("2026-10-24T09:30:00Z"), "Oct 24, 2026");
+    // Il giorno è quello UTC a qualsiasi fuso della macchina.
+    assert.equal(formatDate("2026-10-24T00:30:00Z"), "Oct 24, 2026");
+    assert.equal(formatDate("2026-10-24T23:30:00Z"), "Oct 24, 2026");
     assert.equal(formatDate(""), "—");
     assert.equal(formatDate("not a date"), "—");
   });

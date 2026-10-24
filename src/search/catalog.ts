@@ -48,7 +48,8 @@ export type CategoryOption = { id: number; name: string; depth: 0 | 1 };
 /**
  * Le categorie per il menu: ogni categoria principale seguita dalle sue sottocategorie,
  * nell'ordine (per nome) in cui arrivano dal backend. Una sottocategoria il cui genitore
- * manca resta tra le principali.
+ * manca resta tra le principali. Il menu ha due livelli: una categoria più profonda (o in un
+ * ciclo di genitori) non si perde, compare in fondo tra le principali.
  */
 export function categoryOptions(categories: CatalogCategory[]): CategoryOption[] {
   const ids = new Set(categories.map((category) => category.id));
@@ -57,14 +58,21 @@ export function categoryOptions(categories: CatalogCategory[]): CategoryOption[]
     category.parentCategoryId !== category.id &&
     ids.has(category.parentCategoryId);
   const options: CategoryOption[] = [];
+  const emitted = new Set<number>();
+  const push = (category: CatalogCategory, depth: 0 | 1) => {
+    if (emitted.has(category.id)) return;
+    emitted.add(category.id);
+    options.push({ id: category.id, name: category.name, depth });
+  };
   for (const parent of categories.filter((category) => !isChild(category))) {
-    options.push({ id: parent.id, name: parent.name, depth: 0 });
+    push(parent, 0);
     for (const child of categories) {
-      if (isChild(child) && child.parentCategoryId === parent.id) {
-        options.push({ id: child.id, name: child.name, depth: 1 });
-      }
+      if (isChild(child) && child.parentCategoryId === parent.id) push(child, 1);
     }
   }
+  // Rete di sicurezza: ogni categoria compare almeno una volta, anche quelle che i due
+  // livelli qui sopra non raggiungono.
+  for (const category of categories) push(category, 0);
   return options;
 }
 
@@ -140,7 +148,8 @@ const compactFormat = new Intl.NumberFormat("en", {
   maximumFractionDigits: 1,
 });
 const fullFormat = new Intl.NumberFormat("en");
-const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium" });
+// In UTC, come le date di CurseForge: il giorno mostrato non cambia con il fuso della macchina.
+const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" });
 
 /** Download in forma breve (`1.2M`); il numero intero va nel suggerimento. */
 export function formatDownloads(count: number): string {
