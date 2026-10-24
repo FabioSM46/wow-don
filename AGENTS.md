@@ -499,11 +499,13 @@ Due trappole:
 
 `.github/workflows/release.yml` parte con un tag `v*`, accettato **solo su un commit già in
 `main`** (quindi passato da una PR con `ci-gate` verde): il job `verify` lo controlla prima di
-costruire. Poi costruisce il `.deb` su `ubuntu-latest` e l'installer NSIS su `windows-latest` (D24)
-e crea una **release in bozza** con i due pacchetti; se la bozza esiste già ne sostituisce i
+costruire. Poi costruisce il `.deb` su `ubuntu-latest`, l'installer NSIS su `windows-latest` e il
+`.dmg` universale (`universal-apple-darwin`) su `macos-latest` (D24)
+e crea una **release in bozza** con i tre pacchetti; se la bozza esiste già ne sostituisce i
 pacchetti, mentre una release già pubblicata non viene mai toccata.
-La pubblicazione resta umana. Solo il job che crea la bozza ha `contents: write`. L'installer non
-è firmato: Windows mostra l'avviso di SmartScreen finché non si decide come firmarlo.
+La pubblicazione resta umana. Solo il job che crea la bozza ha `contents: write`. Nessun pacchetto
+è firmato: Windows mostra l'avviso di SmartScreen e macOS quello di Gatekeeper (il `.dmg` non è
+nemmeno notarizzato) finché non si decide come firmarli.
 
 Le action sono fissate per SHA completo con l'etichetta della release, e il checkout non
 conserva le credenziali (`scripts/test/actions-hardening.test.sh`). Il toolchain Rust è fissato

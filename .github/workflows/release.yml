@@ -1,7 +1,8 @@
 name: Release
 
 # Builds the distributable packages (D24) for a version tag and attaches them to a
-# DRAFT GitHub Release: the .deb on Linux and the NSIS installer on Windows. Nothing
+# DRAFT GitHub Release: the .deb on Linux, the NSIS installer on Windows and a
+# universal (Apple Silicon + Intel), unsigned and unnotarized .dmg on macOS. Nothing
 # is published automatically — a human reviews the draft and publishes it.
 #
 # A tag is accepted only on a commit already on `main`: that commit reached `main`
@@ -9,9 +10,9 @@ name: Release
 # code that skipped the gates. The `verify` job enforces it before anything builds.
 #
 # Each package is built on its own platform: Tauri does not cross-build the Windows
-# installer from Linux. The bundle targets come from tauri.linux.conf.json and
-# tauri.windows.conf.json; `--bundles` repeats them so a config change cannot
-# silently produce a different package here.
+# installer from Linux. The bundle targets come from tauri.linux.conf.json,
+# tauri.windows.conf.json and tauri.macos.conf.json; `--bundles` repeats them so a
+# config change cannot silently produce a different package here.
 
 on:
   push:
@@ -99,14 +100,48 @@ jobs:
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
 
-  # The only job that can write: it creates the draft release from the two artifacts.
+  # One universal .dmg for Apple Silicon and Intel: the toolchain pinned in
+  # rust-toolchain.toml gets both Apple targets, and Tauri merges the two binaries
+  # with lipo. Not signed nor notarized (D24): Gatekeeper asks to confirm the first
+  # launch, as README.md explains.
+  macos:
+    needs: verify
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build the universal .dmg
+        run: pnpm tauri build --target universal-apple-darwin --bundles dmg
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-dmg
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  # The only job that can write: it creates the draft release from the three artifacts.
   draft:
-    needs: [linux, windows]
+    needs: [linux, windows, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      # No `name:`: every artifact of the run (linux-deb, windows-nsis, macos-dmg) is
+      # downloaded and merged into packages/, which `packages/*` below uploads whole.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: packages
@@ -132,5 +167,5 @@ jobs:
               --draft \
               --verify-tag \
               --title "WoW-don $TAG" \
-              --notes "Pacchetti per Linux (.deb) e Windows (installer). Bozza da rivedere prima della pubblicazione."
+              --notes "Pacchetti per Linux (.deb), Windows (installer) e macOS (.dmg universale, non firmato). Bozza da rivedere prima della pubblicazione."
           fi

@@ -4,8 +4,8 @@ Gestore di addon per World of Warcraft per **Linux, Windows e macOS**. Su Linux 
 il gioco dentro un prefisso Wine (Lutris, Battle.net), su Windows e su macOS
 l'installazione normale del client nativo. App desktop nativa scritta in Rust con
 interfaccia Tauri, alternativa più leggera e più comoda a WowUp-CF. Si distribuisce come
-pacchetto `.deb` su Linux e come installer su Windows; il pacchetto per macOS non c'è
-ancora.
+pacchetto `.deb` su Linux, come installer su Windows e come `.dmg` universale (Apple
+Silicon e Intel) su macOS.
 
 ## Stato
 
@@ -167,8 +167,13 @@ pnpm tauri build      # build di release e pacchetto della piattaforma corrente
 
 `pnpm tauri build` produce il pacchetto della piattaforma su cui gira: su Linux il
 `.deb` (`wow-don_<versione>_amd64.deb`) in `src-tauri/target/release/bundle/deb/`, su Windows l'installer
-`*-setup.exe` in `src-tauri/target/release/bundle/nsis/`. Un pacchetto per Windows si
-costruisce su Windows (o sul runner Windows della CI), non da Linux.
+`*-setup.exe` in `src-tauri/target/release/bundle/nsis/`, su macOS il `.dmg` in
+`src-tauri/target/release/bundle/dmg/`. Un pacchetto per Windows si costruisce su Windows
+(o sul runner Windows della CI) e uno per macOS su macOS, non da Linux. Il `.dmg`
+universale della release si ottiene con
+`pnpm tauri build --target universal-apple-darwin --bundles dmg`, dopo aver aggiunto i
+target `aarch64-apple-darwin` e `x86_64-apple-darwin` al toolchain con `rustup target add`;
+finisce in `src-tauri/target/universal-apple-darwin/release/bundle/dmg/`.
 
 Controlli rapidi:
 
@@ -186,9 +191,23 @@ per gli agenti AI e i dettagli della pipeline sono in [AGENTS.md](AGENTS.md).
 
 ## Rilascio
 
-Un tag `v<versione>` su un commit di `main` avvia `.github/workflows/release.yml`, che costruisce il `.deb` e
-l'installer per Windows e li allega a una release di GitHub in bozza. La release si
-pubblica a mano dopo averla controllata.
+Un tag `v<versione>` su un commit di `main` avvia `.github/workflows/release.yml`, che costruisce il `.deb`,
+l'installer per Windows e il `.dmg` universale per macOS e li allega a una release di GitHub
+in bozza. La release si pubblica a mano dopo averla controllata.
+
+### Installare su macOS
+
+Apri il `.dmg` e trascina WoW-don in Applicazioni. L'app non è firmata né notarizzata,
+quindi al primo avvio macOS la blocca dicendo che non può verificarne lo sviluppatore. Per
+aprirla la prima volta:
+
+- nel Finder, in Applicazioni, fai clic con il tasto destro (o Ctrl-clic) su WoW-don e
+  scegli **Apri**, poi conferma con **Apri** nel dialogo;
+- oppure, dopo il primo tentativo bloccato, vai in **Impostazioni di Sistema → Privacy e
+  sicurezza** e, nella sezione Sicurezza, premi **Apri comunque** accanto al messaggio su
+  WoW-don.
+
+Basta farlo una volta: dagli avvii successivi l'app si apre normalmente.
 
 ## Documentazione
 
