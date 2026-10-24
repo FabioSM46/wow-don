@@ -541,8 +541,9 @@ mod tests {
     }
 
     /// Due cartelle che differiscono solo per le maiuscole possono esistere solo dove il file
-    /// system le distingue: su Windows (NTFS) sarebbero la stessa cartella.
-    #[cfg(unix)]
+    /// system le distingue: su Windows (NTFS) e su macOS (APFS, che di norma non distingue le
+    /// maiuscole) sarebbero la stessa cartella. Per questo il test gira solo su Linux.
+    #[cfg(target_os = "linux")]
     #[test]
     fn names_differing_only_by_case_have_a_stable_order() {
         let tmp = TempDir::new();

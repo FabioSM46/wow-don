@@ -204,7 +204,9 @@ mod tests {
         assert!(Installation::from_canonical(PathBuf::from("games").join("Interface")).is_none());
     }
 
-    #[cfg(unix)]
+    /// Solo su Linux: Windows non ha nomi in byte arbitrari, e APFS su macOS rifiuta di creare
+    /// un nome che non sia UTF-8 valido, quindi lì un percorso così non può esistere.
+    #[cfg(target_os = "linux")]
     #[test]
     fn non_utf8_paths_are_rejected_with_a_reason() {
         use std::os::unix::ffi::OsStrExt;
