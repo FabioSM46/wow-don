@@ -225,11 +225,7 @@ const PROGRAM_FILES: [&str; 2] = ["Program Files (x86)", "Program Files"];
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn wine_candidates(home: &Path) -> Vec<Candidate> {
     let mut candidates = Vec::new();
-    for (prefix, origin) in wine_prefixes(home) {
-        // `wine_prefixes` tiene solo le cartelle con `drive_c`.
-        let Some(drive_c) = child_ignoring_case(&prefix, "drive_c") else {
-            continue;
-        };
+    for (drive_c, origin) in wine_prefixes(home) {
         for folder in PROGRAM_FILES {
             let program_files = child_or_join(&drive_c, folder);
             let game = child_or_join(&program_files, GAME_DIR);
@@ -239,21 +235,35 @@ pub fn wine_candidates(home: &Path) -> Vec<Candidate> {
     candidates
 }
 
-/// I prefissi Wine sotto `home`, con la provenienza da mostrare: `.wine`, i figli diretti di
-/// `Games` (Lutris), i bottle di Bottles nativo e Flatpak e i `pfx` di Steam/Proton. Solo
-/// questi livelli fissi, nessuna visita ricorsiva; una cartella è un prefisso solo se contiene
-/// `drive_c`. Lo stesso prefisso raggiunto due volte (per esempio `.steam/steam`, che di norma è
-/// un link a `.local/share/Steam`) compare una volta sola, con la prima provenienza. La
-/// provenienza non contiene mai la home.
+/// I prefissi Wine sotto `home`, ciascuno come la sua cartella `drive_c` con la provenienza da
+/// mostrare: `.wine`, i figli diretti di `Games` (Lutris), i bottle di Bottles nativo e Flatpak
+/// e i `pfx` di Steam/Proton. Solo questi livelli fissi, nessuna visita ricorsiva; una cartella
+/// è un prefisso solo se contiene `drive_c`. Lo stesso prefisso raggiunto due volte (per
+/// esempio `.steam/steam`, che di norma è un link a `.local/share/Steam`) compare una volta
+/// sola, con la prima provenienza: si confronta il percorso canonico, o quello così com'è se
+/// non si riesce a canonicalizzarlo. La provenienza non contiene mai la home.
 fn wine_prefixes(home: &Path) -> Vec<(PathBuf, String)> {
     let mut prefixes = vec![(home.join(".wine"), "Wine prefix (~/.wine)".to_owned())];
     for (name, path) in child_dirs(&home.join("Games")) {
         prefixes.push((path, format!("Wine prefix (Lutris: {name})")));
     }
     for (bottles, label) in [
-        (home.join(".local/share/bottles/bottles"), "Bottles"),
         (
-            home.join(".var/app/com.usebottles.bottles/data/bottles/bottles"),
+            join_all(home, &[".local", "share", "bottles", "bottles"]),
+            "Bottles",
+        ),
+        (
+            join_all(
+                home,
+                &[
+                    ".var",
+                    "app",
+                    "com.usebottles.bottles",
+                    "data",
+                    "bottles",
+                    "bottles",
+                ],
+            ),
             "Bottles (Flatpak)",
         ),
     ] {
@@ -261,8 +271,9 @@ fn wine_prefixes(home: &Path) -> Vec<(PathBuf, String)> {
             prefixes.push((path, format!("{label}: {name}")));
         }
     }
-    for steam in [".steam/steam", ".local/share/Steam"] {
-        for (appid, path) in child_dirs(&home.join(steam).join("steamapps").join("compatdata")) {
+    for steam in [&[".steam", "steam"][..], &[".local", "share", "Steam"][..]] {
+        let compatdata = join_all(&join_all(home, steam), &["steamapps", "compatdata"]);
+        for (appid, path) in child_dirs(&compatdata) {
             prefixes.push((path.join("pfx"), format!("Steam/Proton ({appid})")));
         }
     }
@@ -270,9 +281,19 @@ fn wine_prefixes(home: &Path) -> Vec<(PathBuf, String)> {
     let mut seen = HashSet::new();
     prefixes
         .into_iter()
-        .filter(|(prefix, _)| child_ignoring_case(prefix, "drive_c").is_some())
-        .filter(|(prefix, _)| seen.insert(std::fs::canonicalize(prefix).ok()))
+        .filter_map(|(prefix, origin)| {
+            let drive_c = child_ignoring_case(&prefix, "drive_c")?;
+            let key = std::fs::canonicalize(&prefix).unwrap_or(prefix);
+            seen.insert(key).then_some((drive_c, origin))
+        })
         .collect()
+}
+
+/// `base` con i nomi aggiunti uno alla volta, senza separatori scritti a mano.
+fn join_all(base: &Path, names: &[&str]) -> PathBuf {
+    names
+        .iter()
+        .fold(base.to_path_buf(), |path, name| path.join(name))
 }
 
 /// Le cartelle figlie dirette di `dir`, con il nome, ordinate per nome. I link a cartelle
