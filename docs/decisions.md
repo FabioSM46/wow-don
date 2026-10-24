@@ -1,6 +1,6 @@
 # Registro delle decisioni
 
-Ultimo aggiornamento: 2026-10-23.
+Ultimo aggiornamento: 2026-10-24.
 
 Ogni decisione ha uno stato:
 
@@ -23,9 +23,10 @@ sostituisce e si annota quella vecchia come superata.
 | D5 | Supporto a più installazioni di WoW e a più prefissi Wine | Retail, Classic e beta possono convivere | Proposta |
 | D6 | Si può forzare la versione del gioco per un addon (per installazione e progetto CurseForge, in `addon-settings.json`, scelta tra i tipi noti all'app) | Le beta come Forever sono coperte male dai metadati. Approvato nella specifica di M3 | Confermata |
 | D20 | UI minimale e moderna: poche superfici, spazio e tipografia al posto della decorazione, un solo colore d'accento, chiaro e scuro (regole in `AGENTS.md`, sezione "Interfaccia") | Richiesta esplicita; l'interfaccia scomoda è il difetto principale di WowUp-CF | Confermata |
-| D23 | L'app funziona su Linux e su Windows. Su Linux resta centrale il gioco dentro un prefisso Wine (D2); su Windows si gestisce l'installazione nativa | Richiesta esplicita | Confermata |
+| D23 | L'app funziona su Linux e su Windows. Su Linux resta centrale il gioco dentro un prefisso Wine (D2); su Windows si gestisce l'installazione nativa. Estesa a macOS da D29 | Richiesta esplicita | Confermata |
 | D24 | Distribuzione: pacchetto `.deb` su Linux, installer NSIS (`*-setup.exe`) su Windows, installato per l'utente corrente (`installMode: currentUser`, senza diritti di amministratore, con voce nel menu Start e disinstallazione da Impostazioni); nessuna versione portable. Chiude A3 | Richiesta esplicita; entrambi generati da Tauri senza strumenti esterni | Confermata |
 | D27 | L'interfaccia dell'app è solo in inglese, compresi i messaggi d'errore e di esito restituiti dal backend ai comandi Tauri; la documentazione resta in italiano, codice e commit in inglese (D19 invariata). Nessuna libreria di traduzione: una sola lingua | Richiesta esplicita; una sola lingua nell'interfaccia | Confermata |
+| D29 | L'app funziona su Linux, Windows e macOS (estende D23). Su macOS il client di WoW è nativo, senza Wine; le regole delle piattaforme in `AGENTS.md` valgono per tutte e tre. In CI il job `backend-macos` esegue clippy, build e test su `macos-latest`, ma solo sulle PR verso `main` e su quelle che modificano `ci.yml` | Richiesta esplicita; i minuti macOS costano dieci volte quelli Linux in un repository privato, quindi il job non gira su ogni PR | Confermata |
 
 ## Fonti e API
 

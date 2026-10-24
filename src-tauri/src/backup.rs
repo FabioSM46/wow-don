@@ -151,7 +151,8 @@ fn find_child_dir(parent: &Path, wanted: &str) -> Option<(String, PathBuf)> {
                 .then(|| (name, entry.path()))
         })
         .collect();
-    // Su Linux possono esserci due cartelle che differiscono solo per le maiuscole: vince
+    // Dove il file system distingue le maiuscole (Linux; macOS solo con APFS case-sensitive)
+    // possono esserci due cartelle che differiscono solo per le maiuscole: vince
     // quella scritta esattamente come la usa il gioco, poi l'ordine alfabetico.
     found.sort_by(|a, b| (a.0 != wanted).cmp(&(b.0 != wanted)).then(a.0.cmp(&b.0)));
     found.into_iter().next()

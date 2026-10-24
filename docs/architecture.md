@@ -1,6 +1,6 @@
 # Architettura
 
-Ultimo aggiornamento: 2026-10-23. Descrive la struttura prevista; quello che esiste
+Ultimo aggiornamento: 2026-10-24. Descrive la struttura prevista; quello che esiste
 già nel codice è indicato come tale.
 
 ## Panoramica
@@ -64,7 +64,9 @@ codice di WowUp (open source) è un buon riferimento.
 
 ## Installazioni di WoW
 
-L'app gira su Linux e su Windows (D23). Su Windows il gioco sta nella cartella scelta
+L'app gira su Linux, Windows e macOS (D23, D29). Su macOS il client è nativo, senza Wine:
+le cartelle `_<flavor>_` hanno la stessa struttura e il file system (APFS) di norma non
+distingue maiuscole e minuscole, come Windows. Su Windows il gioco sta nella cartella scelta
 da Battle.net, di solito:
 
 ```
@@ -110,8 +112,8 @@ permessi per i comandi del plugin: lo usa solo il backend.
 **Limite su Linux con Wayland**: il compositor non permette alle applicazioni di leggere né
 di impostare la posizione delle proprie finestre, quindi lì si ripristinano solo la dimensione
 e lo stato massimizzato; la posizione la sceglie il compositor. Non si aggira (per esempio
-forzando X11/XWayland): è una scelta del protocollo. Su X11 e su Windows si ripristina anche
-la posizione.
+forzando X11/XWayland): è una scelta del protocollo. Su X11, su Windows e su macOS si
+ripristina anche la posizione.
 
 ## Sicurezza
 

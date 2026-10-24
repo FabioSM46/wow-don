@@ -21,13 +21,14 @@ SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/changed-areas.sh"
 pass=0
 fail=0
 
-# expect <name> <backend> <frontend> <<'EOF'
+# expect <name> <backend> <frontend> <macos> <<'EOF'
 #   one changed path per line
 # EOF
 expect() {
   local name="$1" out expected
   expected="backend=$2
-frontend=$3"
+frontend=$3
+macos=$4"
   out=$(bash "$SCRIPT" 2>/dev/null)
   if [ "$out" = "$expected" ]; then
     echo "  ok   — ${name}"
@@ -43,22 +44,22 @@ frontend=$3"
 echo "changed-areas — one workspace runs its own job"
 
 expect "a backend file runs the backend job only" \
-  true false <<'EOF'
+  true false false <<'EOF'
 src-tauri/src/commands.rs
 EOF
 
 expect "tauri.conf.json is backend" \
-  true false <<'EOF'
+  true false false <<'EOF'
 src-tauri/tauri.conf.json
 EOF
 
 expect "a frontend file runs the frontend job only" \
-  false true <<'EOF'
+  false true false <<'EOF'
 src/App.tsx
 EOF
 
 expect "frontend toolchain files run the frontend job" \
-  false true <<'EOF'
+  false true false <<'EOF'
 index.html
 vite.config.ts
 tsconfig.json
@@ -70,12 +71,12 @@ echo
 echo "changed-areas — package manifests touch both sides"
 
 expect "package.json runs backend and frontend" \
-  true true <<'EOF'
+  true true false <<'EOF'
 package.json
 EOF
 
 expect "pnpm-lock.yaml runs backend and frontend" \
-  true true <<'EOF'
+  true true false <<'EOF'
 pnpm-lock.yaml
 EOF
 
@@ -83,12 +84,12 @@ echo
 echo "changed-areas — markdown is inert only OUTSIDE the workspaces"
 
 expect "root AGENTS.md runs nothing" \
-  false false <<'EOF'
+  false false false <<'EOF'
 AGENTS.md
 EOF
 
 expect "docs / agent skills / README bundle runs nothing" \
-  false false <<'EOF'
+  false false false <<'EOF'
 docs/roadmap.md
 .claude/skills/dev-issue/SKILL.md
 .agents/skills/dev-issue/SKILL.md
@@ -97,7 +98,7 @@ README.md
 EOF
 
 expect "markdown inside a workspace still runs that workspace" \
-  true false <<'EOF'
+  true false false <<'EOF'
 src-tauri/NOTES.md
 EOF
 
@@ -105,31 +106,31 @@ echo
 echo "changed-areas — automation helpers are the automation job's problem"
 
 expect "gh-automation.sh and its tests trigger no workspace job" \
-  false false <<'EOF'
+  false false false <<'EOF'
 scripts/gh-automation.sh
 scripts/test/pr-status-frozen-rule.test.sh
 EOF
 
 expect "deepseek_review.py triggers no workspace job" \
-  false false <<'EOF'
+  false false false <<'EOF'
 .github/scripts/deepseek_review.py
 EOF
 
 echo
 echo "changed-areas — global paths run everything"
 
-expect "ci.yml runs everything (the jobs' own meaning changed)" \
-  true true <<'EOF'
+expect "ci.yml runs everything, macOS included (the jobs' own meaning changed)" \
+  true true true <<'EOF'
 .github/workflows/ci.yml
 EOF
 
 expect "a workflow that is not ci.yml runs nothing" \
-  false false <<'EOF'
+  false false false <<'EOF'
 .github/workflows/pr-labeler.yml
 EOF
 
 expect ".gitignore and .env.example run nothing" \
-  false false <<'EOF'
+  false false false <<'EOF'
 .gitignore
 .env.example
 EOF
@@ -137,26 +138,53 @@ EOF
 echo
 echo "changed-areas — fail open"
 
-expect "an unrecognised path runs everything" \
-  true true <<'EOF'
+expect "an unrecognised path runs everything but macOS" \
+  true true false <<'EOF'
 tools/new-top-level-thing.sh
 EOF
 
-expect "empty input runs everything" \
-  true true <<'EOF'
+expect "empty input runs everything, macOS included" \
+  true true true <<'EOF'
 EOF
 
 expect "one unrecognised path among inert ones still runs everything" \
-  true true <<'EOF'
+  true true false <<'EOF'
 AGENTS.md
 tools/new-top-level-thing.sh
+EOF
+
+echo
+echo "changed-areas — the macOS job runs only when ci.yml changes (D29)"
+
+expect "a backend change alone does not run macOS" \
+  true false false <<'EOF'
+src-tauri/src/install.rs
+src-tauri/Cargo.toml
+EOF
+
+expect "ci.yml among other changes still runs macOS" \
+  true true true <<'EOF'
+AGENTS.md
+src-tauri/src/install.rs
+.github/workflows/ci.yml
+EOF
+
+expect "another workflow does not run macOS" \
+  false false false <<'EOF'
+.github/workflows/release.yml
+EOF
+
+expect "ci.yml as the old side of a rename still runs macOS" \
+  true true true <<'EOF'
+.github/workflows/ci-renamed.yml
+.github/workflows/ci.yml
 EOF
 
 echo
 echo "changed-areas — mixes and renames"
 
 expect "a cross-workspace rename runs both workspaces" \
-  true true <<'EOF'
+  true true false <<'EOF'
 src/moved.ts
 src-tauri/src/moved.rs
 EOF

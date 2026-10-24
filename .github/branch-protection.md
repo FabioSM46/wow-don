@@ -42,7 +42,8 @@ sarebbero entrambe aggirabili o nessuna delle due. L'API lo riporta per ruleset 
   check stabile e contiene la regola per branch:
   - verso basi diverse da `main`: i job selezionati dal diff e `automation` devono avere
     successo; i job non selezionati possono risultare `SKIPPED`. `backend-windows` segue lo
-    stesso selettore di `backend`;
+    stesso selettore di `backend`; `backend-macos` ha un selettore proprio e gira solo sulle
+    PR che modificano `ci.yml`, altrimenti risulta `SKIPPED`;
   - verso `main`: tutti i job devono girare e avere successo.
 
 ## Perché `READY TO MERGE` non è ridondante
