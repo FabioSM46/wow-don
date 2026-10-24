@@ -1,6 +1,6 @@
 # Roadmap
 
-Ultimo aggiornamento: 2026-10-23.
+Ultimo aggiornamento: 2026-10-24.
 
 ## M0 — Scaffolding (fatto)
 
@@ -29,19 +29,23 @@ Ultimo aggiornamento: 2026-10-23.
 - Gli addon con `allowModDistribution = false` (per esempio Details!) si riconoscono e
   segnalano gli aggiornamenti, ma si aggiornano a mano dal sito (D13).
 
-## M3.5 — Interfaccia in inglese e tab (in corso, prima di M4)
+## M3.5 — Interfaccia in inglese e tab (fatto)
 
 - Interfaccia solo in inglese, compresi i messaggi del backend (D27).
 - App divisa in tab: per ora Installed e Options, con il selettore dell'installazione
   nell'header; la gestione delle installazioni e i backup stanno in Options. La tab Search
-  arriva con M4, che si appoggia a queste tab.
+  è arrivata con M4.
 
-## M4 — Ricerca e catalogo
+## M4 — Ricerca e catalogo (fatto)
 
-- Tab Search.
-- Ricerca nel catalogo CurseForge con filtri (categoria, versione del gioco,
-  popolarità, data di aggiornamento) e ordinamenti.
-- Pagina di dettaglio dell'addon.
+- Tab Search tra Installed e Options.
+- Ricerca nel catalogo CurseForge con filtri (categoria, versione del gioco) e ordinamenti
+  (popolarità, data di aggiornamento, nome, download), a pagine da 50.
+- Dettaglio dell'addon: descrizione convertita in testo dal backend, file Release e Beta per
+  la versione del gioco, dipendenze obbligatorie.
+- Installazione di un addon nuovo dalla ricerca o dal dettaglio, con le dipendenze
+  obbligatorie installate in automatico come in WowUp; gli addon con
+  `allowModDistribution = false` rimandano al sito (D13).
 
 ## M5 — Richiesta chiave per applicazioni di terzi
 
