@@ -1,6 +1,7 @@
 //! Stato locale salvato su disco: l'elenco delle installazioni (`installations.json`), le
 //! impostazioni degli addon (`addon-settings.json`, per ora la versione del gioco forzata, D6)
-//! e i progetti installati dall'app con le loro cartelle (`installed-addons.json`, issue #62).
+//! i progetti installati dall'app con le loro cartelle (`installed-addons.json`, issue #62) e le
+//! impostazioni dell'app (`settings.json`, per ora il tema, issue #92).
 //!
 //! I file stanno nella cartella di configurazione dell'app risolta da Tauri (D22). Si scrive in modo atomico: file temporaneo nella stessa cartella, poi `rename`.
 //! Un file mancante vuol dire nessuna installazione; un file illeggibile blocca le
@@ -420,6 +421,145 @@ fn read_installed_addons(file: &Path) -> Result<RecordsByInstallation, String> {
         ));
     }
     Ok(stored.installations)
+}
+
+// ── Impostazioni dell'app ───────────────────────────────────────────────────
+
+pub const APP_SETTINGS_FILE: &str = "settings.json";
+const APP_SETTINGS_VERSION: u32 = 1;
+
+/// Il tema dell'interfaccia: `system` segue il sistema operativo.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Theme {
+    /// Il tema dal suo nome; un valore sconosciuto è un errore con un messaggio in inglese.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "system" => Ok(Self::System),
+            "light" => Ok(Self::Light),
+            "dark" => Ok(Self::Dark),
+            _ => Err("Unknown theme: use system, light or dark.".to_owned()),
+        }
+    }
+}
+
+/// Le impostazioni dell'app, come le riceve il frontend (`get_settings`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    pub theme: Theme,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredAppSettings {
+    version: u32,
+    #[serde(flatten)]
+    settings: AppSettings,
+}
+
+/// Le impostazioni dell'app, con le stesse regole di [`InstallationStore`]: rilettura prima di
+/// ogni modifica, scrittura atomica, file illeggibile che blocca le modifiche. Senza file valgono
+/// i valori di default (tema `system`).
+#[derive(Debug)]
+pub struct AppSettingsStore {
+    file: PathBuf,
+    settings: AppSettings,
+    load_error: Option<String>,
+}
+
+impl AppSettingsStore {
+    pub fn load(file: PathBuf) -> Self {
+        match read_app_settings(&file) {
+            Ok(settings) => Self {
+                file,
+                settings,
+                load_error: None,
+            },
+            Err(error) => Self {
+                file,
+                settings: AppSettings::default(),
+                load_error: Some(error),
+            },
+        }
+    }
+
+    pub fn get(&self) -> Result<AppSettings, String> {
+        self.check_loaded()?;
+        Ok(self.settings)
+    }
+
+    /// Salva il tema e restituisce le impostazioni aggiornate.
+    pub fn set_theme(&mut self, theme: Theme) -> Result<AppSettings, String> {
+        self.reload()?;
+        // Si cambia solo il tema: le altre impostazioni restano quelle appena rilette.
+        let mut next = self.settings;
+        next.theme = theme;
+        self.save(next)?;
+        Ok(next)
+    }
+
+    fn reload(&mut self) -> Result<(), String> {
+        self.check_loaded()?;
+        self.settings = read_app_settings(&self.file)?;
+        Ok(())
+    }
+
+    fn check_loaded(&self) -> Result<(), String> {
+        match &self.load_error {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
+    fn save(&mut self, settings: AppSettings) -> Result<(), String> {
+        let stored = StoredAppSettings {
+            version: APP_SETTINGS_VERSION,
+            settings,
+        };
+        write_atomically(&self.file, &stored)
+            .map_err(|error| format!("Could not save the settings ({}).", error.kind()))?;
+        self.settings = settings;
+        Ok(())
+    }
+}
+
+fn read_app_settings(file: &Path) -> Result<AppSettings, String> {
+    let text = match read_text(file) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Ok(AppSettings::default()),
+        Err(error) => {
+            return Err(format!(
+                "Could not read {APP_SETTINGS_FILE} ({}).",
+                error.kind()
+            ));
+        }
+    };
+    // Prima la versione, poi il resto: un file di una versione futura si riconosce come tale
+    // anche se i suoi campi non si leggono più.
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| damaged_settings())?;
+    let version = value.get("version").and_then(serde_json::Value::as_u64);
+    if version != Some(u64::from(APP_SETTINGS_VERSION)) {
+        return match version {
+            Some(version) => Err(format!(
+                "{APP_SETTINGS_FILE} has an unsupported version ({version}): update the app or move the file away, then restart."
+            )),
+            None => Err(damaged_settings()),
+        };
+    }
+    let stored: StoredAppSettings =
+        serde_json::from_value(value).map_err(|_| damaged_settings())?;
+    Ok(stored.settings)
+}
+
+fn damaged_settings() -> String {
+    format!("{APP_SETTINGS_FILE} is damaged: fix it or move it away and restart the app.")
 }
 
 fn read(file: &Path) -> Result<Vec<Installation>, String> {
@@ -862,6 +1002,89 @@ mod tests {
         fs::write(&file, br#"{"version": 2, "installations": {}}"#).unwrap();
         let store = InstalledAddonsStore::load(file);
         assert!(store.records_for("a").unwrap_err().contains("unsupported"));
+    }
+
+    // ── AppSettingsStore ────────────────────────────────────────────────────
+
+    #[test]
+    fn missing_app_settings_mean_the_system_theme() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join("config").join(APP_SETTINGS_FILE);
+        let store = AppSettingsStore::load(file.clone());
+        assert_eq!(store.get().unwrap().theme, Theme::System);
+        // Leggere non crea il file.
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn the_theme_survives_a_reload() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join("config").join(APP_SETTINGS_FILE);
+        let mut store = AppSettingsStore::load(file.clone());
+        assert_eq!(store.set_theme(Theme::Dark).unwrap().theme, Theme::Dark);
+        assert_eq!(store.get().unwrap().theme, Theme::Dark);
+        assert_eq!(
+            AppSettingsStore::load(file.clone()).get().unwrap().theme,
+            Theme::Dark
+        );
+        assert!(!file.with_extension("json.tmp").exists());
+
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved, serde_json::json!({"version": 1, "theme": "dark"}));
+
+        store.set_theme(Theme::System).unwrap();
+        assert_eq!(
+            AppSettingsStore::load(file).get().unwrap().theme,
+            Theme::System
+        );
+    }
+
+    #[test]
+    fn theme_names_are_parsed_and_unknown_ones_rejected() {
+        assert_eq!(Theme::parse("system").unwrap(), Theme::System);
+        assert_eq!(Theme::parse("light").unwrap(), Theme::Light);
+        assert_eq!(Theme::parse("dark").unwrap(), Theme::Dark);
+        for unknown in ["", "Dark", "sepia", "auto"] {
+            assert_eq!(
+                Theme::parse(unknown).unwrap_err(),
+                "Unknown theme: use system, light or dark."
+            );
+        }
+    }
+
+    #[test]
+    fn a_theme_change_by_another_instance_is_seen_before_saving() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        let mut first = AppSettingsStore::load(file.clone());
+        let mut second = AppSettingsStore::load(file.clone());
+        first.set_theme(Theme::Dark).unwrap();
+        assert_eq!(second.set_theme(Theme::Light).unwrap().theme, Theme::Light);
+        assert_eq!(
+            AppSettingsStore::load(file).get().unwrap().theme,
+            Theme::Light
+        );
+    }
+
+    #[test]
+    fn corrupt_app_settings_are_reported_and_left_untouched() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        for damaged in [
+            &b"{ not json"[..],
+            br#"{"theme": "dark"}"#,
+            br#"{"version": 1, "theme": "sepia"}"#,
+        ] {
+            fs::write(&file, damaged).unwrap();
+            let mut store = AppSettingsStore::load(file.clone());
+            assert!(store.get().unwrap_err().contains("damaged"));
+            assert!(store.set_theme(Theme::Dark).is_err());
+            assert_eq!(fs::read(&file).unwrap(), damaged);
+        }
+
+        fs::write(&file, br#"{"version": 2, "theme": "sepia"}"#).unwrap();
+        let store = AppSettingsStore::load(file);
+        assert!(store.get().unwrap_err().contains("unsupported version (2)"));
     }
 
     #[test]

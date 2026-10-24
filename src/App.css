@@ -1,4 +1,9 @@
 /* UI minimale e moderna: vedi AGENTS.md, "Interfaccia". Tutti i colori sono variabili qui. */
+/* Tema (issue #92): `data-theme` su <html> forza `light` o `dark`; senza attributo (scelta
+   `system`) vale `prefers-color-scheme`. I colori scuri esistono una volta sola, come `--dark-*`;
+   i due blocchi scuri qui sotto li assegnano e vanno tenuti uguali (un selettore non può stare
+   insieme dentro e fuori da una @media). `color-scheme` sta sempre insieme ai colori, così i
+   controlli nativi (select, lista delle opzioni, barre di scorrimento) seguono il tema scelto. */
 :root {
   --bg: #f7f7f8;
   --surface: #ffffff;
@@ -10,7 +15,15 @@
   --danger: #d1242f;
   --radius: 8px;
 
-  /* I controlli nativi (select, lista delle opzioni, barre di scorrimento) seguono il tema. */
+  --dark-bg: #111113;
+  --dark-surface: #18181b;
+  --dark-text: #ececef;
+  --dark-muted: #8e8e96;
+  --dark-border: #2a2a2f;
+  --dark-hover: #202024;
+  --dark-accent: #6d93ff;
+  --dark-danger: #ff6b6b;
+
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 15px;
@@ -20,17 +33,34 @@
   -webkit-font-smoothing: antialiased;
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111113;
-    --surface: #18181b;
-    --text: #ececef;
-    --muted: #8e8e96;
-    --border: #2a2a2f;
-    --hover: #202024;
-    --accent: #6d93ff;
-    --danger: #ff6b6b;
+  :root:not([data-theme="light"]) {
+    --bg: var(--dark-bg);
+    --surface: var(--dark-surface);
+    --text: var(--dark-text);
+    --muted: var(--dark-muted);
+    --border: var(--dark-border);
+    --hover: var(--dark-hover);
+    --accent: var(--dark-accent);
+    --danger: var(--dark-danger);
+    color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: var(--dark-bg);
+  --surface: var(--dark-surface);
+  --text: var(--dark-text);
+  --muted: var(--dark-muted);
+  --border: var(--dark-border);
+  --hover: var(--dark-hover);
+  --accent: var(--dark-accent);
+  --danger: var(--dark-danger);
+  color-scheme: dark;
 }
 
 body {
@@ -189,6 +219,12 @@ h2 {
 button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Options: le sezioni (Installations, Appearance) una sotto l'altra. */
+
+.appearance {
+  margin-top: 32px;
 }
 
 /* Installazioni */

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { api, errorMessage, type AppStatus, type Installation } from "./api";
+import { api, errorMessage, type AppStatus, type Installation, type Theme } from "./api";
 import { AddonTable } from "./addons/AddonTable";
 import { Installations } from "./installations/Installations";
+import { Appearance } from "./options/Appearance";
+import { applyTheme } from "./options/theme";
 import { Search } from "./search/Search";
 import "./App.css";
 
@@ -26,8 +28,20 @@ function App() {
   const [installedStale, setInstalledStale] = useState(false);
   const [reload, setReload] = useState(0);
   const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
+  // Il tema salvato dal backend; finché non arriva vale quello del sistema (niente localStorage:
+  // lo stato sta nel backend, un breve lampo all'avvio è accettato).
+  const [theme, setTheme] = useState<Theme | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (theme !== null) applyTheme(document.documentElement, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    api
+      .getSettings()
+      .then((settings) => setTheme(settings.theme))
+      .catch((err) => setSettingsError(errorMessage(err)));
     api
       .appStatus()
       .then(setStatus)
@@ -196,6 +210,7 @@ function App() {
               onChange={changeInstallations}
             />
           )}
+          <Appearance theme={theme} loadError={settingsError} onChange={setTheme} />
         </div>
       </main>
 
