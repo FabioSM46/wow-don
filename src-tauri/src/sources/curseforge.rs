@@ -23,6 +23,12 @@ pub const BASE_URL: &str = "https://api.curseforge.com";
 pub const WOW_GAME_ID: u32 = 1;
 /// `releaseType` dei file stabili.
 pub const RELEASE_TYPE_RELEASE: u8 = 1;
+/// `releaseType` dei file Beta (`FileReleaseType`: 1 Release, 2 Beta, 3 Alpha).
+pub const RELEASE_TYPE_BETA: u8 = 2;
+/// `relationType` di una dipendenza obbligatoria. I valori di `FileRelationType`
+/// (docs.curseforge.com/rest-api, verificati il 2026-10-24): 1 EmbeddedLibrary,
+/// 2 OptionalDependency, 3 RequiredDependency, 4 Tool, 5 Incompatible, 6 Include.
+pub const RELATION_REQUIRED_DEPENDENCY: u8 = 3;
 /// Dimensione massima di uno zip scaricato. Gli addon più grandi pesano poche decine di MiB.
 pub const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 /// I domini da cui si scaricano gli zip, con i loro sottodomini.
@@ -356,6 +362,18 @@ pub struct File {
     /// da app di terzi (D13).
     #[serde(default)]
     pub download_url: Option<String>,
+    /// I progetti da cui il file dipende, con il tipo di relazione.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub dependencies: Vec<FileDependency>,
+}
+
+/// Una dipendenza di un file (`FileDependency`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDependency {
+    pub mod_id: u32,
+    /// Un valore di `FileRelationType`, vedi [`RELATION_REQUIRED_DEPENDENCY`].
+    pub relation_type: u8,
 }
 
 fn available() -> bool {
@@ -509,7 +527,7 @@ pub struct Category {
     pub is_class: Option<bool>,
 }
 
-/// La paginazione di `GET /v1/mods/search`.
+/// La paginazione di `GET /v1/mods/search` e `GET /v1/mods/{modId}/files`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pagination {
@@ -524,6 +542,14 @@ pub struct Pagination {
 pub struct SearchPage {
     #[serde(default, deserialize_with = "null_as_default")]
     pub data: Vec<CatalogMod>,
+    pub pagination: Pagination,
+}
+
+/// Una pagina dei file di un mod.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct FilesPage {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub data: Vec<File>,
     pub pagination: Pagination,
 }
 
@@ -694,6 +720,38 @@ impl<T: Transport> CurseForgeClient<T> {
         let key = self.key()?;
         let url = format!("{BASE_URL}/v1/mods/{mod_id}/files/{file_id}");
         decode(self.transport.get(&url, key))
+    }
+
+    /// Un mod con i campi descrittivi del catalogo (`GET /v1/mods/{modId}`).
+    pub fn get_mod(&self, mod_id: u32) -> Result<CatalogMod, CurseForgeError> {
+        let key = self.key()?;
+        let url = format!("{BASE_URL}/v1/mods/{mod_id}");
+        decode(self.transport.get(&url, key))
+    }
+
+    /// La descrizione completa di un mod, in HTML come la scrive l'autore
+    /// (`GET /v1/mods/{modId}/description`). `null` vale come descrizione vuota.
+    pub fn mod_description(&self, mod_id: u32) -> Result<String, CurseForgeError> {
+        let key = self.key()?;
+        let url = format!("{BASE_URL}/v1/mods/{mod_id}/description");
+        decode::<Option<String>>(self.transport.get(&url, key)).map(Option::unwrap_or_default)
+    }
+
+    /// Una pagina dei file di un mod per una versione del gioco, dalla posizione `index`
+    /// (`GET /v1/mods/{modId}/files`; `pageSize` arriva al massimo a 50). Senza `pagination`
+    /// la risposta non è valida: senza il totale non si sa se ci sono altre pagine.
+    pub fn mod_files(
+        &self,
+        mod_id: u32,
+        game_version_type_id: u32,
+        index: u32,
+        page_size: u32,
+    ) -> Result<FilesPage, CurseForgeError> {
+        let key = self.key()?;
+        let url = format!(
+            "{BASE_URL}/v1/mods/{mod_id}/files?gameVersionTypeId={game_version_type_id}&index={index}&pageSize={page_size}"
+        );
+        decode_body(self.transport.get(&url, key))
     }
 
     /// I byte dello zip di `file`, scaricati dalla CDN senza chiave. Non controlla
@@ -1223,6 +1281,85 @@ mod tests {
         let absent: File =
             serde_json::from_str(r#"{"id": 1, "modId": 2, "releaseType": 1}"#).unwrap();
         assert_eq!(absent.download_url, None);
+    }
+
+    #[test]
+    fn mod_files_reads_dependencies_with_a_get() {
+        let body = r#"{"data": [
+          {"id": 7, "modId": 61284, "releaseType": 1,
+           "dependencies": [{"modId": 3358, "relationType": 3}, {"modId": 14, "relationType": 2}]},
+          {"id": 6, "modId": 61284, "releaseType": 2, "dependencies": null},
+          {"id": 5, "modId": 61284, "releaseType": 3}
+        ], "pagination": {"index": 0, "pageSize": 50, "resultCount": 3, "totalCount": 3}}"#;
+        let client = client(Ok((200, body)));
+        let page = client.mod_files(61284, 517, 100, 50).unwrap();
+        assert_eq!(page.pagination.total_count, 3);
+        let files = page.data;
+        assert_eq!(
+            files[0].dependencies,
+            [
+                FileDependency {
+                    mod_id: 3358,
+                    relation_type: RELATION_REQUIRED_DEPENDENCY
+                },
+                FileDependency {
+                    mod_id: 14,
+                    relation_type: 2
+                }
+            ]
+        );
+        assert!(files[1].dependencies.is_empty() && files[2].dependencies.is_empty());
+        let seen = client.transport.seen.lock().unwrap();
+        assert_eq!(
+            seen[0].0,
+            "https://api.curseforge.com/v1/mods/61284/files?gameVersionTypeId=517&index=100&pageSize=50"
+        );
+        assert_eq!((seen[0].1.as_str(), seen[0].2.as_deref()), (KEY, None));
+        drop(seen);
+        let unpaged = self::client(Ok((200, r#"{"data": []}"#)));
+        assert_eq!(
+            unpaged.mod_files(61284, 517, 0, 50),
+            Err(CurseForgeError::InvalidResponse)
+        );
+    }
+
+    #[test]
+    fn mod_description_is_the_html_string() {
+        let client = client(Ok((200, r#"{"data": "<p>Hello</p>"}"#)));
+        assert_eq!(client.mod_description(61284).unwrap(), "<p>Hello</p>");
+        assert_eq!(
+            client.transport.seen.lock().unwrap()[0].0,
+            "https://api.curseforge.com/v1/mods/61284/description"
+        );
+        let empty = self::client(Ok((200, r#"{"data": null}"#)));
+        assert_eq!(empty.mod_description(1).unwrap(), "");
+        let broken = self::client(Ok((200, r#"{"data": 5}"#)));
+        assert_eq!(
+            broken.mod_description(1),
+            Err(CurseForgeError::InvalidResponse)
+        );
+    }
+
+    #[test]
+    fn get_mod_reads_the_catalog_fields() {
+        let body = r#"{"data": {"id": 61284, "name": "Details!", "summary": "Meter",
+          "authors": [{"name": "Terciob"}], "downloadCount": 10}}"#;
+        let client = client(Ok((200, body)));
+        let found = client.get_mod(61284).unwrap();
+        assert_eq!(
+            (
+                found.project.id,
+                found.summary.as_str(),
+                found.download_count
+            ),
+            (61284, "Meter", 10)
+        );
+        assert_eq!(
+            client.transport.seen.lock().unwrap()[0].0,
+            "https://api.curseforge.com/v1/mods/61284"
+        );
+        let missing = self::client(Ok((404, "")));
+        assert_eq!(missing.get_mod(1), Err(CurseForgeError::Http(404)));
     }
 
     #[test]

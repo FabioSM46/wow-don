@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::addons::scan::{self, ListedAddon};
 use crate::backup::{self, BackupInfo};
-use crate::catalog::{self, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
+use crate::catalog::{self, AddonDetail, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
 use crate::config::Config;
 use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
@@ -336,6 +336,46 @@ pub async fn list_categories(config: State<'_, Config>) -> Result<Vec<CatalogCat
     })
     .await
     .map_err(|error| format!("Reading the categories was interrupted ({error})."))?
+}
+
+/// Il dettaglio di un addon del catalogo: descrizione in testo semplice, file Release e Beta
+/// recenti e dipendenze obbligatorie. Senza `version_type` vale la versione forzata del
+/// progetto, altrimenti quella dell'installazione. Rete e disco girano fuori dal thread
+/// principale.
+#[tauri::command]
+pub async fn addon_detail(
+    installation_id: String,
+    mod_id: u32,
+    version_type: Option<u32>,
+    store: Store<'_>,
+    settings: Settings<'_>,
+    installed: Installed<'_>,
+    config: State<'_, Config>,
+) -> Result<AddonDetail, String> {
+    let key = config
+        .curseforge_api_key
+        .clone()
+        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let installation = find_installation(&store, &installation_id)?;
+    let overrides = overrides_for(&settings, &installation.id)?;
+    // Come nella ricerca: un registro illeggibile non blocca il dettaglio, vale solo il `.toc`.
+    let records = locked_installed(&installed)?
+        .records_for(&installation.id)
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        let client = CurseForgeClient::new(transport, Some(key));
+        catalog::addon_detail(
+            &installation,
+            &client,
+            &records,
+            &overrides,
+            mod_id,
+            version_type,
+        )
+    })
+    .await
+    .map_err(|error| format!("Reading the addon details was interrupted ({error})."))?
 }
 
 fn find_installation(store: &Store<'_>, installation_id: &str) -> Result<Installation, String> {

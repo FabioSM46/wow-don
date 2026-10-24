@@ -547,6 +547,7 @@ mod tests {
                 })
                 .collect(),
             is_available: true,
+            dependencies: Vec::new(),
             download_url: None,
         }
     }

@@ -5,6 +5,11 @@
 //! e dai record dell'app, senza chiamate di rete. Bloccante: va chiamato fuori dal thread
 //! principale.
 
+mod detail;
+mod text;
+
+pub use detail::{AddonDetail, addon_detail};
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
