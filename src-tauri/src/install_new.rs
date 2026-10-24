@@ -15,7 +15,7 @@
 //!
 //! Bloccante: va chiamato fuori dal thread principale.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -92,11 +92,13 @@ impl InstallOutcome {
 /// progetto (`overrides`) o per quella dell'installazione. `records` sono i record di
 /// `installed-addons.json` dell'installazione; `record` salva quello appena installato.
 ///
-/// Se il progetto si installa, si installano anche le sue dipendenze obbligatorie, in
-/// ampiezza fino a [`MAX_DEPENDENCY_DEPTH`] livelli: ognuna con l'ultimo Release per la stessa
-/// versione del gioco del progetto scelto e con le stesse regole, ogni progetto al massimo una
-/// volta (cicli e dipendenze condivise). Le dipendenze di un progetto già installato o non
-/// installato non si seguono. Dopo ogni installazione i record locali includono quella appena
+/// Se il progetto si installa, si installano anche le sue dipendenze obbligatorie, un livello
+/// alla volta fino a [`MAX_DEPENDENCY_DEPTH`] livelli: ognuna con l'ultimo Release per la
+/// stessa versione del gioco del progetto scelto e con le stesse regole, ogni progetto al
+/// massimo una volta (cicli e dipendenze condivise). Le dipendenze di un progetto già
+/// installato o non installato non si seguono. Per ogni livello i progetti si leggono con una
+/// sola `get_mods`, che dà il nome anche a quelli già installati o troppo profondi. Dopo ogni
+/// installazione i record locali e l'insieme dei progetti installati includono quella appena
 /// fatta, così una dipendenza appena installata conta come installata e le sue cartelle come
 /// registrate.
 ///
@@ -111,112 +113,148 @@ pub fn install_addon<T: Transport>(
     file_id: Option<u32>,
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
 ) -> Vec<InstallOutcome> {
+    // Un'installazione aggiunge progetti e non ne toglie: la cartella di un altro progetto non
+    // si sostituisce, quindi basta leggere il disco una volta e aggiungere quelli installati.
+    let installed = catalog::installed_projects(installation, records);
+    if installed.contains(&mod_id) {
+        return vec![InstallOutcome::skipped(mod_id, "", "Already installed.")];
+    }
     // La versione del gioco del progetto scelto vale anche per le sue dipendenze.
     let version_type = overrides
         .get(&mod_id)
         .copied()
         .or_else(|| updates::version_type_for(&installation.flavor));
-    let mut records = records.clone();
-    let (outcome, dependencies) = install_project(
+    let mut installer = Installer {
         installation,
         client,
         version_type,
-        &mut records,
-        mod_id,
-        file_id,
+        records: records.clone(),
+        installed,
         record,
-    );
+    };
+
+    let project = match client.get_mods(&[mod_id]) {
+        Ok(mods) => mods.into_iter().find(|m| m.id == mod_id),
+        Err(error) => return vec![InstallOutcome::error(mod_id, "", error.to_string())],
+    };
+    let Some(project) = project else {
+        return vec![InstallOutcome::error(
+            mod_id,
+            "",
+            "Addon not found on CurseForge.".to_owned(),
+        )];
+    };
+    let (outcome, dependencies) = installer.install(&project, file_id);
     let mut outcomes = vec![outcome];
 
     let mut visited = HashSet::from([mod_id]);
-    // (dipendenza, progetto che la richiede, livello)
-    let mut queue = VecDeque::new();
-    enqueue(&mut queue, &mut visited, &dependencies, mod_id, 1);
-    while let Some((dependency, parent, depth)) = queue.pop_front() {
-        let (mut outcome, dependencies) = if depth > MAX_DEPENDENCY_DEPTH {
-            let message = format!(
-                "Not installed: it is more than {MAX_DEPENDENCY_DEPTH} levels deep in the dependency chain. Install it on its own."
-            );
-            (
-                InstallOutcome::skipped(dependency, "", &message),
-                Vec::new(),
-            )
-        } else {
-            install_project(
-                installation,
-                client,
-                version_type,
-                &mut records,
-                dependency,
-                None,
-                record,
-            )
-        };
-        outcome.dependency_of = Some(parent);
-        outcomes.push(outcome);
-        enqueue(
-            &mut queue,
-            &mut visited,
-            &dependencies,
-            dependency,
-            depth + 1,
-        );
+    // (dipendenza, progetto che la richiede) del livello corrente.
+    let mut level = Vec::new();
+    enqueue(&mut level, &mut visited, &dependencies, mod_id);
+    let mut depth = 1;
+    while !level.is_empty() {
+        let ids: Vec<u32> = level.iter().map(|(dependency, _)| *dependency).collect();
+        let projects: Result<HashMap<u32, Mod>, String> = client
+            .get_mods(&ids)
+            .map(|mods| mods.into_iter().map(|m| (m.id, m)).collect())
+            .map_err(|error| error.to_string());
+        let mut next = Vec::new();
+        for (dependency, parent) in level {
+            let project = projects.as_ref().ok().and_then(|p| p.get(&dependency));
+            let name = project.map_or("", |p| p.name.as_str());
+            let (mut outcome, dependencies) = if installer.installed.contains(&dependency) {
+                (
+                    InstallOutcome::skipped(dependency, name, "Already installed."),
+                    Vec::new(),
+                )
+            } else if depth > MAX_DEPENDENCY_DEPTH {
+                let message = format!(
+                    "Not installed: it is more than {MAX_DEPENDENCY_DEPTH} levels deep in the dependency chain. Install it on its own."
+                );
+                (
+                    InstallOutcome::skipped(dependency, name, &message),
+                    Vec::new(),
+                )
+            } else {
+                match (&projects, project) {
+                    (Err(error), _) => (
+                        InstallOutcome::error(dependency, "", error.clone()),
+                        Vec::new(),
+                    ),
+                    (Ok(_), None) => (
+                        InstallOutcome::error(
+                            dependency,
+                            "",
+                            "Addon not found on CurseForge.".to_owned(),
+                        ),
+                        Vec::new(),
+                    ),
+                    (Ok(_), Some(project)) => installer.install(project, None),
+                }
+            };
+            outcome.dependency_of = Some(parent);
+            outcomes.push(outcome);
+            enqueue(&mut next, &mut visited, &dependencies, dependency);
+        }
+        level = next;
+        depth += 1;
     }
     outcomes
 }
 
-/// Mette in coda le dipendenze non ancora visitate, una volta sola ciascuna.
+/// Aggiunge al livello le dipendenze non ancora visitate, una volta sola ciascuna.
 fn enqueue(
-    queue: &mut VecDeque<(u32, u32, usize)>,
+    level: &mut Vec<(u32, u32)>,
     visited: &mut HashSet<u32>,
     dependencies: &[u32],
     parent: u32,
-    depth: usize,
 ) {
     for &dependency in dependencies {
         if visited.insert(dependency) {
-            queue.push_back((dependency, parent, depth));
+            level.push((dependency, parent));
         }
     }
 }
 
-/// Installa un progetto con la versione del gioco `version_type` (se non c'è `file_id`).
-/// Restituisce l'esito e, se è stato installato, le dipendenze obbligatorie del file.
-fn install_project<T: Transport>(
-    installation: &Installation,
-    client: &CurseForgeClient<T>,
+/// Lo stato condiviso dalle installazioni di una chiamata a [`install_addon`].
+struct Installer<'a, T: Transport> {
+    installation: &'a Installation,
+    client: &'a CurseForgeClient<T>,
+    /// La versione del gioco del progetto scelto, per i progetti senza `file_id`.
     version_type: Option<u32>,
-    records: &mut InstalledRecords,
-    mod_id: u32,
-    file_id: Option<u32>,
-    record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
-) -> (InstallOutcome, Vec<u32>) {
-    if catalog::installed_projects(installation, records).contains(&mod_id) {
-        return (
-            InstallOutcome::skipped(mod_id, "", "Already installed."),
-            Vec::new(),
-        );
-    }
+    /// I record di partenza più quelli delle installazioni già fatte.
+    records: InstalledRecords,
+    /// I progetti installati, aggiornato dopo ogni installazione riuscita.
+    installed: HashSet<u32>,
+    record: &'a mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
+}
 
-    let project = match client.get_mods(&[mod_id]) {
-        Ok(mods) => mods.into_iter().find(|m| m.id == mod_id),
-        Err(error) => {
-            return (
-                InstallOutcome::error(mod_id, "", error.to_string()),
-                Vec::new(),
-            );
-        }
-    };
-    let Some(project) = project else {
-        return (
-            InstallOutcome::error(mod_id, "", "Addon not found on CurseForge.".to_owned()),
-            Vec::new(),
+impl<T: Transport> Installer<'_, T> {
+    /// Installa un progetto letto da CurseForge e non ancora installato. Restituisce l'esito
+    /// e, se è stato installato, le dipendenze obbligatorie del file.
+    fn install(&mut self, project: &Mod, file_id: Option<u32>) -> (InstallOutcome, Vec<u32>) {
+        let file = match find_file(
+            self.installation,
+            self.client,
+            project,
+            self.version_type,
+            file_id,
+        ) {
+            Ok(file) => file,
+            Err(outcome) => return (outcome, Vec::new()),
+        };
+        let result = install_checked(
+            self.installation,
+            self.client,
+            &mut self.records,
+            &file,
+            &project.name,
+            self.record,
         );
-    };
-    let name = project.name.as_str();
-    match find_file(installation, client, &project, version_type, file_id) {
-        Ok(file) => install_checked(installation, client, records, &file, name, record),
-        Err(outcome) => (outcome, Vec::new()),
+        if result.0.status == InstallStatus::Installed {
+            self.installed.insert(project.id);
+        }
+        result
     }
 }
 
@@ -1052,6 +1090,7 @@ mod tests {
             [(1, Installed, None), (2, Skipped, Some(1))]
         );
         assert_eq!(outcomes[1].message.as_deref(), Some("Already installed."));
+        assert_eq!(outcomes[1].name, "Project 2");
         assert_eq!(*log.downloads.lock().unwrap(), [download_url(10)]);
         assert_eq!(written.len(), 1);
     }
@@ -1100,6 +1139,8 @@ mod tests {
         assert_eq!(summary(&outcomes), expected);
         let message = outcomes[6].message.as_deref().unwrap();
         assert!(message.contains("more than 5 levels deep"), "{message}");
+        // Il nome arriva dalla `get_mods` del livello, anche senza installare.
+        assert_eq!(outcomes[6].name, "Project 7");
         assert_eq!(log.downloads.lock().unwrap().len(), 6);
         assert!(
             !log.requests
@@ -1108,6 +1149,50 @@ mod tests {
                 .iter()
                 .any(|url| url.contains("/7"))
         );
+    }
+
+    #[test]
+    fn an_installed_dependency_beyond_the_depth_limit_is_already_installed() {
+        let fx = fixture();
+        write_folder(&fx.addons, "Deep", "## X-Curse-Project-ID: 7\n");
+        let nodes: Vec<(u32, Vec<(u32, u8)>)> =
+            (1..=7).map(|id| (id, vec![(id + 1, REQUIRED)])).collect();
+        let nodes: Vec<(u32, &[(u32, u8)])> = nodes
+            .iter()
+            .map(|(id, deps)| (*id, deps.as_slice()))
+            .collect();
+
+        let (outcomes, _) = install_all(&fx, graph(&nodes), &InstalledRecords::new(), 1, None);
+
+        assert_eq!(outcomes.len(), 7);
+        assert_eq!((outcomes[6].mod_id, outcomes[6].status), (7, Skipped));
+        assert_eq!(outcomes[6].message.as_deref(), Some("Already installed."));
+    }
+
+    #[test]
+    fn each_level_of_dependencies_is_read_with_one_call() {
+        let fx = fixture();
+        let routes = graph(&[
+            (1, &[(2, REQUIRED), (3, REQUIRED)]),
+            (2, &[(4, REQUIRED)]),
+            (3, &[(5, REQUIRED)]),
+            (4, &[]),
+            (5, &[]),
+        ]);
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, _) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(outcomes.len(), 5);
+        let mods_calls = log
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|url| *url == &format!("{API}/v1/mods"))
+            .count();
+        // Il progetto scelto, poi un livello [2, 3] e un livello [4, 5].
+        assert_eq!(mods_calls, 3);
     }
 
     #[test]
