@@ -306,8 +306,9 @@ pub(crate) fn installed_projects(
     projects
 }
 
-/// L'id di `## X-Curse-Project-ID` nel `.toc` della cartella per il flavor.
-fn declared_project(dir: &Path, folder: &str, flavor: &str) -> Option<u32> {
+/// L'id di `## X-Curse-Project-ID` nel `.toc` della cartella per il flavor. Usata anche
+/// dall'installazione di un addon nuovo per riconoscere le cartelle di altri progetti.
+pub(crate) fn declared_project(dir: &Path, folder: &str, flavor: &str) -> Option<u32> {
     let file_names: Vec<String> = fs::read_dir(dir)
         .ok()?
         .flatten()

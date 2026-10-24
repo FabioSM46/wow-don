@@ -408,7 +408,7 @@ fn update_project<T: Transport>(
         );
     }
     let old_modules = removable_modules(addons, updates, installed);
-    let folders = match install_file(client, &file, addons_dir, &old_modules) {
+    let folders = match install_file(client, &file, addons_dir, &old_modules, &|_| Ok(())) {
         Ok(folders) => folders,
         Err(message) => return UpdateOutcome::error(mod_id, name, message),
     };
@@ -481,15 +481,21 @@ fn removable_modules(
 /// Scarica `file`, lo estrae in staging e sostituisce le cartelle. Le cartelle di `old_modules`
 /// che il nuovo zip non contiene vengono tolte nello stesso `replace`. Restituisce le cartelle
 /// dello zip, ora installate.
-fn install_file<T: Transport>(
+///
+/// `check` riceve le cartelle dello zip dopo l'estrazione e prima di `replace`: se rifiuta,
+/// `AddOns` resta com'era e lo staging si cancella. L'aggiornamento non rifiuta niente;
+/// l'installazione di un addon nuovo (`install_new`) lo usa per le cartelle di altri progetti.
+pub(crate) fn install_file<T: Transport>(
     client: &CurseForgeClient<T>,
     file: &File,
     addons_dir: &Path,
     old_modules: &[String],
+    check: &dyn Fn(&[String]) -> Result<(), String>,
 ) -> Result<Vec<String>, String> {
     let bytes = client.download(file).map_err(|e| e.to_string())?;
     let staging = install::WorkDir::staging(addons_dir)?;
     let folders = install::extract(&bytes, staging.path())?;
+    check(&folders)?;
     let new: HashSet<String> = folders.iter().map(|f| f.to_lowercase()).collect();
     let obsolete: Vec<String> = old_modules
         .iter()

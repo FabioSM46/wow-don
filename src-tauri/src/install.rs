@@ -5,7 +5,7 @@
 //! nascoste nella cartella padre di `AddOns` ([`WorkDir`]), così ogni `rename` resta sullo stesso
 //! disco; si cancellano da sole anche dopo un errore.
 //!
-//! Il chiamante (`updates::update_addons`) fa:
+//! I chiamanti (`updates::update_addons` e `install_new::install_addon`) fanno:
 //! `WorkDir::staging(addons)` → [`extract`] → [`replace`].
 
 use std::collections::HashSet;

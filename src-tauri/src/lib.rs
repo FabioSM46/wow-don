@@ -4,6 +4,7 @@ mod catalog;
 mod commands;
 mod config;
 mod install;
+mod install_new;
 mod installations;
 mod sources;
 mod store;
@@ -36,6 +37,7 @@ pub fn run() {
                 .build(),
         )
         .manage(Config::load())
+        .manage(commands::InstallLock::default())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             app.manage(Mutex::new(InstallationStore::load(
@@ -60,6 +62,7 @@ pub fn run() {
             commands::clear_version_override,
             commands::check_updates,
             commands::update_addons,
+            commands::install_addon,
             commands::search_catalog,
             commands::list_categories,
             commands::addon_detail,
