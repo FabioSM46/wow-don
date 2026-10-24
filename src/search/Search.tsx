@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   errorMessage,
+  type CatalogAddon,
   type CatalogCategory,
   type CatalogSearch,
   type CatalogSort,
   type Installation,
   type VersionType,
 } from "../api";
+import { AddonDetailView } from "./AddonDetail";
 import { CatalogTable } from "./CatalogTable";
 import {
   RequestTracker,
@@ -42,6 +44,9 @@ type Load = {
 /** La versione del gioco scelta vale per l'installazione per cui è stata scelta. */
 type VersionChoice = { installationId: string; versionType: number | null };
 
+/** L'addon aperto nel dettaglio vale per l'installazione in cui è stato aperto. */
+type Selection = { installationId: string; addon: CatalogAddon };
+
 export function Search({ installation, active, keyConfigured }: Props) {
   const [started, setStarted] = useState(active);
   if (active && !started) setStarted(true);
@@ -64,7 +69,41 @@ export function Search({ installation, active, keyConfigured }: Props) {
   const [categoriesError, setCategoriesError] = useState<string | null>(null);
   const [versionTypes, setVersionTypes] = useState<VersionType[]>([]);
 
+  // Il dettaglio prende il posto dei risultati, che restano montati e nascosti: ricerca,
+  // filtri e pagine caricate non cambiano, e lo scorrimento si ripristina al ritorno.
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const selected = selection?.installationId === installation.id ? selection.addon : null;
+  // L'ultima riga aperta resta segnata dopo il ritorno, e riceve il focus.
+  const [lastSelectedId, setLastSelectedId] = useState<number | null>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const savedScroll = useRef(0);
+  const wasOpen = useRef(false);
+
   const missingKey = keyConfigured === false;
+
+  function openDetail(addon: CatalogAddon) {
+    if (!selected) savedScroll.current = window.scrollY;
+    setSelection({ installationId: installation.id, addon });
+    setLastSelectedId(addon.id);
+  }
+
+  const closeDetail = useCallback(() => setSelection(null), []);
+
+  // Prima del disegno: il dettaglio parte dall'alto, i risultati tornano dove erano, con il
+  // focus sulla riga da cui si era partiti.
+  useLayoutEffect(() => {
+    const open = selected !== null;
+    if (open === wasOpen.current) return;
+    wasOpen.current = open;
+    if (open) {
+      window.scrollTo(0, 0);
+      return;
+    }
+    window.scrollTo(0, savedScroll.current);
+    resultsRef.current
+      ?.querySelector<HTMLElement>('tr[aria-selected="true"]')
+      ?.focus({ preventScroll: true });
+  }, [selected]);
 
   // Categorie e versioni del gioco non cambiano durante la sessione: una richiesta sola.
   useEffect(() => {
@@ -157,145 +196,162 @@ export function Search({ installation, active, keyConfigured }: Props) {
 
   return (
     <section aria-label="Search CurseForge">
-      <div className="toolbar">
-        <input
-          className="search"
-          type="search"
-          placeholder="Search CurseForge add-ons…"
-          aria-label="Search CurseForge add-ons"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") submitNow();
-          }}
+      {selected && (
+        <AddonDetailView
+          installationId={installation.id}
+          addon={selected}
+          versionType={versionType}
+          versionTypes={versionTypes}
+          active={active}
+          onBack={closeDetail}
         />
-        <select
-          className="select"
-          aria-label="Category"
-          title={categoriesError ?? undefined}
-          value={params.categoryId ?? ""}
-          onChange={(event) =>
-            setSearch((previous) => ({
-              ...previous,
-              categoryId: event.target.value === "" ? null : Number(event.target.value),
-            }))
-          }
-        >
-          <option value="">All categories</option>
-          {options.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.depth === 1 ? `   ${option.name}` : option.name}
-            </option>
-          ))}
-        </select>
-        <select
-          className="select"
-          aria-label="Game version"
-          value={versionType ?? ""}
-          onChange={(event) =>
-            setVersionChoice({
-              installationId: installation.id,
-              versionType: event.target.value === "" ? null : Number(event.target.value),
-            })
-          }
-        >
-          <option value="">Installation version</option>
-          {versionTypes.map((type) => (
-            <option key={type.id} value={type.id}>
-              {type.name}
-            </option>
-          ))}
-        </select>
-        <div className="sort-control">
+      )}
+
+      <div ref={resultsRef} hidden={selected !== null}>
+        <div className="toolbar">
+          <input
+            className="search"
+            type="search"
+            placeholder="Search CurseForge add-ons…"
+            aria-label="Search CurseForge add-ons"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") submitNow();
+            }}
+          />
           <select
             className="select"
-            aria-label="Sort by"
-            value={params.sort}
+            aria-label="Category"
+            title={categoriesError ?? undefined}
+            value={params.categoryId ?? ""}
             onChange={(event) =>
-              setSearch((previous) => withSort(previous, event.target.value as CatalogSort))
-            }
-          >
-            {SORTS.map((sort) => (
-              <option key={sort.id} value={sort.id}>
-                {sort.label}
-              </option>
-            ))}
-          </select>
-          <button
-            className="direction"
-            aria-label={`${sortLabel}, ${ascending ? "ascending" : "descending"}. Reverse order`}
-            title={ascending ? "Ascending" : "Descending"}
-            onClick={() =>
               setSearch((previous) => ({
                 ...previous,
-                sortOrder: previous.sortOrder === "asc" ? "desc" : "asc",
+                categoryId: event.target.value === "" ? null : Number(event.target.value),
               }))
             }
           >
-            {ascending ? "↑" : "↓"}
-          </button>
+            <option value="">All categories</option>
+            {options.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.depth === 1 ? `   ${option.name}` : option.name}
+              </option>
+            ))}
+          </select>
+          <select
+            className="select"
+            aria-label="Game version"
+            value={versionType ?? ""}
+            onChange={(event) =>
+              setVersionChoice({
+                installationId: installation.id,
+                versionType: event.target.value === "" ? null : Number(event.target.value),
+              })
+            }
+          >
+            <option value="">Installation version</option>
+            {versionTypes.map((type) => (
+              <option key={type.id} value={type.id}>
+                {type.name}
+              </option>
+            ))}
+          </select>
+          <div className="sort-control">
+            <select
+              className="select"
+              aria-label="Sort by"
+              value={params.sort}
+              onChange={(event) =>
+                setSearch((previous) => withSort(previous, event.target.value as CatalogSort))
+              }
+            >
+              {SORTS.map((sort) => (
+                <option key={sort.id} value={sort.id}>
+                  {sort.label}
+                </option>
+              ))}
+            </select>
+            <button
+              className="direction"
+              aria-label={`${sortLabel}, ${ascending ? "ascending" : "descending"}. Reverse order`}
+              title={ascending ? "Ascending" : "Descending"}
+              onClick={() =>
+                setSearch((previous) => ({
+                  ...previous,
+                  sortOrder: previous.sortOrder === "asc" ? "desc" : "asc",
+                }))
+              }
+            >
+              {ascending ? "↑" : "↓"}
+            </button>
+          </div>
         </div>
+
+        {categoriesError && (
+          <p className="message hint" role="status">
+            Categories are unavailable: {categoriesError}
+          </p>
+        )}
+
+        {load.error && (
+          <p className="message error" role="alert">
+            {load.error}{" "}
+            <button className="link inline" onClick={() => setRetry((n) => n + 1)}>
+              Try again
+            </button>
+          </p>
+        )}
+
+        {!results && !load.error && <p className="muted">Searching…</p>}
+
+        {results && (
+          <div className={load.loading ? "results busy" : "results"} aria-busy={load.loading}>
+            {(load.loading || results.addons.length > 0) && (
+              <p className="count muted" role="status">
+                {load.loading ? "Searching…" : resultCount(results)}
+              </p>
+            )}
+            {results.addons.length === 0 ? (
+              <p className="empty">
+                {filtered ? (
+                  <>
+                    No add-ons match this search. Try another name or{" "}
+                    <button className="link inline" onClick={clearFilters}>
+                      clear the filters
+                    </button>
+                    .
+                  </>
+                ) : (
+                  "No add-ons for this game version. Try another version in the menu above."
+                )}
+              </p>
+            ) : (
+              <CatalogTable
+                addons={results.addons}
+                onSelect={openDetail}
+                selectedId={lastSelectedId}
+              />
+            )}
+            {hasMore(results) && (
+              <div className="load-more">
+                {moreError && (
+                  <span className="error" role="alert">
+                    {moreError}
+                  </span>
+                )}
+                <button
+                  className="button secondary"
+                  onClick={loadMore}
+                  disabled={loadingMore || load.loading}
+                >
+                  {loadingMore ? "Loading…" : moreError ? "Try again" : "Load more"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
-
-      {categoriesError && (
-        <p className="message hint" role="status">
-          Categories are unavailable: {categoriesError}
-        </p>
-      )}
-
-      {load.error && (
-        <p className="message error" role="alert">
-          {load.error}{" "}
-          <button className="link inline" onClick={() => setRetry((n) => n + 1)}>
-            Try again
-          </button>
-        </p>
-      )}
-
-      {!results && !load.error && <p className="muted">Searching…</p>}
-
-      {results && (
-        <div className={load.loading ? "results busy" : "results"} aria-busy={load.loading}>
-          {(load.loading || results.addons.length > 0) && (
-            <p className="count muted" role="status">
-              {load.loading ? "Searching…" : resultCount(results)}
-            </p>
-          )}
-          {results.addons.length === 0 ? (
-            <p className="empty">
-              {filtered ? (
-                <>
-                  No add-ons match this search. Try another name or{" "}
-                  <button className="link inline" onClick={clearFilters}>
-                    clear the filters
-                  </button>
-                  .
-                </>
-              ) : (
-                "No add-ons for this game version. Try another version in the menu above."
-              )}
-            </p>
-          ) : (
-            <CatalogTable addons={results.addons} />
-          )}
-          {hasMore(results) && (
-            <div className="load-more">
-              {moreError && (
-                <span className="error" role="alert">
-                  {moreError}
-                </span>
-              )}
-              <button
-                className="button secondary"
-                onClick={loadMore}
-                disabled={loadingMore || load.loading}
-              >
-                {loadingMore ? "Loading…" : moreError ? "Try again" : "Load more"}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
     </section>
   );
 }
