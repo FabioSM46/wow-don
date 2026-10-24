@@ -118,16 +118,21 @@ pub fn game_dir_from_install_path(value: &str) -> Option<PathBuf> {
         None => ("", trimmed),
     };
     if installations::flavor_from_dir_name(last).is_none() {
-        return Some(PathBuf::from(trimmed));
+        return Some(absolute_drive(trimmed));
     }
     if parent.is_empty() {
         return None;
     }
-    // `C:` da solo indica la cartella corrente del disco, non la sua radice.
-    if parent.ends_with(':') {
-        return Some(PathBuf::from(format!("{parent}\\")));
+    Some(absolute_drive(parent))
+}
+
+/// `C:` da solo indica la cartella corrente del disco, non la sua radice: diventa `C:\`.
+fn absolute_drive(path: &str) -> PathBuf {
+    if path.ends_with(':') {
+        PathBuf::from(format!("{path}\\"))
+    } else {
+        PathBuf::from(path)
     }
-    Some(PathBuf::from(parent))
 }
 
 // Su Linux nessuna candidata ancora (issue #88).
@@ -136,6 +141,12 @@ const GAME_DIR: &str = "World of Warcraft";
 
 /// Le cartelle `World of Warcraft` da esaminare su Windows: prima quelle indicate dal registro,
 /// poi i percorsi standard su ogni disco presente da C a Z. `home` non serve qui.
+///
+/// Limite noto: il controllo di ogni lettera tocca anche le unità rimovibili senza supporto e
+/// le unità di rete mappate; una di rete disconnessa può far attendere il sistema qualche
+/// secondo per lettera. Il comando gira in `spawn_blocking`, quindi la finestra non si blocca,
+/// ma la risposta può tardare. Filtrare per tipo di unità (`GetDriveTypeW`) richiederebbe una
+/// dipendenza diretta da `windows-sys`, non approvata per questa issue.
 #[cfg(target_os = "windows")]
 pub fn candidate_roots(_home: Option<&Path>) -> Vec<Candidate> {
     let mut candidates: Vec<Candidate> = registry_install_paths()
@@ -352,6 +363,15 @@ mod tests {
         assert_eq!(
             game_dir_from_install_path(r"C:\WoW\_Retail_"),
             Some(PathBuf::from(r"C:\WoW\_Retail_"))
+        );
+        // Un disco senza cartella diventa la sua radice, non la cartella corrente del disco.
+        assert_eq!(
+            game_dir_from_install_path("C:"),
+            Some(PathBuf::from(r"C:\"))
+        );
+        assert_eq!(
+            game_dir_from_install_path(r"C:\"),
+            Some(PathBuf::from(r"C:\"))
         );
         assert_eq!(game_dir_from_install_path(""), None);
         assert_eq!(game_dir_from_install_path(r"  \ "), None);
