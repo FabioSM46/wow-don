@@ -7,8 +7,8 @@ import "./App.css";
 
 /** Le tab dell'app, nell'ordine in cui compaiono. */
 const TABS = [
-  { id: "installed", label: "Installed" },
   { id: "search", label: "Search" },
+  { id: "installed", label: "Installed" },
   { id: "options", label: "Options" },
 ] as const;
 

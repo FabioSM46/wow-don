@@ -38,7 +38,7 @@ Ultimo aggiornamento: 2026-10-24.
 
 ## M4 — Ricerca e catalogo (fatto)
 
-- Tab Search tra Installed e Options.
+- Tab Search, la prima delle tre (Search, Installed, Options); all'avvio resta aperta Installed.
 - Ricerca nel catalogo CurseForge con filtri (categoria, versione del gioco) e ordinamenti
   (popolarità, data di aggiornamento, nome, download), a pagine da 50.
 - Dettaglio dell'addon: descrizione convertita in testo dal backend, file Release e Beta per
