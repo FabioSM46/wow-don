@@ -7,12 +7,12 @@ import { formatDate } from "./catalog.ts";
 
 /**
  * I paragrafi della descrizione: il backend separa i paragrafi con una riga vuota e le righe
- * di un elenco con un a capo, che resta dentro il paragrafo. Una descrizione vuota (o di soli
+ * di un elenco con un a capo (anche `\r\n`), che resta dentro il paragrafo. Una descrizione vuota (o di soli
  * spazi) non ha paragrafi.
  */
 export function paragraphs(description: string): string[] {
   return description
-    .split(/\n[ \t]*\n/)
+    .split(/\r?\n[ \t]*\r?\n/)
     .map((paragraph) => paragraph.trim())
     .filter((paragraph) => paragraph !== "");
 }

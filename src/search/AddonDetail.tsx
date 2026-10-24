@@ -42,6 +42,7 @@ export function AddonDetailView({
 }: Props) {
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [retry, setRetry] = useState(0);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const backRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -110,9 +111,22 @@ export function AddonDetailView({
             </p>
           )}
           {shown.url && (
-            <button className="link inline" onClick={() => void openUrl(shown.url!)}>
+            <button
+              className="link inline"
+              onClick={() => {
+                setLinkError(null);
+                openUrl(shown.url!).catch((err) =>
+                  setLinkError(`The page could not be opened: ${errorMessage(err)}`),
+                );
+              }}
+            >
               View on CurseForge
             </button>
+          )}
+          {linkError && (
+            <p className="detail-meta error" role="alert">
+              {linkError}
+            </p>
           )}
         </div>
         {renderActions && <div className="detail-actions">{renderActions(shown)}</div>}

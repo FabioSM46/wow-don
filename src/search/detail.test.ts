@@ -22,6 +22,10 @@ describe("description paragraphs", () => {
     ]);
   });
 
+  it("splits CRLF paragraphs too", () => {
+    assert.deepEqual(paragraphs("One\r\n\r\nTwo\r\n- a\r\n- b"), ["One", "Two\r\n- a\r\n- b"]);
+  });
+
   it("treats a line of spaces as a blank line and drops empty paragraphs", () => {
     assert.deepEqual(paragraphs("  First \n  \t \n\n\nSecond  "), ["First", "Second"]);
   });

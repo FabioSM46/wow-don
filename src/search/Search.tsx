@@ -72,12 +72,18 @@ export function Search({ installation, active, keyConfigured }: Props) {
   // Il dettaglio prende il posto dei risultati, che restano montati e nascosti: ricerca,
   // filtri e pagine caricate non cambiano, e lo scorrimento si ripristina al ritorno.
   const [selection, setSelection] = useState<Selection | null>(null);
-  const selected = selection?.installationId === installation.id ? selection.addon : null;
   // L'ultima riga aperta resta segnata dopo il ritorno, e riceve il focus.
   const [lastSelectedId, setLastSelectedId] = useState<number | null>(null);
+  // Un'altra installazione ha altri risultati: il dettaglio aperto nella precedente si chiude
+  // e non torna quando si torna a quella.
+  if (selection && selection.installationId !== installation.id) {
+    setSelection(null);
+    setLastSelectedId(null);
+  }
+  const selected = selection?.installationId === installation.id ? selection.addon : null;
   const resultsRef = useRef<HTMLDivElement>(null);
   const savedScroll = useRef(0);
-  const wasOpen = useRef(false);
+  const shown = useRef({ open: false, installationId: installation.id });
 
   const missingKey = keyConfigured === false;
 
@@ -91,10 +97,13 @@ export function Search({ installation, active, keyConfigured }: Props) {
 
   // Prima del disegno: il dettaglio parte dall'alto, i risultati tornano dove erano, con il
   // focus sulla riga da cui si era partiti.
+  // Con un cambio di installazione non si ripristina niente: lo scorrimento salvato e la riga
+  // appartengono ai risultati dell'installazione di prima.
   useLayoutEffect(() => {
     const open = selected !== null;
-    if (open === wasOpen.current) return;
-    wasOpen.current = open;
+    const previous = shown.current;
+    shown.current = { open, installationId: installation.id };
+    if (previous.installationId !== installation.id || open === previous.open) return;
     if (open) {
       window.scrollTo(0, 0);
       return;
@@ -103,7 +112,7 @@ export function Search({ installation, active, keyConfigured }: Props) {
     resultsRef.current
       ?.querySelector<HTMLElement>('tr[aria-selected="true"]')
       ?.focus({ preventScroll: true });
-  }, [selected]);
+  }, [selected, installation.id]);
 
   // Categorie e versioni del gioco non cambiano durante la sessione: una richiesta sola.
   useEffect(() => {
