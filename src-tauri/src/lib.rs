@@ -62,6 +62,7 @@ pub fn run() {
             commands::update_addons,
             commands::search_catalog,
             commands::list_categories,
+            commands::addon_detail,
             commands::create_backup,
             commands::list_backups,
         ])

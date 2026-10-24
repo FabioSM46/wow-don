@@ -25,14 +25,14 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | Modulo | Responsabilità | Stato |
 | --- | --- | --- |
 | `config` | Legge `CURSEFORGE_API_KEY` dall'ambiente / `.env` | Esiste |
-| `commands` | Comandi Tauri esposti al frontend | Esiste (`app_status`, `list_installations`, `add_installation`, `remove_installation`, `list_addons`, `check_updates`, `update_addons`, `search_catalog`, `list_categories`, `list_version_types`, `set_version_override`, `clear_version_override`, `create_backup`, `list_backups`) |
+| `commands` | Comandi Tauri esposti al frontend | Esiste (`app_status`, `list_installations`, `add_installation`, `remove_installation`, `list_addons`, `check_updates`, `update_addons`, `search_catalog`, `list_categories`, `addon_detail`, `list_version_types`, `set_version_override`, `clear_version_override`, `create_backup`, `list_backups`) |
 | `installations` | Trova e gestisce le installazioni di WoW, anche dentro prefissi Wine | Esiste (aggiunta manuale e validazione; scoperta automatica da fare) |
 | `addons::toc` | Legge i file `.toc` in `Interface/AddOns` (titolo, versione, `## Interface`) e sceglie il `.toc` giusto per il flavor dell'installazione | Esiste |
 | `addons::scan` | Legge le cartelle di `Interface/AddOns` e il loro `.toc`, senza modificare niente | Esiste |
 | `addons::fingerprint` | Calcola i fingerprint di CurseForge (MurmurHash2 seme 1 senza spaziatura, sui file inclusi da `.toc` e `.xml`) per riconoscere gli addon installati | Esiste |
 | `sources` | Trait comune per le fonti (`search`, `versions`, `download`) | Da fare (oggi solo il modulo `curseforge`) |
-| `sources::curseforge` | Client per `https://api.curseforge.com/v1` con header `x-api-key`: fingerprint, mod, tipi di versione del gioco, ricerca (`/v1/mods/search`) e categorie (`/v1/categories`) | Esiste |
-| `catalog` | Ricerca nel catalogo CurseForge per un'installazione (`search_catalog`): 50 risultati per pagina, versione del gioco dell'installazione o una nota all'app, ordinamenti `popularity`/`lastUpdated`/`name`/`totalDownloads` tradotti in `sortField` 2/3/4/6, oltre i 10.000 risultati dell'API una pagina vuota con il conteggio reale; categorie per nome senza le classi (`list_categories`). Il flag `installed` (record di `installed-addons.json` con una cartella ancora presente, oppure `## X-Curse-Project-ID` nel `.toc`) non chiama l'API ed è la regola di "già installato" anche per l'installazione di un addon nuovo | Esiste (backend; la tab Search è da fare) |
+| `sources::curseforge` | Client per `https://api.curseforge.com/v1` con header `x-api-key`: fingerprint, mod, tipi di versione del gioco, ricerca (`/v1/mods/search`), categorie (`/v1/categories`), descrizione (`/v1/mods/{modId}/description`) e file di un mod con le loro dipendenze (`/v1/mods/{modId}/files`) | Esiste |
+| `catalog` | Ricerca nel catalogo CurseForge per un'installazione (`search_catalog`): 50 risultati per pagina, versione del gioco dell'installazione o una nota all'app, ordinamenti `popularity`/`lastUpdated`/`name`/`totalDownloads` tradotti in `sortField` 2/3/4/6, oltre i 10.000 risultati dell'API una pagina vuota con il conteggio reale; categorie per nome senza le classi (`list_categories`). Il flag `installed` (record di `installed-addons.json` con una cartella ancora presente, oppure `## X-Curse-Project-ID` nel `.toc`) non chiama l'API ed è la regola di "già installato" anche per l'installazione di un addon nuovo. Dettaglio di un addon (`addon_detail`): i campi della ricerca, la descrizione convertita in testo semplice nel backend (niente HTML dell'autore nella webview), fino a 20 file Release e Beta dal più recente e le dipendenze obbligatorie (`relationType = 3`) dell'ultimo Release con i nomi letti da una sola `get_mods`; senza versione esplicita vale quella forzata del progetto, poi quella dell'installazione | Esiste (backend; la tab Search è da fare) |
 | `updates` | Abbina gli addon ai progetti CurseForge e trova il file Release più recente per la versione del gioco (`check_updates`); aggiorna i progetti scelti rifacendo il controllo, scaricando il file e sostituendo le cartelle (`update_addons`); una cartella del file installato assente dal nuovo zip si toglie solo se è ancora sul disco con il fingerprint del modulo installato, non è un modulo di un altro progetto riconosciuto e nessun altro addon la dichiara tra le dipendenze del `.toc` | Esiste (Retail, Classic Era, Classic, Anniversary, WoW Forever; id verificati sull'API) |
 | `install` | Estrazione sicura dello zip in una cartella di staging accanto ad `AddOns` (niente percorsi assoluti, `..`, unità o link simbolici; limiti di voci e dimensione) e sostituzione delle cartelle con ripristino in caso di errore (D26) | Esiste (usato da `update_addons`; l'installazione di un addon nuovo è da fare) |
 | `backup` | Zip (deflate, in streaming) di `WTF` e `Interface` di un'installazione in `app_data_dir()/backups/<id-installazione>/<flavor>-AAAAMMGG-HHMMSS.zip` (ora UTC), scritto come file temporaneo e rinominato a fine scrittura; i link simbolici non si seguono; elenco dei backup dal più recente | Esiste (ripristino, backup automatico e rotazione da fare) |
@@ -41,7 +41,12 @@ mostra dati e chiama comandi, non conosce la chiave API.
 ## API CurseForge usate
 
 - `GET /v1/mods/search` (con `gameId = 1` per WoW): ricerca e filtri.
-- `GET /v1/mods/{modId}` e `GET /v1/mods/{modId}/files`: dettagli e versioni.
+- `GET /v1/mods/{modId}` e `GET /v1/mods/{modId}/files` (con `gameVersionTypeId` e
+  `pageSize`, al massimo 50): dettagli, versioni e, per ogni file, `dependencies` (`modId`,
+  `relationType`: 1 EmbeddedLibrary, 2 OptionalDependency, 3 RequiredDependency, 4 Tool,
+  5 Incompatible, 6 Include).
+- `GET /v1/mods/{modId}/description`: descrizione completa in HTML (`data` è una stringa),
+  convertita in testo prima di arrivare al frontend.
 - `POST /v1/fingerprints/1`: riconosce gli addon installati dai fingerprint delle cartelle;
   ogni cartella si abbina prima a `exactMatches` e, solo se lì non c'è, al file di
   `partialMatches` i cui `modules` contengono il suo fingerprint (come WowUp).
