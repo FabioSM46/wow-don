@@ -8,9 +8,10 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::addons::scan::{self, ListedAddon};
 use crate::backup::{self, BackupInfo};
+use crate::catalog::{self, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
 use crate::config::Config;
 use crate::installations::Installation;
-use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport};
+use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
 use crate::store::{AddonSettingsStore, InstallationStore, InstalledAddonsStore};
 use crate::updates::{self, AddonUpdate, UpdateOutcome, VersionOverrides, VersionType};
 
@@ -211,6 +212,67 @@ pub async fn update_addons(
     })
     .await
     .map_err(|error| format!("The update was interrupted ({error})."))?
+}
+
+/// Una pagina della ricerca nel catalogo di CurseForge per l'installazione (50 risultati da
+/// `index`). Senza `version_type` vale la versione del gioco dell'installazione. Il flag
+/// `installed` si calcola dai record e dai `.toc`, senza rete; rete e disco girano fuori dal
+/// thread principale.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn search_catalog(
+    installation_id: String,
+    query: String,
+    category_id: Option<u32>,
+    version_type: Option<u32>,
+    sort: CatalogSort,
+    sort_order: SortOrder,
+    index: u32,
+    store: Store<'_>,
+    installed: Installed<'_>,
+    config: State<'_, Config>,
+) -> Result<CatalogPage, String> {
+    let key = config
+        .curseforge_api_key
+        .clone()
+        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let installation = find_installation(&store, &installation_id)?;
+    // Come in `list_addons`: un registro illeggibile non blocca la ricerca, vale solo il `.toc`.
+    let records = locked_installed(&installed)?
+        .records_for(&installation.id)
+        .unwrap_or_default();
+    let request = CatalogQuery {
+        query,
+        category_id,
+        version_type,
+        sort,
+        sort_order,
+        index,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        let client = CurseForgeClient::new(transport, Some(key));
+        catalog::search_catalog(&installation, &client, &records, &request)
+    })
+    .await
+    .map_err(|error| format!("The search was interrupted ({error})."))?
+}
+
+/// Le categorie degli addon di WoW su CurseForge, per nome, senza le classi.
+#[tauri::command]
+pub async fn list_categories(config: State<'_, Config>) -> Result<Vec<CatalogCategory>, String> {
+    let key = config
+        .curseforge_api_key
+        .clone()
+        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        let client = CurseForgeClient::new(transport, Some(key));
+        catalog::list_categories(&client)
+    })
+    .await
+    .map_err(|error| format!("Reading the categories was interrupted ({error})."))?
 }
 
 fn find_installation(store: &Store<'_>, installation_id: &str) -> Result<Installation, String> {
