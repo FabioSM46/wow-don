@@ -122,6 +122,25 @@ export type CatalogPage = {
   totalCount: number;
 };
 
+/** Un file del progetto nel dettaglio; `releaseType` 1 Release, 2 Beta. */
+export type DetailFile = { id: number; name: string; date: string; releaseType: number };
+
+/** Una dipendenza obbligatoria; `name` è vuoto se CurseForge non restituisce il progetto. */
+export type Dependency = { id: number; name: string };
+
+/**
+ * Il dettaglio di un addon (`addon_detail`): i campi di `CatalogAddon` più la versione del
+ * gioco usata, la descrizione, i file recenti e le dipendenze obbligatorie.
+ */
+export type AddonDetail = CatalogAddon & {
+  versionType: number;
+  /** Testo semplice, che può contenere `<` e `>`: si mostra solo come testo, mai come HTML. */
+  description: string;
+  /** I file Release e Beta per la versione, dal più recente, al massimo 20. */
+  files: DetailFile[];
+  dependencies: Dependency[];
+};
+
 export type CatalogSort = "popularity" | "lastUpdated" | "name" | "totalDownloads";
 export type SortOrder = "asc" | "desc";
 
@@ -165,6 +184,10 @@ export const api = {
       sortOrder: search.sortOrder,
       index,
     }),
+  /** `versionType` `null`: la versione forzata per il progetto, altrimenti quella
+   *  dell'installazione. */
+  addonDetail: (installationId: string, modId: number, versionType: number | null) =>
+    invoke<AddonDetail>("addon_detail", { installationId, modId, versionType }),
   listCategories: () => invoke<CatalogCategory[]>("list_categories"),
 };
 
