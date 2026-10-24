@@ -1,4 +1,5 @@
-//! Installazione di un addon nuovo dal catalogo (`install_addon`, issue #70).
+//! Installazione di un addon nuovo dal catalogo (`install_addon`, issue #70), con le sue
+//! dipendenze obbligatorie (issue #71).
 //!
 //! Segue il flusso di `updates::update_addons` e ne riusa `install_file`: download, estrazione
 //! sicura in staging, sostituzione con ripristino. In più, prima di toccare il disco:
@@ -9,9 +10,12 @@
 //!   fa fallire l'installazione; una cartella esistente senza record né id di progetto
 //!   (installata a mano) si sostituisce.
 //!
+//! Come in WowUp, dopo un'installazione riuscita si installano le dipendenze del file con
+//! `relationType = 3` (RequiredDependency), e ricorsivamente le loro, con le stesse regole.
+//!
 //! Bloccante: va chiamato fuori dal thread principale.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -20,9 +24,15 @@ use serde::Serialize;
 
 use crate::catalog;
 use crate::installations::Installation;
-use crate::sources::curseforge::{CurseForgeClient, File, Mod, RELEASE_TYPE_RELEASE, Transport};
+use crate::sources::curseforge::{
+    CurseForgeClient, File, Mod, RELATION_REQUIRED_DEPENDENCY, RELEASE_TYPE_RELEASE, Transport,
+};
 use crate::store::{InstalledRecord, InstalledRecords};
 use crate::updates::{self, FileSummary, VersionOverrides};
+
+/// Quanti livelli di dipendenze si seguono: il progetto scelto è il livello 0, le sue
+/// dipendenze il livello 1. Le dipendenze più profonde non si installano e l'esito lo dice.
+pub const MAX_DEPENDENCY_DEPTH: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,9 +42,8 @@ pub enum InstallStatus {
     Error,
 }
 
-/// L'esito dell'installazione di un progetto, con la stessa forma di `UpdateOutcome`. Le
-/// dipendenze obbligatorie (issue #71) potranno aggiungere un campo `dependencyOf` con il
-/// progetto che le ha richieste.
+/// L'esito dell'installazione di un progetto, con la stessa forma di `UpdateOutcome` più
+/// `dependencyOf` per le dipendenze.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallOutcome {
@@ -49,6 +58,9 @@ pub struct InstallOutcome {
     /// Il file installato, solo per `installed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<FileSummary>,
+    /// Per una dipendenza, l'id del progetto che la richiede; assente per il progetto scelto.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependency_of: Option<u32>,
 }
 
 impl InstallOutcome {
@@ -59,6 +71,7 @@ impl InstallOutcome {
             status: InstallStatus::Skipped,
             message: Some(message.to_owned()),
             file: None,
+            dependency_of: None,
         }
     }
 
@@ -69,6 +82,7 @@ impl InstallOutcome {
             status: InstallStatus::Error,
             message: Some(message),
             file: None,
+            dependency_of: None,
         }
     }
 }
@@ -78,8 +92,16 @@ impl InstallOutcome {
 /// progetto (`overrides`) o per quella dell'installazione. `records` sono i record di
 /// `installed-addons.json` dell'installazione; `record` salva quello appena installato.
 ///
-/// Non restituisce mai `Err`: ogni problema è nell'esito, come per un progetto di
-/// `update_addons`.
+/// Se il progetto si installa, si installano anche le sue dipendenze obbligatorie, in
+/// ampiezza fino a [`MAX_DEPENDENCY_DEPTH`] livelli: ognuna con l'ultimo Release per la stessa
+/// versione del gioco del progetto scelto e con le stesse regole, ogni progetto al massimo una
+/// volta (cicli e dipendenze condivise). Le dipendenze di un progetto già installato o non
+/// installato non si seguono. Dopo ogni installazione i record locali includono quella appena
+/// fatta, così una dipendenza appena installata conta come installata e le sue cartelle come
+/// registrate.
+///
+/// Restituisce l'esito del progetto scelto seguito da uno per ogni dipendenza visitata, mai
+/// `Err`: un errore su una dipendenza non tocca il progetto scelto né le altre dipendenze.
 pub fn install_addon<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
@@ -88,78 +110,177 @@ pub fn install_addon<T: Transport>(
     mod_id: u32,
     file_id: Option<u32>,
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
-) -> InstallOutcome {
+) -> Vec<InstallOutcome> {
+    // La versione del gioco del progetto scelto vale anche per le sue dipendenze.
+    let version_type = overrides
+        .get(&mod_id)
+        .copied()
+        .or_else(|| updates::version_type_for(&installation.flavor));
+    let mut records = records.clone();
+    let (outcome, dependencies) = install_project(
+        installation,
+        client,
+        version_type,
+        &mut records,
+        mod_id,
+        file_id,
+        record,
+    );
+    let mut outcomes = vec![outcome];
+
+    let mut visited = HashSet::from([mod_id]);
+    // (dipendenza, progetto che la richiede, livello)
+    let mut queue = VecDeque::new();
+    enqueue(&mut queue, &mut visited, &dependencies, mod_id, 1);
+    while let Some((dependency, parent, depth)) = queue.pop_front() {
+        let (mut outcome, dependencies) = if depth > MAX_DEPENDENCY_DEPTH {
+            let message = format!(
+                "Not installed: it is more than {MAX_DEPENDENCY_DEPTH} levels deep in the dependency chain. Install it on its own."
+            );
+            (
+                InstallOutcome::skipped(dependency, "", &message),
+                Vec::new(),
+            )
+        } else {
+            install_project(
+                installation,
+                client,
+                version_type,
+                &mut records,
+                dependency,
+                None,
+                record,
+            )
+        };
+        outcome.dependency_of = Some(parent);
+        outcomes.push(outcome);
+        enqueue(
+            &mut queue,
+            &mut visited,
+            &dependencies,
+            dependency,
+            depth + 1,
+        );
+    }
+    outcomes
+}
+
+/// Mette in coda le dipendenze non ancora visitate, una volta sola ciascuna.
+fn enqueue(
+    queue: &mut VecDeque<(u32, u32, usize)>,
+    visited: &mut HashSet<u32>,
+    dependencies: &[u32],
+    parent: u32,
+    depth: usize,
+) {
+    for &dependency in dependencies {
+        if visited.insert(dependency) {
+            queue.push_back((dependency, parent, depth));
+        }
+    }
+}
+
+/// Installa un progetto con la versione del gioco `version_type` (se non c'è `file_id`).
+/// Restituisce l'esito e, se è stato installato, le dipendenze obbligatorie del file.
+fn install_project<T: Transport>(
+    installation: &Installation,
+    client: &CurseForgeClient<T>,
+    version_type: Option<u32>,
+    records: &mut InstalledRecords,
+    mod_id: u32,
+    file_id: Option<u32>,
+    record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
+) -> (InstallOutcome, Vec<u32>) {
     if catalog::installed_projects(installation, records).contains(&mod_id) {
-        return InstallOutcome::skipped(mod_id, "", "Already installed.");
+        return (
+            InstallOutcome::skipped(mod_id, "", "Already installed."),
+            Vec::new(),
+        );
     }
 
     let project = match client.get_mods(&[mod_id]) {
         Ok(mods) => mods.into_iter().find(|m| m.id == mod_id),
-        Err(error) => return InstallOutcome::error(mod_id, "", error.to_string()),
+        Err(error) => {
+            return (
+                InstallOutcome::error(mod_id, "", error.to_string()),
+                Vec::new(),
+            );
+        }
     };
     let Some(project) = project else {
-        return InstallOutcome::error(mod_id, "", "Addon not found on CurseForge.".to_owned());
+        return (
+            InstallOutcome::error(mod_id, "", "Addon not found on CurseForge.".to_owned()),
+            Vec::new(),
+        );
     };
+    let name = project.name.as_str();
+    match find_file(installation, client, &project, version_type, file_id) {
+        Ok(file) => install_checked(installation, client, records, &file, name, record),
+        Err(outcome) => (outcome, Vec::new()),
+    }
+}
+
+/// Il file da installare per il progetto, già controllato: distribuzione permessa, file del
+/// progetto e con un `downloadUrl`. Altrimenti l'esito che spiega perché no.
+fn find_file<T: Transport>(
+    installation: &Installation,
+    client: &CurseForgeClient<T>,
+    project: &Mod,
+    version_type: Option<u32>,
+    file_id: Option<u32>,
+) -> Result<File, InstallOutcome> {
+    let mod_id = project.id;
     let name = project.name.as_str();
     // D13: sconosciuto vale `false`.
     if project.allow_mod_distribution != Some(true) {
-        return InstallOutcome::skipped(
+        return Err(InstallOutcome::skipped(
             mod_id,
             name,
             "The author does not allow downloads from third-party apps: install it from the CurseForge website.",
-        );
+        ));
     }
 
     let file_id = match file_id {
         Some(id) => id,
         None => {
-            let Some(version_type) = overrides
-                .get(&mod_id)
-                .copied()
-                .or_else(|| updates::version_type_for(&installation.flavor))
-            else {
-                return InstallOutcome::error(
+            let Some(version_type) = version_type else {
+                return Err(InstallOutcome::error(
                     mod_id,
                     name,
                     format!(
                         "Installing addons does not support the game version \"{}\" yet.",
                         installation.name
                     ),
-                );
+                ));
             };
-            match latest_release(&project, version_type) {
-                Some(id) => id,
-                None => {
-                    return InstallOutcome::skipped(
-                        mod_id,
-                        name,
-                        "There is no release file for this game version.",
-                    );
-                }
-            }
+            latest_release(project, version_type).ok_or_else(|| {
+                InstallOutcome::skipped(
+                    mod_id,
+                    name,
+                    "There is no release file for this game version.",
+                )
+            })?
         }
     };
 
-    let file = match client.get_file(mod_id, file_id) {
-        Ok(file) => file,
-        Err(error) => return InstallOutcome::error(mod_id, name, error.to_string()),
-    };
+    let file = client
+        .get_file(mod_id, file_id)
+        .map_err(|error| InstallOutcome::error(mod_id, name, error.to_string()))?;
     if file.mod_id != mod_id {
-        return InstallOutcome::error(
+        return Err(InstallOutcome::error(
             mod_id,
             name,
             "The requested file does not belong to this addon.".to_owned(),
-        );
+        ));
     }
     if file.download_url.is_none() {
-        return InstallOutcome::skipped(
+        return Err(InstallOutcome::skipped(
             mod_id,
             name,
             "CurseForge does not provide a download link for this file: install it from the CurseForge website.",
-        );
+        ));
     }
-
-    install_checked(installation, client, records, &file, name, record)
+    Ok(file)
 }
 
 /// Il file Release più recente per la versione tra quelli che CurseForge indica come ultimi del
@@ -175,15 +296,18 @@ fn latest_release(project: &Mod, version_type: u32) -> Option<u32> {
         .max()
 }
 
-/// Scarica e installa `file`, rifiutando le cartelle di altri progetti, poi lo registra.
+/// Scarica e installa `file`, rifiutando le cartelle di altri progetti, poi lo registra sia
+/// con `record` sia nei `records` locali (anche se `record` fallisce: le cartelle sono sul
+/// disco e appartengono al progetto). Su un'installazione riuscita restituisce anche le
+/// dipendenze obbligatorie del file.
 fn install_checked<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
-    records: &InstalledRecords,
+    records: &mut InstalledRecords,
     file: &File,
     name: &str,
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
-) -> InstallOutcome {
+) -> (InstallOutcome, Vec<u32>) {
     let mod_id = file.mod_id;
     let addons_dir = installation.path.join("Interface").join("AddOns");
     let flavor = installation.flavor.as_str();
@@ -191,26 +315,35 @@ fn install_checked<T: Transport>(
         |folders: &[String]| check_foreign_folders(&addons_dir, flavor, records, mod_id, folders);
     let folders = match updates::install_file(client, file, &addons_dir, &[], &check) {
         Ok(folders) => folders,
-        Err(message) => return InstallOutcome::error(mod_id, name, message),
+        Err(message) => return (InstallOutcome::error(mod_id, name, message), Vec::new()),
+    };
+    let installed = InstalledRecord {
+        file_id: file.id,
+        folders,
     };
     // Le cartelle sono già al loro posto: se il registro non si salva l'installazione resta
     // riuscita, e il messaggio lo dice (come in `update_addons`).
-    let message = record(
-        mod_id,
-        InstalledRecord {
-            file_id: file.id,
-            folders,
+    let message = record(mod_id, installed.clone())
+        .err()
+        .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
+    records.insert(mod_id, installed);
+    let dependencies = file
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.relation_type == RELATION_REQUIRED_DEPENDENCY)
+        .map(|dependency| dependency.mod_id)
+        .collect();
+    (
+        InstallOutcome {
+            mod_id,
+            name: name.to_owned(),
+            status: InstallStatus::Installed,
+            message,
+            file: Some(FileSummary::from(file)),
+            dependency_of: None,
         },
+        dependencies,
     )
-    .err()
-    .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
-    InstallOutcome {
-        mod_id,
-        name: name.to_owned(),
-        status: InstallStatus::Installed,
-        message,
-        file: Some(FileSummary::from(file)),
-    }
 }
 
 /// Rifiuta lo zip se una delle sue cartelle esiste già in `AddOns` e appartiene a un altro
@@ -299,9 +432,12 @@ mod tests {
     /// Trasporto finto che risponde per URL e registra le richieste.
     #[derive(Default)]
     struct Routes {
-        mods: String,
+        /// I progetti di `POST /v1/mods`: la risposta contiene quelli chiesti nel corpo.
+        projects: Vec<Value>,
         files: HashMap<String, String>,
         zips: HashMap<String, Vec<u8>>,
+        /// Gli indirizzi per cui `get` fallisce come senza rete.
+        broken: Vec<String>,
         /// Condiviso con il test, che non può rileggere il trasporto dal client.
         log: Arc<Log>,
     }
@@ -328,6 +464,9 @@ mod tests {
     impl Transport for Routes {
         fn get(&self, url: &str, _key: &ApiKey) -> Result<HttpResponse, TransportError> {
             self.log.requests.lock().unwrap().push(url.to_owned());
+            if self.broken.iter().any(|broken| broken == url) {
+                return Err(TransportError::Connect);
+            }
             reply(self.files.get(url))
         }
 
@@ -335,14 +474,25 @@ mod tests {
             &self,
             url: &str,
             _key: &ApiKey,
-            _body: String,
+            body: String,
         ) -> Result<HttpResponse, TransportError> {
             self.log.requests.lock().unwrap().push(url.to_owned());
-            if url == format!("{API}/v1/mods") {
-                reply(Some(&self.mods))
-            } else {
-                reply(None)
+            if url != format!("{API}/v1/mods") {
+                return reply(None);
             }
+            let ids: Value = serde_json::from_str::<Value>(&body).unwrap()["modIds"].clone();
+            let ids: Vec<u64> = ids
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|id| id.as_u64().unwrap())
+                .collect();
+            let data: Vec<&Value> = self
+                .projects
+                .iter()
+                .filter(|p| ids.contains(&p["id"].as_u64().unwrap()))
+                .collect();
+            reply(Some(&json!({ "data": data }).to_string()))
         }
 
         fn get_bytes(&self, url: &str, _max: u64) -> Result<BytesResponse, TransportError> {
@@ -437,7 +587,7 @@ mod tests {
     /// Le rotte di un progetto installabile: file `file_id` con lo zip `zip`.
     fn routes(mod_id: u32, file_id: u32, zip: &[(&str, &str)]) -> Routes {
         Routes {
-            mods: json!({"data": [project(mod_id, Some(true))]}).to_string(),
+            projects: vec![project(mod_id, Some(true))],
             files: HashMap::from([(
                 format!("{API}/v1/mods/{mod_id}/files/{file_id}"),
                 json!({"data": file_json(mod_id, file_id, true)}).to_string(),
@@ -445,6 +595,42 @@ mod tests {
             zips: HashMap::from([(download_url(file_id), zip_of(zip))]),
             ..Routes::default()
         }
+    }
+
+    /// Le rotte di più progetti installabili, con le loro dipendenze `(id, relationType)`.
+    /// Ogni progetto ha i file Retail e Classic Era di [`project`], e lo zip di entrambi
+    /// contiene la cartella `P<id>`.
+    fn graph(nodes: &[(u32, &[(u32, u8)])]) -> Routes {
+        let mut routes = Routes::default();
+        for (mod_id, dependencies) in nodes {
+            routes.projects.push(project(*mod_id, Some(true)));
+            let dependencies: Vec<Value> = dependencies
+                .iter()
+                .map(|(id, relation)| json!({"modId": id, "relationType": relation}))
+                .collect();
+            for file_id in [mod_id * 10, mod_id * 10 + 1] {
+                let mut file = file_json(*mod_id, file_id, true);
+                file["dependencies"] = json!(dependencies);
+                routes.files.insert(
+                    format!("{API}/v1/mods/{mod_id}/files/{file_id}"),
+                    json!({ "data": file }).to_string(),
+                );
+                let folder = format!("P{mod_id}");
+                routes.zips.insert(
+                    download_url(file_id),
+                    zip_of(&[(&format!("{folder}/{folder}.toc"), "")]),
+                );
+            }
+        }
+        routes
+    }
+
+    /// `(modId, status, dependencyOf)` di ogni esito, nell'ordine.
+    fn summary(outcomes: &[InstallOutcome]) -> Vec<(u32, InstallStatus, Option<u32>)> {
+        outcomes
+            .iter()
+            .map(|o| (o.mod_id, o.status, o.dependency_of))
+            .collect()
     }
 
     fn client(routes: Routes) -> CurseForgeClient<Routes> {
@@ -467,7 +653,8 @@ mod tests {
         names
     }
 
-    /// Installa senza versioni forzate, raccogliendo i record scritti.
+    /// Installa senza versioni forzate un progetto senza dipendenze, raccogliendo i record
+    /// scritti.
     fn install(
         fx: &Fixture,
         routes: Routes,
@@ -475,8 +662,21 @@ mod tests {
         mod_id: u32,
         file_id: Option<u32>,
     ) -> (InstallOutcome, Vec<(u32, InstalledRecord)>) {
+        let (mut outcomes, written) = install_all(fx, routes, records, mod_id, file_id);
+        assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+        (outcomes.remove(0), written)
+    }
+
+    /// Installa senza versioni forzate, con le dipendenze, raccogliendo i record scritti.
+    fn install_all(
+        fx: &Fixture,
+        routes: Routes,
+        records: &InstalledRecords,
+        mod_id: u32,
+        file_id: Option<u32>,
+    ) -> (Vec<InstallOutcome>, Vec<(u32, InstalledRecord)>) {
         let mut written = Vec::new();
-        let outcome = install_addon(
+        let outcomes = install_addon(
             &fx.installation,
             &client(routes),
             &VersionOverrides::new(),
@@ -488,7 +688,7 @@ mod tests {
                 Ok(())
             },
         );
-        (outcome, written)
+        (outcomes, written)
     }
 
     #[test]
@@ -529,7 +729,8 @@ mod tests {
             1,
             None,
             &mut |_, _| Ok(()),
-        );
+        )
+        .remove(0);
         assert_eq!(outcome.status, InstallStatus::Installed, "{outcome:?}");
         assert_eq!(outcome.file.unwrap().id, 11);
     }
@@ -575,7 +776,7 @@ mod tests {
         for allow in [Some(false), None] {
             let fx = fixture();
             let mut routes = routes(1, 10, &[("Alpha/Alpha.toc", "")]);
-            routes.mods = json!({"data": [project(1, allow)]}).to_string();
+            routes.projects = vec![project(1, allow)];
             let log = Arc::clone(&routes.log);
 
             let (outcome, written) = install(&fx, routes, &InstalledRecords::new(), 1, None);
@@ -750,7 +951,8 @@ mod tests {
             1,
             None,
             &mut |_, _| Err("disk full".to_owned()),
-        );
+        )
+        .remove(0);
         assert_eq!(outcome.status, InstallStatus::Installed);
         assert!(outcome.file.is_some());
         assert_eq!(
@@ -764,7 +966,7 @@ mod tests {
     fn network_errors_and_unknown_projects_are_errors() {
         let fx = fixture();
         let mut unknown = routes(1, 10, &[]);
-        unknown.mods = json!({"data": []}).to_string();
+        unknown.projects = Vec::new();
         let (outcome, _) = install(&fx, unknown, &InstalledRecords::new(), 1, None);
         assert_eq!(outcome.status, InstallStatus::Error);
         assert_eq!(
@@ -784,6 +986,247 @@ mod tests {
         assert!(!outcome.message.unwrap().contains("test-key"));
     }
 
+    const REQUIRED: u8 = RELATION_REQUIRED_DEPENDENCY;
+    use InstallStatus::{Error as Failed, Installed, Skipped};
+
+    #[test]
+    fn required_dependencies_are_installed_recursively() {
+        let fx = fixture();
+        let routes = graph(&[(1, &[(2, REQUIRED)]), (2, &[(3, REQUIRED)]), (3, &[])]);
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, written) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [
+                (1, Installed, None),
+                (2, Installed, Some(1)),
+                (3, Installed, Some(2))
+            ]
+        );
+        assert_eq!(outcomes[1].name, "Project 2");
+        assert_eq!(names(&fx.addons), ["P1", "P2", "P3"]);
+        assert_eq!(
+            written,
+            [
+                (1, record(10, &["P1"])),
+                (2, record(20, &["P2"])),
+                (3, record(30, &["P3"]))
+            ]
+        );
+        assert_eq!(
+            *log.downloads.lock().unwrap(),
+            [download_url(10), download_url(20), download_url(30)]
+        );
+    }
+
+    #[test]
+    fn optional_dependencies_tools_and_libraries_are_ignored() {
+        let fx = fixture();
+        let routes = graph(&[
+            (1, &[(2, 1), (3, 2), (4, 4), (5, 5), (6, 6), (7, REQUIRED)]),
+            (7, &[]),
+        ]);
+
+        let (outcomes, _) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [(1, Installed, None), (7, Installed, Some(1))]
+        );
+    }
+
+    #[test]
+    fn an_installed_dependency_is_skipped_without_downloading() {
+        let fx = fixture();
+        write_folder(&fx.addons, "Lib", "## X-Curse-Project-ID: 2\n");
+        let routes = graph(&[(1, &[(2, REQUIRED)]), (2, &[(3, REQUIRED)]), (3, &[])]);
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, written) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        // Le dipendenze di una dipendenza già installata non si seguono.
+        assert_eq!(
+            summary(&outcomes),
+            [(1, Installed, None), (2, Skipped, Some(1))]
+        );
+        assert_eq!(outcomes[1].message.as_deref(), Some("Already installed."));
+        assert_eq!(*log.downloads.lock().unwrap(), [download_url(10)]);
+        assert_eq!(written.len(), 1);
+    }
+
+    #[test]
+    fn cycles_and_shared_dependencies_are_visited_once() {
+        let fx = fixture();
+        // 1 → 2 → 1 è un ciclo; 3 è richiesto da 1 e da 2.
+        let routes = graph(&[
+            (1, &[(2, REQUIRED), (3, REQUIRED)]),
+            (2, &[(1, REQUIRED), (3, REQUIRED)]),
+            (3, &[(3, REQUIRED)]),
+        ]);
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, _) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [
+                (1, Installed, None),
+                (2, Installed, Some(1)),
+                (3, Installed, Some(1))
+            ]
+        );
+        assert_eq!(log.downloads.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn dependencies_beyond_the_depth_limit_are_not_installed() {
+        let fx = fixture();
+        let nodes: Vec<(u32, Vec<(u32, u8)>)> =
+            (1..=8).map(|id| (id, vec![(id + 1, REQUIRED)])).collect();
+        let nodes: Vec<(u32, &[(u32, u8)])> = nodes
+            .iter()
+            .map(|(id, deps)| (*id, deps.as_slice()))
+            .collect();
+        let routes = graph(&nodes);
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, _) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        let mut expected = vec![(1, Installed, None)];
+        expected.extend((2..=6).map(|id| (id, Installed, Some(id - 1))));
+        expected.push((7, Skipped, Some(6)));
+        assert_eq!(summary(&outcomes), expected);
+        let message = outcomes[6].message.as_deref().unwrap();
+        assert!(message.contains("more than 5 levels deep"), "{message}");
+        assert_eq!(log.downloads.lock().unwrap().len(), 6);
+        assert!(
+            !log.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|url| url.contains("/7"))
+        );
+    }
+
+    #[test]
+    fn a_blocked_dependency_is_skipped_and_the_others_continue() {
+        let fx = fixture();
+        let mut routes = graph(&[(1, &[(2, REQUIRED), (3, REQUIRED)]), (2, &[]), (3, &[])]);
+        routes.projects[1] = project(2, Some(false));
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, _) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [
+                (1, Installed, None),
+                (2, Skipped, Some(1)),
+                (3, Installed, Some(1))
+            ]
+        );
+        assert!(
+            outcomes[1]
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("install it from the CurseForge website")
+        );
+        assert!(!log.downloads.lock().unwrap().contains(&download_url(20)));
+    }
+
+    #[test]
+    fn a_network_error_on_a_dependency_keeps_the_rest() {
+        let fx = fixture();
+        let mut routes = graph(&[(1, &[(2, REQUIRED), (3, REQUIRED)]), (2, &[]), (3, &[])]);
+        routes.broken.push(format!("{API}/v1/mods/2/files/20"));
+
+        let (outcomes, written) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [
+                (1, Installed, None),
+                (2, Failed, Some(1)),
+                (3, Installed, Some(1))
+            ]
+        );
+        assert!(!outcomes[1].message.as_deref().unwrap().contains("test-key"));
+        assert_eq!(names(&fx.addons), ["P1", "P3"]);
+        assert_eq!(
+            written.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            [1, 3]
+        );
+    }
+
+    #[test]
+    fn dependencies_use_the_game_version_of_the_chosen_project() {
+        let fx = fixture();
+        let routes = graph(&[(1, &[(2, REQUIRED)]), (2, &[])]);
+        let mut written = Vec::new();
+
+        // La versione forzata del progetto scelto vale per la dipendenza, non la sua.
+        let outcomes = install_addon(
+            &fx.installation,
+            &client(routes),
+            &VersionOverrides::from([(1, CLASSIC_ERA), (2, RETAIL)]),
+            &InstalledRecords::new(),
+            1,
+            None,
+            &mut |id, r| {
+                written.push((id, r.file_id));
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            summary(&outcomes),
+            [(1, Installed, None), (2, Installed, Some(1))]
+        );
+        assert_eq!(written, [(1, 11), (2, 21)]);
+    }
+
+    #[test]
+    fn a_just_installed_dependency_owns_its_folders() {
+        let fx = fixture();
+        let mut routes = graph(&[(1, &[(2, REQUIRED), (3, REQUIRED)]), (2, &[]), (3, &[])]);
+        // 2 e 3 portano la stessa cartella: dopo 2, `Lib` è registrata come sua.
+        for id in [2, 3] {
+            routes
+                .zips
+                .insert(download_url(id * 10), zip_of(&[("Lib/Lib.toc", "")]));
+        }
+
+        let (outcomes, written) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [
+                (1, Installed, None),
+                (2, Installed, Some(1)),
+                (3, Failed, Some(1))
+            ]
+        );
+        let message = outcomes[2].message.as_deref().unwrap();
+        assert!(message.contains("project 2"), "{message}");
+        assert_eq!(written.len(), 2);
+    }
+
+    #[test]
+    fn no_dependency_is_followed_when_the_project_is_not_installed() {
+        let fx = fixture();
+        let mut routes = graph(&[(1, &[(2, REQUIRED)]), (2, &[])]);
+        routes.projects[0] = project(1, Some(false));
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, _) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(summary(&outcomes), [(1, Skipped, None)]);
+        assert!(log.downloads.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn the_outcome_payload_is_camel_case() {
         let json = serde_json::to_value(InstallOutcome::skipped(7, "Foo", "why")).unwrap();
@@ -801,11 +1244,13 @@ mod tests {
                 name: "x".to_owned(),
                 date: "d".to_owned(),
             }),
+            dependency_of: Some(3),
         })
         .unwrap();
         assert_eq!(json["status"], "installed");
         assert_eq!(json["file"]["id"], 1);
         assert!(json.get("message").is_none());
+        assert_eq!(json["dependencyOf"], 3);
         assert_eq!(serde_json::to_value(InstallStatus::Error).unwrap(), "error");
     }
 }
