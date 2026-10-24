@@ -361,7 +361,7 @@ fn folder_names(dir: &Path) -> Result<Vec<String>, String> {
 }
 
 /// Messaggio per un `rename` fallito. Su Windows un file aperto dal gioco blocca lo spostamento:
-/// in quel caso si chiede di chiudere WoW.
+/// in quel caso si chiede di chiudere WoW. Su Linux e macOS non succede (vedi `is_locked`).
 fn rename_error(error: &io::Error) -> String {
     if is_locked(error) {
         "Some addon files are in use: close World of Warcraft and try again.".to_string()
@@ -376,8 +376,10 @@ fn is_locked(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(5 | 32 | 33))
 }
 
-/// Su Linux il gioco gira sotto Wine, che non blocca i file aperti: un `rename` non fallisce
-/// perché WoW è aperto.
+/// Su Linux il gioco gira sotto Wine e su macOS è il client nativo (D29): in entrambi i casi
+/// valgono le regole Unix, dove un file aperto non blocca il `rename` della cartella che lo
+/// contiene. Un `rename` non fallisce perché WoW è aperto, quindi nessun errore si attribuisce
+/// al gioco.
 #[cfg(not(target_os = "windows"))]
 fn is_locked(_error: &io::Error) -> bool {
     false

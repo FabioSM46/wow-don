@@ -43,6 +43,7 @@ jobs:
       backend: ${{ steps.classify.outputs.backend }}
       frontend: ${{ steps.classify.outputs.frontend }}
       helpers: ${{ steps.classify.outputs.helpers }}
+      macos: ${{ steps.classify.outputs.macos }}
     steps:
       # Full history: the commit-privacy scan walks every commit the PR adds.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -72,7 +73,7 @@ jobs:
 
           if [ "$BASE_REF" = "main" ]; then
             echo "Release promotion matrix: everything runs"
-            printf 'backend=true\nfrontend=true\nhelpers=true\n' >> "$GITHUB_OUTPUT"
+            printf 'backend=true\nfrontend=true\nhelpers=true\nmacos=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -93,7 +94,7 @@ jobs:
             printf 'helpers=true\n' >> "$GITHUB_OUTPUT"
           else
             echo "::warning::detect: could not enumerate changed files; failing open — all jobs run"
-            printf 'backend=true\nfrontend=true\nhelpers=true\n' >> "$GITHUB_OUTPUT"
+            printf 'backend=true\nfrontend=true\nhelpers=true\nmacos=true\n' >> "$GITHUB_OUTPUT"
           fi
 
   # Rust/Tauri backend gates (src-tauri/). `!= 'false'`, not `== 'true'`: a job may
@@ -140,6 +141,36 @@ jobs:
     needs: detect
     if: ${{ !cancelled() && needs.detect.outputs.backend != 'false' }}
     runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # 1.97.1
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Build
+        run: cargo build --locked
+      - name: Test
+        run: cargo test --locked
+
+  # The same backend on macOS (D29), with the native client and no Wine. macOS
+  # minutes cost ten times the Linux ones in a private repository, so this job has
+  # its own `macos` selector: true on PRs to `main` and on PRs that change this
+  # workflow (scripts/changed-areas.sh), false elsewhere — an authorized skip that
+  # `ci-gate` accepts. `!= 'false'` keeps the fail-open direction of the others.
+  backend-macos:
+    needs: detect
+    if: ${{ !cancelled() && needs.detect.outputs.macos != 'false' }}
+    runs-on: macos-latest
     timeout-minutes: 40
     defaults:
       run:
@@ -228,7 +259,7 @@ jobs:
   # always created after the whole matrix reaches a terminal state.
   ci_gate:
     name: ci-gate
-    needs: [detect, backend, backend-windows, frontend, automation]
+    needs: [detect, backend, backend-windows, backend-macos, frontend, automation]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -238,6 +269,8 @@ jobs:
       BACKEND_SELECTED: ${{ needs.detect.outputs.backend }}
       BACKEND_RESULT: ${{ needs.backend.result }}
       BACKEND_WINDOWS_RESULT: ${{ needs.backend-windows.result }}
+      MACOS_SELECTED: ${{ needs.detect.outputs.macos }}
+      BACKEND_MACOS_RESULT: ${{ needs.backend-macos.result }}
       FRONTEND_SELECTED: ${{ needs.detect.outputs.frontend }}
       FRONTEND_RESULT: ${{ needs.frontend.result }}
       HELPERS_SELECTED: ${{ needs.detect.outputs.helpers }}

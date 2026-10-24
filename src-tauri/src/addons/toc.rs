@@ -189,7 +189,7 @@ fn legacy_suffixes(flavor: &str) -> &'static [&'static str] {
 
 /// Sceglie il `.toc` di una cartella di addon per il flavor dato. `addon_dir` è il nome
 /// della cartella; il gioco carica solo i `.toc` che hanno lo stesso nome della cartella.
-/// Il confronto ignora maiuscole e minuscole, come fa il gioco su Windows e sotto Wine.
+/// Il confronto ignora maiuscole e minuscole, come fa il gioco su Windows, sotto Wine e su macOS.
 pub fn select_toc<'a>(addon_dir: &str, file_names: &'a [String], flavor: &str) -> Option<&'a str> {
     let find = |wanted: String| {
         file_names

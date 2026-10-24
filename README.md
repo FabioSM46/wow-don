@@ -1,10 +1,11 @@
 # WoW-don
 
-Gestore di addon per World of Warcraft per **Linux e Windows**. Su Linux gestisce il
-gioco dentro un prefisso Wine (Lutris, Battle.net), su Windows l'installazione
-normale. App desktop nativa scritta in Rust con interfaccia Tauri, alternativa più
-leggera e più comoda a WowUp-CF. Si distribuisce come pacchetto `.deb` su Linux e
-come installer su Windows.
+Gestore di addon per World of Warcraft per **Linux, Windows e macOS**. Su Linux gestisce
+il gioco dentro un prefisso Wine (Lutris, Battle.net), su Windows e su macOS
+l'installazione normale del client nativo. App desktop nativa scritta in Rust con
+interfaccia Tauri, alternativa più leggera e più comoda a WowUp-CF. Si distribuisce come
+pacchetto `.deb` su Linux e come installer su Windows; il pacchetto per macOS non c'è
+ancora.
 
 ## Stato
 
@@ -128,6 +129,9 @@ La struttura prevista dei moduli del backend è in
 
 Su **Windows** servono Microsoft C++ Build Tools (carico di lavoro "Sviluppo di
 applicazioni desktop con C++") e WebView2, già presente su Windows 10 e 11.
+
+Su **macOS** servono gli strumenti da riga di comando di Xcode (`xcode-select --install`);
+WebKit fa già parte del sistema.
 
 Su **Linux** servono le librerie di sistema per Tauri. Su Ubuntu/Debian:
 
