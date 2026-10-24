@@ -1,0 +1,177 @@
+// Tests for the catalog search logic: `pnpm test` (node --test, Node strips the types).
+
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import type { CatalogAddon, CatalogPage } from "../api";
+import {
+  RequestTracker,
+  appendPage,
+  categoryOptions,
+  defaultSearch,
+  firstPage,
+  formatAuthors,
+  formatDate,
+  formatDownloads,
+  hasMore,
+  normalizeQuery,
+  resultCount,
+  withSort,
+} from "./catalog.ts";
+
+function addon(id: number, fields: Partial<CatalogAddon> = {}): CatalogAddon {
+  return {
+    id,
+    name: `Addon ${id}`,
+    summary: "",
+    authors: [],
+    downloadCount: 0,
+    dateModified: "2026-10-01T12:00:00Z",
+    categories: [],
+    thumbnailUrl: null,
+    url: null,
+    allowModDistribution: true,
+    latestFile: null,
+    installed: false,
+    ...fields,
+  };
+}
+
+function page(index: number, ids: number[], totalCount: number): CatalogPage {
+  return { addons: ids.map((id) => addon(id)), index, pageSize: 50, totalCount };
+}
+
+const ids = (addons: CatalogAddon[]) => addons.map((a) => a.id);
+
+describe("search parameters", () => {
+  it("starts from popularity, descending, with the installation's game version", () => {
+    assert.deepEqual(defaultSearch, {
+      query: "",
+      categoryId: null,
+      versionType: null,
+      sort: "popularity",
+      sortOrder: "desc",
+    });
+  });
+
+  it("switching sort resets to its natural direction", () => {
+    const byName = withSort({ ...defaultSearch, query: "dbm", categoryId: 3 }, "name");
+    assert.equal(byName.sort, "name");
+    assert.equal(byName.sortOrder, "asc");
+    assert.equal(byName.query, "dbm");
+    assert.equal(byName.categoryId, 3);
+    assert.equal(withSort({ ...byName, sortOrder: "desc" }, "lastUpdated").sortOrder, "desc");
+    assert.equal(withSort(byName, "totalDownloads").sortOrder, "desc");
+  });
+
+  it("trims the query", () => {
+    assert.equal(normalizeQuery("  deadly boss  "), "deadly boss");
+    assert.equal(normalizeQuery("   "), "");
+  });
+});
+
+describe("categories", () => {
+  it("lists each subcategory under its parent", () => {
+    const options = categoryOptions([
+      { id: 10, name: "Bags", parentCategoryId: 1 },
+      { id: 12, name: "Boss Encounters", parentCategoryId: 11 },
+      { id: 11, name: "Combat", parentCategoryId: 1 },
+      { id: 13, name: "Damage Meters", parentCategoryId: 11 },
+      { id: 14, name: "Orphan", parentCategoryId: 99 },
+    ]);
+    assert.deepEqual(
+      options.map((o) => [o.name, o.depth]),
+      [
+        ["Bags", 0],
+        ["Combat", 0],
+        ["Boss Encounters", 1],
+        ["Damage Meters", 1],
+        ["Orphan", 0],
+      ],
+    );
+  });
+});
+
+describe("pages", () => {
+  it("the first page replaces everything", () => {
+    const results = firstPage(page(0, [1, 2, 3], 120));
+    assert.deepEqual(ids(results.addons), [1, 2, 3]);
+    assert.equal(results.nextIndex, 50);
+    assert.equal(results.totalCount, 120);
+    assert.equal(hasMore(results), true);
+  });
+
+  it("appends the next page without repeating an addon already shown", () => {
+    const first = firstPage(page(0, [1, 2, 3], 120));
+    const second = appendPage(first, page(50, [3, 4, 4, 5], 120));
+    assert.deepEqual(ids(second.addons), [1, 2, 3, 4, 5]);
+    assert.equal(second.nextIndex, 100);
+  });
+
+  it("stops when the total is reached", () => {
+    const results = appendPage(firstPage(page(0, [1], 60)), page(50, [2], 60));
+    assert.equal(results.nextIndex, 100);
+    assert.equal(hasMore(results), false);
+  });
+
+  it("stops on an empty page even if the total says more", () => {
+    const results = appendPage(firstPage(page(0, [1], 500)), page(50, [], 500));
+    assert.equal(hasMore(results), false);
+  });
+
+  it("stops at the API result limit", () => {
+    const results = appendPage(firstPage(page(0, [1], 50_000)), page(9_950, [2], 50_000));
+    assert.equal(results.nextIndex, 10_000);
+    assert.equal(hasMore(results), false);
+  });
+
+  it("an empty search has nothing more", () => {
+    const results = firstPage(page(0, [], 0));
+    assert.equal(hasMore(results), false);
+    assert.equal(resultCount(results), "No results");
+  });
+});
+
+describe("out-of-order responses", () => {
+  it("only the latest request applies", () => {
+    const tracker = new RequestTracker();
+    const slow = tracker.next();
+    const fast = tracker.next();
+    // The fast search answers first, then the slow one arrives late.
+    assert.equal(tracker.isLatest(fast), true);
+    assert.equal(tracker.isLatest(slow), false);
+    const later = tracker.next();
+    assert.equal(tracker.isLatest(fast), false);
+    assert.equal(tracker.isLatest(later), true);
+  });
+});
+
+describe("formatting", () => {
+  it("downloads in compact form", () => {
+    assert.equal(formatDownloads(0), "0");
+    assert.equal(formatDownloads(950), "950");
+    assert.equal(formatDownloads(12_345), "12.3K");
+    assert.equal(formatDownloads(1_250_000), "1.3M");
+    assert.equal(formatDownloads(512_000_000), "512M");
+  });
+
+  it("dates, with a dash for missing or invalid ones", () => {
+    assert.equal(formatDate("2026-10-24T09:30:00Z"), "Oct 24, 2026");
+    assert.equal(formatDate(""), "—");
+    assert.equal(formatDate("not a date"), "—");
+  });
+
+  it("authors", () => {
+    assert.equal(formatAuthors(["AuthorA", "AuthorB"]), "AuthorA, AuthorB");
+    assert.equal(formatAuthors([]), "—");
+  });
+
+  it("result count", () => {
+    const one = firstPage(page(0, [1], 1));
+    assert.equal(resultCount(one), "1 result");
+    const partial = firstPage(page(0, [1, 2], 1_234));
+    assert.equal(resultCount(partial), "2 of 1,234 results");
+    const all = firstPage(page(0, [1, 2], 2));
+    assert.equal(resultCount(all), "2 results");
+  });
+});

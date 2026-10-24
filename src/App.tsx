@@ -2,11 +2,13 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { api, errorMessage, type AppStatus, type Installation } from "./api";
 import { AddonTable } from "./addons/AddonTable";
 import { Installations } from "./installations/Installations";
+import { Search } from "./search/Search";
 import "./App.css";
 
-/** Le tab dell'app, nell'ordine in cui compaiono. La tab Search arriva con M4. */
+/** Le tab dell'app, nell'ordine in cui compaiono. */
 const TABS = [
   { id: "installed", label: "Installed" },
+  { id: "search", label: "Search" },
   { id: "options", label: "Options" },
 ] as const;
 
@@ -137,6 +139,30 @@ function App() {
           {installations !== null && installations.length === 0 && (
             <p className="empty">
               No installations yet. Add one in{" "}
+              <button className="link inline" onClick={() => focusTab("options")}>
+                Options
+              </button>
+              .
+            </p>
+          )}
+        </div>
+
+        <div
+          id="panel-search"
+          role="tabpanel"
+          aria-labelledby="tab-search"
+          hidden={tab !== "search"}
+        >
+          {active && (
+            <Search
+              installation={active}
+              active={tab === "search"}
+              keyConfigured={status?.curseforgeKeyConfigured ?? null}
+            />
+          )}
+          {installations !== null && installations.length === 0 && (
+            <p className="empty">
+              Search needs an installation to know the game version. Add one in{" "}
               <button className="link inline" onClick={() => focusTab("options")}>
                 Options
               </button>
