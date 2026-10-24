@@ -89,6 +89,52 @@ export type BackupInfo = {
   modifiedMs: number | null;
 };
 
+/** Una categoria degli addon di WoW su CurseForge (`list_categories`). */
+export type CatalogCategory = { id: number; name: string; parentCategoryId: number | null };
+
+/** L'ultimo file Release di un progetto per la versione del gioco della ricerca. */
+export type CatalogFile = { id: number; name: string; gameVersion: string };
+
+/** Un addon del catalogo di CurseForge, come lo restituisce `search_catalog`. */
+export type CatalogAddon = {
+  id: number;
+  name: string;
+  summary: string;
+  authors: string[];
+  downloadCount: number;
+  /** Data ISO 8601 dell'ultima modifica del progetto. */
+  dateModified: string;
+  categories: CatalogCategory[];
+  thumbnailUrl: string | null;
+  url: string | null;
+  /** Falso: CurseForge non permette di scaricarlo da un'app di terzi. */
+  allowModDistribution: boolean;
+  latestFile: CatalogFile | null;
+  /** Il progetto è già nell'installazione. */
+  installed: boolean;
+};
+
+/** Una pagina di `search_catalog`: `totalCount` conta tutti i risultati della ricerca. */
+export type CatalogPage = {
+  addons: CatalogAddon[];
+  index: number;
+  pageSize: number;
+  totalCount: number;
+};
+
+export type CatalogSort = "popularity" | "lastUpdated" | "name" | "totalDownloads";
+export type SortOrder = "asc" | "desc";
+
+/** I parametri di `search_catalog`; `null` lascia decidere al backend (tutte le categorie,
+ *  la versione del gioco dell'installazione). */
+export type CatalogSearch = {
+  query: string;
+  categoryId: number | null;
+  versionType: number | null;
+  sort: CatalogSort;
+  sortOrder: SortOrder;
+};
+
 export const api = {
   appStatus: () => invoke<AppStatus>("app_status"),
   listInstallations: () => invoke<Installation[]>("list_installations"),
@@ -109,6 +155,17 @@ export const api = {
     invoke<BackupInfo>("create_backup", { installationId }),
   listBackups: (installationId: string) =>
     invoke<BackupInfo[]>("list_backups", { installationId }),
+  searchCatalog: (installationId: string, search: CatalogSearch, index: number) =>
+    invoke<CatalogPage>("search_catalog", {
+      installationId,
+      query: search.query,
+      categoryId: search.categoryId,
+      versionType: search.versionType,
+      sort: search.sort,
+      sortOrder: search.sortOrder,
+      index,
+    }),
+  listCategories: () => invoke<CatalogCategory[]>("list_categories"),
 };
 
 /** I comandi rifiutano con il messaggio del backend; qualunque altra cosa diventa testo. */
