@@ -3,6 +3,7 @@ mod backup;
 mod catalog;
 mod commands;
 mod config;
+mod discovery;
 mod install;
 mod install_new;
 mod installations;
@@ -56,6 +57,7 @@ pub fn run() {
             commands::list_installations,
             commands::add_installation,
             commands::remove_installation,
+            commands::discover_installations,
             commands::list_addons,
             commands::list_version_types,
             commands::set_version_override,

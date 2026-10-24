@@ -10,6 +10,7 @@ use crate::addons::scan::{self, ListedAddon};
 use crate::backup::{self, BackupInfo};
 use crate::catalog::{self, AddonDetail, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
 use crate::config::Config;
+use crate::discovery::{self, DiscoveredInstallation};
 use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
@@ -88,6 +89,24 @@ pub fn list_installations(store: Store<'_>) -> Result<Vec<Installation>, String>
 #[tauri::command]
 pub fn add_installation(path: String, store: Store<'_>) -> Result<Installation, String> {
     locked(&store)?.add(Path::new(&path))
+}
+
+/// Cerca le installazioni di WoW nei percorsi standard della piattaforma e restituisce quelle
+/// non ancora aggiunte. Suggerisce soltanto: non scrive `installations.json`. Non trovare
+/// niente non è un errore. La lettura del disco (e del registro su Windows) gira fuori dal
+/// thread principale.
+#[tauri::command]
+pub async fn discover_installations(
+    app: AppHandle,
+    store: Store<'_>,
+) -> Result<Vec<DiscoveredInstallation>, String> {
+    let known = locked(&store)?.list()?;
+    let home = app.path().home_dir().ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        discovery::examine(&discovery::candidate_roots(home.as_deref()), &known)
+    })
+    .await
+    .map_err(|error| format!("The search for installations was interrupted ({error})."))
 }
 
 /// Rimuove prima le impostazioni e i record degli addon, poi l'installazione: se qualcosa non
