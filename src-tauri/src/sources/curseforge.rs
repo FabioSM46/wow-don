@@ -527,7 +527,7 @@ pub struct Category {
     pub is_class: Option<bool>,
 }
 
-/// La paginazione di `GET /v1/mods/search`.
+/// La paginazione di `GET /v1/mods/search` e `GET /v1/mods/{modId}/files`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pagination {
@@ -542,6 +542,14 @@ pub struct Pagination {
 pub struct SearchPage {
     #[serde(default, deserialize_with = "null_as_default")]
     pub data: Vec<CatalogMod>,
+    pub pagination: Pagination,
+}
+
+/// Una pagina dei file di un mod.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct FilesPage {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub data: Vec<File>,
     pub pagination: Pagination,
 }
 
@@ -729,20 +737,21 @@ impl<T: Transport> CurseForgeClient<T> {
         decode::<Option<String>>(self.transport.get(&url, key)).map(Option::unwrap_or_default)
     }
 
-    /// La prima pagina dei file di un mod per una versione del gioco
-    /// (`GET /v1/mods/{modId}/files`; `pageSize` arriva al massimo a 50). La paginazione della
-    /// risposta non si legge.
+    /// Una pagina dei file di un mod per una versione del gioco, dalla posizione `index`
+    /// (`GET /v1/mods/{modId}/files`; `pageSize` arriva al massimo a 50). Senza `pagination`
+    /// la risposta non è valida: senza il totale non si sa se ci sono altre pagine.
     pub fn mod_files(
         &self,
         mod_id: u32,
         game_version_type_id: u32,
+        index: u32,
         page_size: u32,
-    ) -> Result<Vec<File>, CurseForgeError> {
+    ) -> Result<FilesPage, CurseForgeError> {
         let key = self.key()?;
         let url = format!(
-            "{BASE_URL}/v1/mods/{mod_id}/files?gameVersionTypeId={game_version_type_id}&pageSize={page_size}"
+            "{BASE_URL}/v1/mods/{mod_id}/files?gameVersionTypeId={game_version_type_id}&index={index}&pageSize={page_size}"
         );
-        decode(self.transport.get(&url, key))
+        decode_body(self.transport.get(&url, key))
     }
 
     /// I byte dello zip di `file`, scaricati dalla CDN senza chiave. Non controlla
@@ -1283,7 +1292,9 @@ mod tests {
           {"id": 5, "modId": 61284, "releaseType": 3}
         ], "pagination": {"index": 0, "pageSize": 50, "resultCount": 3, "totalCount": 3}}"#;
         let client = client(Ok((200, body)));
-        let files = client.mod_files(61284, 517, 50).unwrap();
+        let page = client.mod_files(61284, 517, 100, 50).unwrap();
+        assert_eq!(page.pagination.total_count, 3);
+        let files = page.data;
         assert_eq!(
             files[0].dependencies,
             [
@@ -1301,9 +1312,15 @@ mod tests {
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(
             seen[0].0,
-            "https://api.curseforge.com/v1/mods/61284/files?gameVersionTypeId=517&pageSize=50"
+            "https://api.curseforge.com/v1/mods/61284/files?gameVersionTypeId=517&index=100&pageSize=50"
         );
         assert_eq!((seen[0].1.as_str(), seen[0].2.as_deref()), (KEY, None));
+        drop(seen);
+        let unpaged = self::client(Ok((200, r#"{"data": []}"#)));
+        assert_eq!(
+            unpaged.mod_files(61284, 517, 0, 50),
+            Err(CurseForgeError::InvalidResponse)
+        );
     }
 
     #[test]

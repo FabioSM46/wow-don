@@ -5,8 +5,17 @@
 //! `<style>` scartato, le entità comuni decodificate. I paragrafi e i blocchi diventano una
 //! riga vuota, `<br>` e `<li>` un a capo, gli spazi ripetuti uno solo. Non è un parser HTML
 //! completo e non serve che lo sia: quello che non riconosce lo scarta o lo lascia come testo.
+//!
+//! **Il risultato è testo, non HTML sicuro.** Decodificare le entità rimette in chiaro i
+//! caratteri del markup: `&lt;img src=x onerror=...&gt;` diventa la stringa
+//! `<img src=x onerror=...>`. È corretto finché resta testo, quindi il contratto con il
+//! frontend è che `description` si mostra **solo come testo** (il binding di testo di React,
+//! `{description}`, o `textContent`), **mai** con `innerHTML` o `dangerouslySetInnerHTML`.
+//! Qui non si fa l'escape di `<`, `>` e `&`: il binding di testo lo fa già, e un escape doppio
+//! mostrerebbe `&lt;3` invece di `<3`.
 
-/// Il testo semplice di un frammento HTML.
+/// Il testo semplice di un frammento HTML. Va mostrato come testo, mai come HTML (vedi il
+/// modulo).
 pub fn plain_text(html: &str) -> String {
     let mut out = Writer::default();
     let mut rest = html;
@@ -232,7 +241,8 @@ mod tests {
             "&bogus; &amp &#xZZ; R&D"
         );
         assert_eq!(plain_text("&#0;"), "\u{fffd}");
-        // Un'entità decodificata è testo, mai un tag.
+        // Un'entità decodificata è testo, mai un tag: non si interpreta come markup qui, e il
+        // frontend non deve farlo (vedi il modulo).
         assert_eq!(
             plain_text("&lt;script&gt;x&lt;/script&gt;"),
             "<script>x</script>"
