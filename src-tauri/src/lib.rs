@@ -4,6 +4,7 @@ mod catalog;
 mod commands;
 mod config;
 mod install;
+mod install_new;
 mod installations;
 mod sources;
 mod store;
@@ -60,6 +61,7 @@ pub fn run() {
             commands::clear_version_override,
             commands::check_updates,
             commands::update_addons,
+            commands::install_addon,
             commands::search_catalog,
             commands::list_categories,
             commands::create_backup,

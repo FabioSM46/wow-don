@@ -10,6 +10,7 @@ use crate::addons::scan::{self, ListedAddon};
 use crate::backup::{self, BackupInfo};
 use crate::catalog::{self, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
 use crate::config::Config;
+use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
 use crate::store::{AddonSettingsStore, InstallationStore, InstalledAddonsStore};
@@ -212,6 +213,49 @@ pub async fn update_addons(
     })
     .await
     .map_err(|error| format!("The update was interrupted ({error})."))?
+}
+
+/// Installa un addon nuovo dal catalogo: il file `file_id` se indicato, altrimenti l'ultimo
+/// Release per la versione del gioco forzata per il progetto o dell'installazione. Rete e disco
+/// girano fuori dal thread principale. I record si leggono lì, subito prima di installare: un
+/// registro illeggibile blocca l'installazione, perché senza record non si sa quali cartelle
+/// appartengono ad altri progetti.
+#[tauri::command]
+pub async fn install_addon(
+    installation_id: String,
+    mod_id: u32,
+    file_id: Option<u32>,
+    app: AppHandle,
+    store: Store<'_>,
+    settings: Settings<'_>,
+    config: State<'_, Config>,
+) -> Result<InstallOutcome, String> {
+    let key = config
+        .curseforge_api_key
+        .clone()
+        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let installation = find_installation(&store, &installation_id)?;
+    let overrides = overrides_for(&settings, &installation.id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        let client = CurseForgeClient::new(transport, Some(key));
+        let installed = app.state::<Mutex<InstalledAddonsStore>>();
+        let records = locked_installed(&installed)?.records_for(&installation.id)?;
+        Ok(install_new::install_addon(
+            &installation,
+            &client,
+            &overrides,
+            &records,
+            mod_id,
+            file_id,
+            &mut |mod_id, record| {
+                locked_installed(&installed)?.record(&installation.id, mod_id, record)
+            },
+        ))
+    })
+    .await
+    .map_err(|error| format!("The installation was interrupted ({error})."))?
 }
 
 /// Una pagina della ricerca nel catalogo di CurseForge per l'installazione (50 risultati da
