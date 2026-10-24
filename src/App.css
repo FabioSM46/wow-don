@@ -221,10 +221,29 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-/* Options: le sezioni (Installations, Appearance) una sotto l'altra. */
+/* Options: le sezioni (Found on this computer, Installations, Appearance) una sotto l'altra. */
 
+.discovered + .installations,
 .appearance {
   margin-top: 32px;
+}
+
+/* Installazioni trovate: cartella del gioco e provenienza accanto al nome, in tono neutro. */
+.discovered-meta {
+  margin-left: 8px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.discovered .empty,
+.discovered .muted {
+  margin: 0;
+}
+
+/* "Scan again" mentre una ricerca o un'aggiunta è in corso. */
+.discovered .link:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* Installazioni */
