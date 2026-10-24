@@ -45,8 +45,8 @@ export function Discovered({ active, installations, onAdded, onChange }: Props) 
 
   useEffect(() => {
     if (active && scan.status === "idle") void runScan();
-    // La ricerca parte una volta sola da qui; le successive solo con "Scan again".
-  }, [active]);
+    // La ricerca parte una volta sola da qui (solo da `idle`); le successive con "Scan again".
+  }, [active, scan.status]);
 
   async function add(item: DiscoveredInstallation) {
     setAddError(null);
@@ -54,8 +54,17 @@ export function Discovered({ active, installations, onAdded, onChange }: Props) 
     try {
       const installation = await api.addInstallation(item.path);
       setAdded((previous) => new Set(previous).add(item.path));
-      // Come l'aggiunta manuale: la lista si rilegge dal backend.
-      onChange(await api.listInstallations());
+      // Come l'aggiunta manuale: la lista si rilegge dal backend. Se la rilettura fallisce
+      // l'aggiunta è comunque riuscita: la lista mostrata riceve l'installazione restituita,
+      // così diventa attiva lo stesso, e l'errore della rilettura resta in vista.
+      let list: Installation[];
+      try {
+        list = await api.listInstallations();
+      } catch (err) {
+        list = [...installations, installation];
+        setAddError(errorMessage(err));
+      }
+      onChange(list);
       onAdded(installation.id);
     } catch (err) {
       setAddError(errorMessage(err));
