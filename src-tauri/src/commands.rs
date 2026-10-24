@@ -1,7 +1,7 @@
 //! Comandi Tauri invocabili dal frontend.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -10,6 +10,7 @@ use crate::addons::scan::{self, ListedAddon};
 use crate::backup::{self, BackupInfo};
 use crate::catalog::{self, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
 use crate::config::Config;
+use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
 use crate::store::{AddonSettingsStore, InstallationStore, InstalledAddonsStore};
@@ -57,6 +58,19 @@ fn locked_installed(
     installed
         .lock()
         .map_err(|_| "The installed addons list is not available: restart the app.".to_owned())
+}
+
+/// Serializza installazioni e aggiornamenti: `install_addon` e `update_addons` lo tengono per
+/// tutto il lavoro bloccante, così il controllo delle cartelle di altri progetti e la
+/// sostituzione sul disco non si intrecciano con un'altra installazione. Il lock non protegge
+/// dati: un panic che lo avvelena non lascia niente di incoerente, quindi si riprende.
+#[derive(Default)]
+pub struct InstallLock(Mutex<()>);
+
+impl InstallLock {
+    fn hold(&self) -> MutexGuard<'_, ()> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 fn overrides_for(
@@ -179,7 +193,8 @@ pub async fn check_updates(
 
 /// Aggiorna i progetti `mod_ids` dell'installazione: rifà il controllo, scarica e installa, e
 /// registra in `installed-addons.json` quello che ha installato. Rete e disco girano fuori dal
-/// thread principale; il lock del registro si prende solo per scrivere ogni record.
+/// thread principale, sotto [`InstallLock`]; il lock del registro si prende solo per scrivere
+/// ogni record.
 #[tauri::command]
 pub async fn update_addons(
     installation_id: String,
@@ -196,6 +211,8 @@ pub async fn update_addons(
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let lock = app.state::<InstallLock>();
+        let _held = lock.hold();
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         let client = CurseForgeClient::new(transport, Some(key));
@@ -212,6 +229,52 @@ pub async fn update_addons(
     })
     .await
     .map_err(|error| format!("The update was interrupted ({error})."))?
+}
+
+/// Installa un addon nuovo dal catalogo: il file `file_id` se indicato, altrimenti l'ultimo
+/// Release per la versione del gioco forzata per il progetto o dell'installazione. Rete e disco
+/// girano fuori dal thread principale, sotto [`InstallLock`]. I record si leggono lì, con il lock
+/// già preso, così nessun'altra installazione li cambia prima della sostituzione: un registro
+/// illeggibile blocca l'installazione, perché senza record non si sa quali cartelle
+/// appartengono ad altri progetti.
+#[tauri::command]
+pub async fn install_addon(
+    installation_id: String,
+    mod_id: u32,
+    file_id: Option<u32>,
+    app: AppHandle,
+    store: Store<'_>,
+    settings: Settings<'_>,
+    config: State<'_, Config>,
+) -> Result<InstallOutcome, String> {
+    let key = config
+        .curseforge_api_key
+        .clone()
+        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let installation = find_installation(&store, &installation_id)?;
+    let overrides = overrides_for(&settings, &installation.id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = app.state::<InstallLock>();
+        let _held = lock.hold();
+        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        let client = CurseForgeClient::new(transport, Some(key));
+        let installed = app.state::<Mutex<InstalledAddonsStore>>();
+        let records = locked_installed(&installed)?.records_for(&installation.id)?;
+        Ok(install_new::install_addon(
+            &installation,
+            &client,
+            &overrides,
+            &records,
+            mod_id,
+            file_id,
+            &mut |mod_id, record| {
+                locked_installed(&installed)?.record(&installation.id, mod_id, record)
+            },
+        ))
+    })
+    .await
+    .map_err(|error| format!("The installation was interrupted ({error})."))?
 }
 
 /// Una pagina della ricerca nel catalogo di CurseForge per l'installazione (50 risultati da
