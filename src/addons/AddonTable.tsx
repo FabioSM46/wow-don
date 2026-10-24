@@ -23,7 +23,11 @@ import {
   type SortKey,
 } from "./filter";
 
-type Props = { installation: Installation };
+type Props = {
+  installation: Installation;
+  /** Cambia quando gli addon sono stati installati altrove nell'app: la lista si rilegge. */
+  reload?: number;
+};
 
 /**
  * Risultati del controllo aggiornamenti per installazione, validi per la sessione. Stanno fuori
@@ -78,7 +82,7 @@ function formatModified(ms: number | null): string {
   return Number.isNaN(date.getTime()) ? "—" : dateFormat.format(date);
 }
 
-export function AddonTable({ installation }: Props) {
+export function AddonTable({ installation, reload = 0 }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<Sort>(defaultSort);
@@ -166,6 +170,15 @@ export function AddonTable({ installation }: Props) {
         if (currentId.current === id) setRescanning(false);
       });
   }
+
+  // Un'installazione fatta altrove (tab Search) si vede con la stessa rilettura del pulsante,
+  // solo quando `reload` cambia.
+  const seenReload = useRef(reload);
+  useEffect(() => {
+    if (seenReload.current === reload) return;
+    seenReload.current = reload;
+    void rescan();
+  }, [reload]);
 
   // Progetti (`mod_id`) in aggiornamento: le loro righe mostrano "Updating…" e tutti i pulsanti
   // di aggiornamento restano disabilitati finché la lista e gli stati non sono riletti.

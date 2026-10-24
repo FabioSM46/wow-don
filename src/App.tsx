@@ -21,6 +21,10 @@ function App() {
   const [tab, setTab] = useState<Tab>("installed");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Un'installazione dalla tab Search cambia gli addon sul disco: tornando sulla tab Installed
+  // la lista si rilegge (`reload` cambia), una volta sola per quante installazioni ci sono state.
+  const [installedStale, setInstalledStale] = useState(false);
+  const [reload, setReload] = useState(0);
   const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
 
   useEffect(() => {
@@ -51,6 +55,10 @@ function App() {
   /** Cambia tab e porta il focus sulla tab scelta (frecce e link verso Options). */
   function focusTab(next: Tab) {
     setTab(next);
+    if (next === "installed" && installedStale) {
+      setInstalledStale(false);
+      setReload((n) => n + 1);
+    }
     tabRefs.current[next]?.focus();
   }
 
@@ -135,7 +143,7 @@ function App() {
           aria-labelledby="tab-installed"
           hidden={tab !== "installed"}
         >
-          {active && <AddonTable installation={active} />}
+          {active && <AddonTable installation={active} reload={reload} />}
           {installations !== null && installations.length === 0 && (
             <p className="empty">
               No installations yet. Add one in{" "}
@@ -158,6 +166,7 @@ function App() {
               installation={active}
               active={tab === "search"}
               keyConfigured={status?.curseforgeKeyConfigured ?? null}
+              onInstalled={() => setInstalledStale(true)}
             />
           )}
           {installations !== null && installations.length === 0 && (

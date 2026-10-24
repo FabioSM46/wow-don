@@ -78,6 +78,22 @@ export type UpdateOutcome = {
   file?: FileSummary;
 };
 
+/**
+ * Esito di `install_addon` per un progetto: il primo è quello scelto, poi le dipendenze
+ * obbligatorie in ampiezza. `name` può essere vuoto; `message` spiega `skipped` ed `error` o
+ * avvisa su un'installazione riuscita.
+ */
+export type InstallOutcome = {
+  modId: number;
+  name: string;
+  status: "installed" | "skipped" | "error";
+  message?: string;
+  /** Il file installato, solo per `installed`. */
+  file?: FileSummary;
+  /** Per una dipendenza, l'id del progetto che la richiede. */
+  dependencyOf?: number;
+};
+
 /** Un tipo di versione del gioco che si può forzare per un addon (`list_version_types`). */
 export type VersionType = { id: number; name: string };
 
@@ -188,6 +204,9 @@ export const api = {
    *  dell'installazione. */
   addonDetail: (installationId: string, modId: number, versionType: number | null) =>
     invoke<AddonDetail>("addon_detail", { installationId, modId, versionType }),
+  /** `fileId` assente: l'ultimo Release per la versione del gioco del progetto. */
+  installAddon: (installationId: string, modId: number, fileId?: number) =>
+    invoke<InstallOutcome[]>("install_addon", { installationId, modId, fileId: fileId ?? null }),
   listCategories: () => invoke<CatalogCategory[]>("list_categories"),
 };
 

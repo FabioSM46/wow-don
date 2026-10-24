@@ -525,11 +525,14 @@ button:focus-visible {
 }
 
 .update-summary p,
-.update-summary ul {
+.update-summary ul,
+.install-summary p,
+.install-summary ul {
   margin: 0;
 }
 
-.update-summary ul {
+.update-summary ul,
+.install-summary ul {
   padding-left: 18px;
   font-size: 0.85rem;
 }
@@ -722,6 +725,31 @@ button:focus-visible {
 
 .catalog-table tr[aria-selected="true"] {
   background: var(--hover);
+}
+
+/* Le azioni di una riga compaiono al passaggio del mouse o del focus; restano in vista durante
+   un'installazione e dopo un errore. Nascoste con `visibility`, la colonna non cambia larghezza. */
+.catalog-table .row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  visibility: hidden;
+}
+
+.catalog-table tr:hover .row-actions,
+.catalog-table tr:focus-within .row-actions,
+.catalog-table .row-actions.pinned {
+  visibility: visible;
+}
+
+.installed-mark,
+.install-failed {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.installed-mark {
+  color: var(--muted);
 }
 
 .load-more {
