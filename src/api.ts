@@ -7,6 +7,12 @@ export type AppStatus = {
   curseforgeKeyConfigured: boolean;
 };
 
+/** Il tema dell'interfaccia; `system` segue il sistema operativo. */
+export type Theme = "system" | "light" | "dark";
+
+/** Le impostazioni dell'app salvate dal backend in `settings.json` (`get_settings`). */
+export type AppSettings = { theme: Theme };
+
 export type Installation = {
   id: string;
   path: string;
@@ -208,6 +214,9 @@ export const api = {
   installAddon: (installationId: string, modId: number, fileId?: number) =>
     invoke<InstallOutcome[]>("install_addon", { installationId, modId, fileId: fileId ?? null }),
   listCategories: () => invoke<CatalogCategory[]>("list_categories"),
+  getSettings: () => invoke<AppSettings>("get_settings"),
+  /** Un valore sconosciuto è rifiutato dal backend. */
+  setTheme: (theme: Theme) => invoke<AppSettings>("set_theme", { theme }),
 };
 
 /** I comandi rifiutano con il messaggio del backend; qualunque altra cosa diventa testo. */

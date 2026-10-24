@@ -14,7 +14,10 @@ use crate::discovery::{self, DiscoveredInstallation};
 use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
-use crate::store::{AddonSettingsStore, InstallationStore, InstalledAddonsStore};
+use crate::store::{
+    AddonSettingsStore, AppSettings, AppSettingsStore, InstallationStore, InstalledAddonsStore,
+    Theme,
+};
 use crate::updates::{self, AddonUpdate, UpdateOutcome, VersionOverrides, VersionType};
 
 #[derive(Serialize)]
@@ -59,6 +62,35 @@ fn locked_installed(
     installed
         .lock()
         .map_err(|_| "The installed addons list is not available: restart the app.".to_owned())
+}
+
+type AppSettingsState<'a> = State<'a, Mutex<AppSettingsStore>>;
+
+fn locked_app_settings(
+    settings: &Mutex<AppSettingsStore>,
+) -> Result<MutexGuard<'_, AppSettingsStore>, String> {
+    settings
+        .lock()
+        .map_err(|_| "Settings are not available: restart the app.".to_owned())
+}
+
+/// Le impostazioni dell'app (per ora il tema); senza `settings.json` valgono i default.
+#[tauri::command]
+pub fn get_settings(settings: AppSettingsState<'_>) -> Result<AppSettings, String> {
+    locked_app_settings(&settings)?.get()
+}
+
+/// Salva il tema (`system`, `light` o `dark`) e restituisce le impostazioni aggiornate.
+#[tauri::command]
+pub fn set_theme(theme: String, settings: AppSettingsState<'_>) -> Result<AppSettings, String> {
+    save_theme(&settings, &theme)
+}
+
+/// Il corpo di [`set_theme`], separato dallo `State` di Tauri per i test. Il nome si controlla
+/// prima del lock: un valore sconosciuto non tocca né la memoria né il file.
+fn save_theme(settings: &Mutex<AppSettingsStore>, theme: &str) -> Result<AppSettings, String> {
+    let theme = Theme::parse(theme)?;
+    locked_app_settings(settings)?.set_theme(theme)
 }
 
 /// Serializza installazioni e aggiornamenti: `install_addon` e `update_addons` lo tengono per
@@ -444,4 +476,34 @@ pub async fn list_backups(
     tauri::async_runtime::spawn_blocking(move || backup::list_backups(&dir))
         .await
         .map_err(|error| format!("Reading the backups was interrupted ({error})."))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::APP_SETTINGS_FILE;
+    use crate::test_support::TempDir;
+
+    #[test]
+    fn set_theme_saves_a_known_theme_and_rejects_an_unknown_one() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        let settings = Mutex::new(AppSettingsStore::load(file.clone()));
+
+        let error = save_theme(&settings, "sepia").unwrap_err();
+        assert_eq!(error, "Unknown theme: use system, light or dark.");
+        assert!(!file.exists());
+
+        assert_eq!(save_theme(&settings, "light").unwrap().theme, Theme::Light);
+        assert_eq!(
+            AppSettingsStore::load(file).get().unwrap().theme,
+            Theme::Light
+        );
+    }
+
+    #[test]
+    fn settings_serialize_as_the_frontend_expects() {
+        let json = serde_json::to_value(AppSettings { theme: Theme::Dark }).unwrap();
+        assert_eq!(json, serde_json::json!({"theme": "dark"}));
+    }
 }
