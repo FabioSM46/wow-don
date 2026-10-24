@@ -1,7 +1,8 @@
 # WoW-don — Tauri 2 (Rust + React)
 
-Gestore di addon per World of Warcraft per **Linux e Windows**: su Linux il gioco gira dentro
-un prefisso Wine, su Windows è installato normalmente. App desktop nativa: backend **Rust**
+Gestore di addon per World of Warcraft per **Linux, Windows e macOS**: su Linux il gioco gira
+dentro un prefisso Wine, su Windows e su macOS è il client nativo installato normalmente. App
+desktop nativa: backend **Rust**
 con **Tauri 2**, frontend **React + TypeScript** (Vite, pnpm). Contesto, decisioni,
 architettura e roadmap sono in `docs/`.
 
@@ -52,26 +53,31 @@ quando "funziona".
 2. Poi il frontend, contro il comportamento reale del comando.
 3. Esegui i gate di entrambe le aree prima di aprire la PR.
 
-### Piattaforme: Linux e Windows
+### Piattaforme: Linux, Windows e macOS
 
-L'app deve funzionare su **Linux e Windows** (D23) e si distribuisce come **`.deb`** su Linux
-e come **installer NSIS** su Windows, mai come versione portable (D24). Ogni modifica deve
-valere su entrambe:
+L'app deve funzionare su **Linux, Windows e macOS** (D23, estesa da D29) e si distribuisce come
+**`.deb`** su Linux e come **installer NSIS** su Windows, mai come versione portable (D24); su
+macOS il client del gioco è nativo, senza Wine, e il pacchetto non c'è ancora. Ogni modifica
+deve valere su tutte e tre:
 
 - **Percorsi solo con `Path`/`PathBuf`** e `join`: mai separatori scritti a mano, mai
   confronti tra percorsi come stringhe. Le cartelle di config e dati si chiedono a Tauri
   (`app.path()`), mai `~` o `%APPDATA%` scritti nel codice.
 - **Maiuscole e minuscole**: Windows (e il gioco sotto Wine) non le distingue nei nomi dei
-  file, Linux sì. I confronti sui nomi dei file del gioco (`.toc`, cartelle `_<flavor>_`) si
-  fanno senza distinguere maiuscole e minuscole quando il gioco fa lo stesso.
+  file, Linux sì, macOS di norma no (APFS non distingue, salvo volumi formattati apposta). I
+  confronti sui nomi dei file del gioco (`.toc`, cartelle `_<flavor>_`) si fanno senza
+  distinguere maiuscole e minuscole quando il gioco fa lo stesso. Un test che crea due nomi
+  diversi solo per le maiuscole gira solo su Linux.
 - **`canonicalize` su Windows** restituisce percorsi `\\?\C:\...`: vanno mostrati e salvati
   senza quel prefisso.
 - **Niente comandi di shell o strumenti di una sola piattaforma** (`sh`, `xdg-open`,
   `cmd`): per aprire file e link c'è il plugin `opener`.
-- **I test girano su entrambe**: niente percorsi assoluti Unix nei test che toccano il disco;
-  si costruiscono sotto una cartella temporanea.
+- **I test girano su tutte e tre**: niente percorsi assoluti Unix nei test che toccano il
+  disco; si costruiscono sotto una cartella temporanea.
 - Le funzioni solo per una piattaforma stanno dietro `#[cfg(target_os = "...")]`, con un
-  comportamento definito anche per l'altra. Le funzioni legate a Wine e Lutris sono solo Linux.
+  comportamento definito anche per le altre due. `not(target_os = "windows")` vale per Linux
+  **e** macOS: il commento non deve dare per scontato "non Windows = Linux sotto Wine", e
+  `cfg(unix)` comprende macOS. Le funzioni legate a Wine e Lutris sono solo Linux.
 
 ### Interfaccia: minimale e moderna
 
@@ -463,6 +469,7 @@ Se un gate fallisce, l'implementazione non è finita.
 | `detect`     | Controlli di privacy sull'albero e sui commit della PR, poi classifica i file cambiati con `scripts/changed-areas.sh` |
 | `backend`    | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` (con le librerie di sistema di Tauri) |
 | `backend-windows` | `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` su `windows-latest` (D23); stesso selettore di `backend` |
+| `backend-macos` | Gli stessi gate di `backend-windows` su `macos-latest` (D29), con un selettore proprio (`macos`): gira solo sulle PR verso `main` e sulle PR che modificano `ci.yml` |
 | `frontend`   | `pnpm install --frozen-lockfile`, `pnpm build`, `pnpm test` |
 | `automation` | Tutta la suite `scripts/test/*.test.sh` più `test_deepseek_review.py` |
 | `ci-gate`    | L'unico check stabile: verifica che ogni job selezionato abbia avuto successo e ogni salto fosse autorizzato |
@@ -472,6 +479,13 @@ attiva `backend` e `backend-windows`, `src/**` e i file di toolchain del fronten
 `package.json`/`pnpm-lock.yaml` attivano entrambi, `ci.yml` attiva tutto, la documentazione non
 attiva niente. `automation` gira sempre. Un percorso non riconosciuto o un diff illeggibile
 attivano tutto (fallimento aperto). Su una PR verso `main` gira tutto.
+
+`backend-macos` è più stretto per scelta dell'utente: in un repository privato i minuti macOS
+costano dieci volte quelli Linux. Su una base diversa da `main` gira solo se il diff tocca
+`ci.yml`, così si vede girare ogni volta che cambia la sua definizione; altrove il salto è
+autorizzato e `ci-gate` lo accetta. Un percorso non riconosciuto non lo attiva (ci pensano già
+`backend` e `backend-windows`), un diff illeggibile sì. Un cambio al backend che rompe solo
+macOS si scopre quindi alla PR di rilascio verso `main`.
 
 Due trappole:
 

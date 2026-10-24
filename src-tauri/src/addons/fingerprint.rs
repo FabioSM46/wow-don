@@ -72,8 +72,8 @@ const TOC_SUFFIXES: &[&str] = &[
 ];
 
 /// I file di un addon, per percorso relativo con `/` e con la cartella dell'addon come primo
-/// elemento (`Foo/core.lua`), indicizzati dal percorso in minuscolo. Il gioco su Windows e
-/// sotto Wine non distingue maiuscole e minuscole, e gli addon contano su questo.
+/// elemento (`Foo/core.lua`), indicizzati dal percorso in minuscolo. Il gioco su Windows, sotto
+/// Wine e su macOS non distingue maiuscole e minuscole, e gli addon contano su questo.
 pub type FileIndex = BTreeMap<String, String>;
 
 /// Sceglie i file che entrano nel fingerprint. `read` restituisce il testo di un file dato il
