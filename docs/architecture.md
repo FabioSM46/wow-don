@@ -27,7 +27,7 @@ mostra dati e chiama comandi, non conosce la chiave API.
 | `config` | Legge `CURSEFORGE_API_KEY` dall'ambiente / `.env` | Esiste |
 | `commands` | Comandi Tauri esposti al frontend | Esiste (`app_status`, `list_installations`, `add_installation`, `remove_installation`, `discover_installations`, `list_addons`, `check_updates`, `update_addons`, `install_addon`, `search_catalog`, `list_categories`, `addon_detail`, `list_version_types`, `set_version_override`, `clear_version_override`, `create_backup`, `list_backups`) |
 | `installations` | Trova e gestisce le installazioni di WoW, anche dentro prefissi Wine | Esiste (aggiunta manuale e validazione; la scoperta automatica è in `discovery`) |
-| `discovery` | Ricerca automatica delle installazioni (`discover_installations`): una funzione per piattaforma costruisce le cartelle `World of Warcraft` candidate (Windows: `InstallPath` del registro, D30, poi `World of Warcraft`, `Program Files (x86)`, `Program Files` e `Games` su ogni disco da C a Z; macOS: `/Applications` e `Applications` nella home chiesta a Tauri; Linux: nessuna, i prefissi Wine sono la issue #88); una funzione comune legge solo le candidate e i loro figli diretti, tiene le cartelle `_<flavor>_` valide per `installations::validate`, senza duplicati (stesso id) e senza quelle già in `installations.json`. Restituisce `path`, `flavor`, `name` e `origin`; suggerisce soltanto, non scrive niente, e non trovare niente non è un errore | Esiste (backend; interfaccia da fare, issue #89) |
+| `discovery` | Ricerca automatica delle installazioni (`discover_installations`): una funzione per piattaforma costruisce le cartelle `World of Warcraft` candidate (Windows: `InstallPath` del registro, D30, poi `World of Warcraft`, `Program Files (x86)`, `Program Files` e `Games` su ogni disco da C a Z; macOS: `/Applications` e `Applications` nella home chiesta a Tauri; Linux: `World of Warcraft` sotto `drive_c/Program Files (x86)` e `drive_c/Program Files` di ogni prefisso Wine della home, cioè `.wine`, i figli di `Games` (Lutris), i bottle di Bottles nativo e Flatpak e i `pfx` di `steamapps/compatdata` (Steam/Proton), a livelli fissi, con i nomi letti senza distinguere maiuscole e minuscole e senza leggere le configurazioni di Lutris, Bottles o Steam); una funzione comune legge solo le candidate e i loro figli diretti, tiene le cartelle `_<flavor>_` valide per `installations::validate`, senza duplicati (stesso id) e senza quelle già in `installations.json`. Restituisce `path`, `flavor`, `name` e `origin`; suggerisce soltanto, non scrive niente, e non trovare niente non è un errore | Esiste (backend; interfaccia da fare, issue #89) |
 | `addons::toc` | Legge i file `.toc` in `Interface/AddOns` (titolo, versione, `## Interface`) e sceglie il `.toc` giusto per il flavor dell'installazione | Esiste |
 | `addons::scan` | Legge le cartelle di `Interface/AddOns` e il loro `.toc`, senza modificare niente | Esiste |
 | `addons::fingerprint` | Calcola i fingerprint di CurseForge (MurmurHash2 seme 1 senza spaziatura, sui file inclusi da `.toc` e `.xml`) per riconoscere gli addon installati | Esiste |
@@ -90,7 +90,8 @@ con prefisso in `~/Games/battlenet`:
 ```
 
 Ogni cartella `_<flavor>_` è un'installazione separata. L'app deve poter aggiungere
-installazioni a mano e, più avanti, cercarle nei prefissi Lutris noti.
+installazioni a mano e cercarle nei prefissi Wine della home (`discovery`, issue #88);
+i prefissi in percorsi personalizzati restano l'aggiunta manuale.
 
 ## Finestra
 

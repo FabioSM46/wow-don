@@ -4,7 +4,7 @@
 //!
 //! - [`candidate_roots`] costruisce l'elenco delle cartelle `World of Warcraft` da guardare e
 //!   dipende dalla piattaforma (Windows: dischi e registro; macOS: le due `Applications`;
-//!   Linux: per ora niente, i prefissi Wine arrivano con la issue #88);
+//!   Linux: le cartelle del gioco dentro i prefissi Wine della home, issue #88);
 //! - [`examine`] è comune a tutte le piattaforme: legge solo le cartelle candidate e i loro
 //!   figli diretti, e tiene le cartelle `_<flavor>_` valide secondo
 //!   [`installations::validate`], la stessa regola dell'aggiunta manuale.
@@ -28,8 +28,6 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    // Su Linux nessuna candidata ancora (issue #88 la userà per i prefissi Wine).
-    #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
     pub fn new(path: PathBuf, origin: &str) -> Self {
         Self {
             path,
@@ -135,8 +133,6 @@ fn absolute_drive(path: &str) -> PathBuf {
     }
 }
 
-// Su Linux nessuna candidata ancora (issue #88).
-#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 const GAME_DIR: &str = "World of Warcraft";
 
 /// Le cartelle `World of Warcraft` da esaminare su Windows: prima quelle indicate dal registro,
@@ -211,11 +207,108 @@ pub fn candidate_roots(home: Option<&Path>) -> Vec<Candidate> {
     candidates
 }
 
-/// Su Linux il gioco gira dentro un prefisso Wine: le candidate arriveranno con la issue #88.
-/// Per ora nessuna candidata, quindi la ricerca restituisce una lista vuota.
+/// Su Linux il gioco gira dentro un prefisso Wine: le candidate sono le cartelle del gioco
+/// nei prefissi trovati sotto la home chiesta a Tauri (vedi [`wine_candidates`]). Senza home
+/// non c'è niente da cercare.
 #[cfg(target_os = "linux")]
-pub fn candidate_roots(_home: Option<&Path>) -> Vec<Candidate> {
-    Vec::new()
+pub fn candidate_roots(home: Option<&Path>) -> Vec<Candidate> {
+    home.map(wine_candidates).unwrap_or_default()
+}
+
+/// Le cartelle `Program Files` dove Battle.net installa il gioco dentro `drive_c`, nell'ordine
+/// in cui si guardano.
+const PROGRAM_FILES: [&str; 2] = ["Program Files (x86)", "Program Files"];
+
+/// Le cartelle `World of Warcraft` dentro i prefissi Wine sotto `home`, due per prefisso
+/// (`Program Files (x86)` e `Program Files`), nell'ordine di [`wine_prefixes`]. È comune a
+/// tutte le piattaforme così i test girano ovunque; la chiama solo la parte Linux.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn wine_candidates(home: &Path) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+    for (prefix, origin) in wine_prefixes(home) {
+        // `wine_prefixes` tiene solo le cartelle con `drive_c`.
+        let Some(drive_c) = child_ignoring_case(&prefix, "drive_c") else {
+            continue;
+        };
+        for folder in PROGRAM_FILES {
+            let program_files = child_or_join(&drive_c, folder);
+            let game = child_or_join(&program_files, GAME_DIR);
+            candidates.push(Candidate::new(game, &origin));
+        }
+    }
+    candidates
+}
+
+/// I prefissi Wine sotto `home`, con la provenienza da mostrare: `.wine`, i figli diretti di
+/// `Games` (Lutris), i bottle di Bottles nativo e Flatpak e i `pfx` di Steam/Proton. Solo
+/// questi livelli fissi, nessuna visita ricorsiva; una cartella è un prefisso solo se contiene
+/// `drive_c`. Lo stesso prefisso raggiunto due volte (per esempio `.steam/steam`, che di norma è
+/// un link a `.local/share/Steam`) compare una volta sola, con la prima provenienza. La
+/// provenienza non contiene mai la home.
+fn wine_prefixes(home: &Path) -> Vec<(PathBuf, String)> {
+    let mut prefixes = vec![(home.join(".wine"), "Wine prefix (~/.wine)".to_owned())];
+    for (name, path) in child_dirs(&home.join("Games")) {
+        prefixes.push((path, format!("Wine prefix (Lutris: {name})")));
+    }
+    for (bottles, label) in [
+        (home.join(".local/share/bottles/bottles"), "Bottles"),
+        (
+            home.join(".var/app/com.usebottles.bottles/data/bottles/bottles"),
+            "Bottles (Flatpak)",
+        ),
+    ] {
+        for (name, path) in child_dirs(&bottles) {
+            prefixes.push((path, format!("{label}: {name}")));
+        }
+    }
+    for steam in [".steam/steam", ".local/share/Steam"] {
+        for (appid, path) in child_dirs(&home.join(steam).join("steamapps").join("compatdata")) {
+            prefixes.push((path.join("pfx"), format!("Steam/Proton ({appid})")));
+        }
+    }
+
+    let mut seen = HashSet::new();
+    prefixes
+        .into_iter()
+        .filter(|(prefix, _)| child_ignoring_case(prefix, "drive_c").is_some())
+        .filter(|(prefix, _)| seen.insert(std::fs::canonicalize(prefix).ok()))
+        .collect()
+}
+
+/// Le cartelle figlie dirette di `dir`, con il nome, ordinate per nome. I link a cartelle
+/// contano come cartelle. Una cartella che non si legge non ha figli.
+fn child_dirs(dir: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut children: Vec<(String, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().into_owned();
+            Some((name, path))
+        })
+        .collect();
+    children.sort();
+    children
+}
+
+/// La cartella figlia di `dir` che si chiama `name` senza distinguere maiuscole e minuscole,
+/// come fa il gioco sotto Wine. Se ce ne sono più di una vince il nome identico, poi il primo in
+/// ordine di nome.
+fn child_ignoring_case(dir: &Path, name: &str) -> Option<PathBuf> {
+    child_dirs(dir)
+        .into_iter()
+        .filter(|(child, _)| child.eq_ignore_ascii_case(name))
+        .min_by_key(|(child, _)| child != name)
+        .map(|(_, path)| path)
+}
+
+/// Come [`child_ignoring_case`], ma se la cartella non c'è restituisce `dir/name`: la candidata
+/// resta nell'elenco e [`examine`] la salta.
+fn child_or_join(dir: &Path, name: &str) -> PathBuf {
+    child_ignoring_case(dir, name).unwrap_or_else(|| dir.join(name))
 }
 
 /// Le altre piattaforme non sono supportate: nessuna candidata.
@@ -378,11 +471,149 @@ mod tests {
         assert_eq!(game_dir_from_install_path("_retail_"), None);
     }
 
+    /// Una home sintetica con un prefisso per ogni forma cercata, più cartelle che non sono
+    /// prefissi. Restituisce la cartella `World of Warcraft` del prefisso Lutris.
+    fn synthetic_home(home: &Path) -> PathBuf {
+        let lutris = "Games/battlenet/drive_c/Program Files (x86)/World of Warcraft";
+        make_dirs(
+            home,
+            &[
+                &format!("{lutris}/_retail_"),
+                &format!("{lutris}/_classic_beta_"),
+                ".wine/drive_c/Program Files/World of Warcraft/_classic_era_",
+                "Games/not-a-prefix/Program Files (x86)/World of Warcraft/_retail_",
+                ".local/share/bottles/bottles/gaming/drive_c/program files (x86)/world of warcraft/_ptr_",
+                ".var/app/com.usebottles.bottles/data/bottles/bottles/flat/drive_c/users",
+                ".local/share/Steam/steamapps/compatdata/12345/pfx/drive_c/Program Files (x86)/World of Warcraft/_classic_",
+                ".local/share/Steam/steamapps/compatdata/67890/no-pfx-here",
+            ],
+        );
+        std::fs::write(home.join("Games/notes.txt"), b"").unwrap();
+        home.join(lutris)
+    }
+
+    fn origins(candidates: &[Candidate]) -> Vec<&str> {
+        candidates.iter().map(|c| c.origin.as_str()).collect()
+    }
+
+    #[test]
+    fn wine_prefixes_give_two_candidates_each() {
+        let tmp = TempDir::new();
+        let home = tmp.path();
+        let lutris_game = synthetic_home(home);
+
+        let candidates = wine_candidates(home);
+        assert_eq!(
+            origins(&candidates),
+            [
+                "Wine prefix (~/.wine)",
+                "Wine prefix (~/.wine)",
+                "Wine prefix (Lutris: battlenet)",
+                "Wine prefix (Lutris: battlenet)",
+                "Bottles: gaming",
+                "Bottles: gaming",
+                "Bottles (Flatpak): flat",
+                "Bottles (Flatpak): flat",
+                "Steam/Proton (12345)",
+                "Steam/Proton (12345)",
+            ]
+        );
+        assert_eq!(candidates[2].path, lutris_game);
+        assert_eq!(
+            candidates[3].path,
+            home.join("Games/battlenet/drive_c/Program Files/World of Warcraft")
+        );
+        // Le maiuscole diverse si seguono come sono sul disco.
+        assert_eq!(
+            candidates[4].path,
+            home.join(
+                ".local/share/bottles/bottles/gaming/drive_c/program files (x86)/world of warcraft"
+            )
+        );
+        for candidate in &candidates {
+            assert!(candidate.path.starts_with(home));
+            assert!(!candidate.origin.contains(&*home.to_string_lossy()));
+        }
+    }
+
+    #[test]
+    fn the_games_in_wine_prefixes_are_found() {
+        let tmp = TempDir::new();
+        synthetic_home(tmp.path());
+
+        let found = examine(&wine_candidates(tmp.path()), &[]);
+        assert_eq!(
+            flavors(&found),
+            [
+                ("classic_era", "Wine prefix (~/.wine)"),
+                ("classic_beta", "Wine prefix (Lutris: battlenet)"),
+                ("retail", "Wine prefix (Lutris: battlenet)"),
+                ("ptr", "Bottles: gaming"),
+                ("classic", "Steam/Proton (12345)"),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_home_has_no_wine_candidates() {
+        let tmp = TempDir::new();
+        assert!(wine_candidates(tmp.path()).is_empty());
+        assert!(wine_candidates(&tmp.path().join("missing")).is_empty());
+    }
+
+    #[test]
+    fn the_exact_name_wins_over_other_cases() {
+        let tmp = TempDir::new();
+        make_dirs(
+            tmp.path(),
+            &["PROGRAM FILES", "Program Files", "program files"],
+        );
+        let found = child_ignoring_case(tmp.path(), "Program Files").unwrap();
+        if child_dirs(tmp.path()).len() == 3 {
+            assert_eq!(found, tmp.path().join("Program Files"));
+        } else {
+            // Su un file system che non distingue le maiuscole le tre cartelle sono una sola.
+            assert!(
+                found
+                    .file_name()
+                    .unwrap()
+                    .eq_ignore_ascii_case("program files")
+            );
+        }
+        assert!(child_ignoring_case(tmp.path(), "Program Files (x86)").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_prefix_reached_through_a_link_is_listed_once() {
+        let tmp = TempDir::new();
+        let home = tmp.path();
+        let steam = home.join(".local/share/Steam");
+        make_dirs(
+            &steam,
+            &["steamapps/compatdata/42/pfx/drive_c/Program Files (x86)/World of Warcraft/_retail_"],
+        );
+        make_dirs(home, &[".steam"]);
+        std::os::unix::fs::symlink(&steam, home.join(".steam/steam")).unwrap();
+
+        let candidates = wine_candidates(home);
+        assert_eq!(
+            origins(&candidates),
+            ["Steam/Proton (42)", "Steam/Proton (42)"]
+        );
+        let found = examine(&candidates, &[]);
+        assert_eq!(flavors(&found), [("retail", "Steam/Proton (42)")]);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_has_no_candidates_yet() {
+    fn linux_candidates_are_the_wine_prefixes() {
         let tmp = TempDir::new();
-        assert!(candidate_roots(Some(tmp.path())).is_empty());
+        synthetic_home(tmp.path());
+        assert_eq!(
+            candidate_roots(Some(tmp.path())),
+            wine_candidates(tmp.path())
+        );
         assert!(candidate_roots(None).is_empty());
     }
 

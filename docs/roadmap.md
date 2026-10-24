@@ -59,6 +59,7 @@ Ultimo aggiornamento: 2026-10-24.
   diverso da WowUp: in pausa per ora.
 - Opzioni: scelta del tema (sistema, chiaro, scuro) salvata dal backend; `color-scheme`
   va dichiarato insieme ai colori del tema scelto.
-- Scoperta automatica dei prefissi Lutris.
+- Scoperta automatica dei prefissi Wine su Linux (`~/.wine`, Lutris, Bottles, Steam/Proton):
+  backend fatto (issue #88); la proposta nell'interfaccia è la issue #89.
 - Pacchetti di rilascio: `.deb` per Linux e installer NSIS per Windows (D24), costruiti
   dalla CI.
