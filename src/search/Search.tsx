@@ -132,7 +132,7 @@ export function Search({ installation, active, keyConfigured, onInstalled }: Pro
           });
           onInstalled?.();
         }
-        setRun({ status: "done", summary: summarizeInstall(outcomes, addon.name) });
+        setRun({ status: "done", summary: summarizeInstall(outcomes, addon) });
       },
       (err) => setRun({ status: "failed", message: errorMessage(err) }),
     );

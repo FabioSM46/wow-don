@@ -742,6 +742,13 @@ button:focus-visible {
   visibility: visible;
 }
 
+/* Senza un puntatore che passa sopra (schermi touch) le azioni restano sempre in vista. */
+@media (hover: none) {
+  .catalog-table .row-actions {
+    visibility: visible;
+  }
+}
+
 .installed-mark,
 .install-failed {
   font-size: 0.8rem;

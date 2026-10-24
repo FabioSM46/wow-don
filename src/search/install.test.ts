@@ -15,7 +15,7 @@ describe("install summary", () => {
       { modId: 2, name: "Lib", status: "installed", file, dependencyOf: 1 },
       { modId: 3, name: "Core", status: "installed", file, dependencyOf: 2 },
     ];
-    const summary = summarizeInstall(outcomes);
+    const summary = summarizeInstall(outcomes, { id: 1 });
     assert.equal(summary.headline, "Foo installed with 2 dependencies.");
     assert.equal(summary.error, false);
     assert.deepEqual(summary.lines, [
@@ -29,11 +29,11 @@ describe("install summary", () => {
       summarizeInstall([
         { modId: 1, name: "Foo", status: "installed", file },
         { modId: 2, name: "Lib", status: "installed", file, dependencyOf: 1 },
-      ]).headline,
+      ], { id: 1 }).headline,
       "Foo installed with 1 dependency.",
     );
     assert.equal(
-      summarizeInstall([{ modId: 1, name: "Foo", status: "installed", file }]).headline,
+      summarizeInstall([{ modId: 1, name: "Foo", status: "installed", file }], { id: 1 }).headline,
       "Foo installed.",
     );
   });
@@ -41,7 +41,7 @@ describe("install summary", () => {
   it("keeps the warning of a successful install after the sentence", () => {
     const summary = summarizeInstall([
       { modId: 1, name: "Foo", status: "installed", file, message: "Folder Bar was replaced." },
-    ]);
+    ], { id: 1 });
     assert.equal(summary.headline, "Foo installed. Folder Bar was replaced.");
   });
 
@@ -50,7 +50,7 @@ describe("install summary", () => {
       { modId: 1, name: "Foo", status: "installed", file },
       { modId: 2, name: "Lib", status: "skipped", message: "Already installed.", dependencyOf: 1 },
       { modId: 3, name: "", status: "error", message: "Download failed.", dependencyOf: 1 },
-    ]);
+    ], { id: 1 });
     assert.equal(summary.headline, "Foo installed.");
     assert.equal(summary.error, false);
     assert.deepEqual(summary.lines, [
@@ -62,18 +62,18 @@ describe("install summary", () => {
   it("gives the reason when the project itself is skipped or fails", () => {
     const skipped = summarizeInstall([
       { modId: 1, name: "Foo", status: "skipped", message: "Already installed." },
-    ]);
+    ], { id: 1 });
     assert.equal(skipped.headline, "Foo was not installed: Already installed.");
     assert.equal(skipped.error, false);
 
     const failed = summarizeInstall([
       { modId: 1, name: "Foo", status: "error", message: "No file for this game version." },
-    ]);
+    ], { id: 1 });
     assert.equal(failed.headline, "Foo could not be installed: No file for this game version.");
     assert.equal(failed.error, true);
 
     assert.equal(
-      summarizeInstall([{ modId: 1, name: "Foo", status: "error" }]).headline,
+      summarizeInstall([{ modId: 1, name: "Foo", status: "error" }], { id: 1 }).headline,
       "Foo could not be installed.",
     );
   });
@@ -82,20 +82,49 @@ describe("install summary", () => {
     const outcomes: InstallOutcome[] = [
       { modId: 1, name: "", status: "error", message: "Boom." },
     ];
-    assert.equal(summarizeInstall(outcomes, "Foo").headline, "Foo could not be installed: Boom.");
-    assert.equal(summarizeInstall(outcomes).headline, "Project #1 could not be installed: Boom.");
+    assert.equal(
+      summarizeInstall(outcomes, { id: 1, name: "Foo" }).headline,
+      "Foo could not be installed: Boom.",
+    );
+    assert.equal(
+      summarizeInstall(outcomes, { id: 1 }).headline,
+      "Project #1 could not be installed: Boom.",
+    );
   });
 
   it("names a parent that has no outcome by its id", () => {
     const summary = summarizeInstall([
       { modId: 1, name: "Foo", status: "installed", file },
       { modId: 2, name: "Lib", status: "installed", file, dependencyOf: 7 },
-    ]);
+    ], { id: 1 });
     assert.equal(summary.lines[0].text, "Lib (required by Project #7): installed");
   });
 
+  it("finds the requested project by id, not by position", () => {
+    const summary = summarizeInstall(
+      [
+        { modId: 2, name: "Lib", status: "installed", file, dependencyOf: 1 },
+        { modId: 1, name: "Foo", status: "installed", file },
+      ],
+      { id: 1 },
+    );
+    assert.equal(summary.headline, "Foo installed with 1 dependency.");
+    assert.deepEqual(summary.lines.map((line) => line.modId), [2]);
+  });
+
+  it("keeps the dependency lines when no outcome is the requested project", () => {
+    const summary = summarizeInstall(
+      [{ modId: 2, name: "Lib", status: "error", message: "Boom.", dependencyOf: 1 }],
+      { id: 1, name: "Foo" },
+    );
+    assert.equal(summary.headline, "Nothing was installed.");
+    assert.deepEqual(summary.lines, [
+      { modId: 2, text: "Lib (required by Project #1): error — Boom.", error: true },
+    ]);
+  });
+
   it("says that nothing was installed for an empty list", () => {
-    assert.deepEqual(summarizeInstall([]), {
+    assert.deepEqual(summarizeInstall([], { id: 1 }), {
       headline: "Nothing was installed.",
       error: false,
       lines: [],

@@ -16,18 +16,47 @@ function outcomeName(outcome: InstallOutcome, fallback?: string): string {
 }
 
 /**
- * Il riepilogo degli esiti di `install_addon`: il primo è il progetto scelto, gli altri le sue
- * dipendenze (in ampiezza, con `dependencyOf`). `fallbackName` è il nome che la ricerca dà al
- * progetto scelto, per quando l'esito non ne ha uno.
+ * Il riepilogo degli esiti di `install_addon` per il progetto `requested` (id e nome che gli dà
+ * la ricerca, per quando l'esito non ne ha uno): il backend mette prima il suo esito e poi
+ * quelli delle dipendenze, in ampiezza e con `dependencyOf`. L'esito del progetto si cerca per
+ * id, così la frase non descrive mai una dipendenza.
  */
-export function summarizeInstall(outcomes: InstallOutcome[], fallbackName?: string): InstallSummary {
-  const [main, ...dependencies] = outcomes;
-  if (!main) return { headline: "Nothing was installed.", error: false, lines: [] };
+export function summarizeInstall(
+  outcomes: InstallOutcome[],
+  requested: { id: number; name?: string },
+): InstallSummary {
+  const main =
+    outcomes.find((o) => o.modId === requested.id && o.dependencyOf === undefined) ??
+    outcomes.find((o) => o.dependencyOf === undefined);
+  const dependencies = outcomes.filter((o) => o !== main);
 
   const names = new Map<number, string>();
-  names.set(main.modId, outcomeName(main, fallbackName));
   for (const outcome of dependencies) names.set(outcome.modId, outcomeName(outcome));
+  if (main) {
+    const fallbackName = main.modId === requested.id ? requested.name : undefined;
+    names.set(main.modId, outcomeName(main, fallbackName));
+  }
   const nameOf = (modId: number) => names.get(modId) ?? `Project #${modId}`;
+
+  const lines = dependencies.map((outcome): SummaryLine => {
+    const parent = outcome.dependencyOf;
+    const name = nameOf(outcome.modId);
+    const label = parent === undefined ? name : `${name} (required by ${nameOf(parent)})`;
+    const state =
+      outcome.status === "installed"
+        ? "installed"
+        : outcome.status === "skipped"
+          ? "skipped"
+          : "error";
+    return {
+      modId: outcome.modId,
+      text: `${label}: ${state}${outcome.message ? ` — ${outcome.message}` : ""}`,
+      error: outcome.status === "error",
+    };
+  });
+
+  // Senza l'esito del progetto (una risposta che il backend non dà) restano le righe.
+  if (!main) return { headline: "Nothing was installed.", error: false, lines };
 
   const mainName = nameOf(main.modId);
   const reason = main.message ? `: ${main.message}` : ".";
@@ -47,23 +76,6 @@ export function summarizeInstall(outcomes: InstallOutcome[], fallbackName?: stri
     default:
       headline = `${mainName} could not be installed${reason}`;
   }
-
-  const lines = dependencies.map((outcome): SummaryLine => {
-    const parent = outcome.dependencyOf;
-    const name = nameOf(outcome.modId);
-    const label = parent === undefined ? name : `${name} (required by ${nameOf(parent)})`;
-    const state =
-      outcome.status === "installed"
-        ? "installed"
-        : outcome.status === "skipped"
-          ? "skipped"
-          : "error";
-    return {
-      modId: outcome.modId,
-      text: `${label}: ${state}${outcome.message ? ` — ${outcome.message}` : ""}`,
-      error: outcome.status === "error",
-    };
-  });
 
   return { headline, error: main.status === "error", lines };
 }

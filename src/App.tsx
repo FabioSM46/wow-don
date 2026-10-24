@@ -43,6 +43,13 @@ function App() {
       .catch((err) => setError(errorMessage(err)));
   }, []);
 
+  // Anche un'installazione che finisce mentre la tab Installed è già aperta la fa rileggere.
+  useEffect(() => {
+    if (tab !== "installed" || !installedStale) return;
+    setInstalledStale(false);
+    setReload((n) => n + 1);
+  }, [tab, installedStale]);
+
   const active = installations?.find((installation) => installation.id === activeId) ?? null;
 
   function changeInstallations(list: Installation[]) {
@@ -55,10 +62,6 @@ function App() {
   /** Cambia tab e porta il focus sulla tab scelta (frecce e link verso Options). */
   function focusTab(next: Tab) {
     setTab(next);
-    if (next === "installed" && installedStale) {
-      setInstalledStale(false);
-      setReload((n) => n + 1);
-    }
     tabRefs.current[next]?.focus();
   }
 
