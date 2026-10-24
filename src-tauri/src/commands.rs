@@ -232,7 +232,10 @@ pub async fn update_addons(
 }
 
 /// Installa un addon nuovo dal catalogo: il file `file_id` se indicato, altrimenti l'ultimo
-/// Release per la versione del gioco forzata per il progetto o dell'installazione. Rete e disco
+/// Release per la versione del gioco forzata per il progetto o dell'installazione, poi le sue
+/// dipendenze obbligatorie. Restituisce l'esito del progetto seguito da quelli delle
+/// dipendenze, ognuno con `dependencyOf`. Tutta la visita delle dipendenze resta sotto lo
+/// stesso lock. Rete e disco
 /// girano fuori dal thread principale, sotto [`InstallLock`]. I record si leggono lì, con il lock
 /// già preso, così nessun'altra installazione li cambia prima della sostituzione: un registro
 /// illeggibile blocca l'installazione, perché senza record non si sa quali cartelle
@@ -246,7 +249,7 @@ pub async fn install_addon(
     store: Store<'_>,
     settings: Settings<'_>,
     config: State<'_, Config>,
-) -> Result<InstallOutcome, String> {
+) -> Result<Vec<InstallOutcome>, String> {
     let key = config
         .curseforge_api_key
         .clone()
