@@ -1,6 +1,6 @@
 # Registro delle decisioni
 
-Ultimo aggiornamento: 2026-10-24.
+Ultimo aggiornamento: 2026-10-25.
 
 Ogni decisione ha uno stato:
 
@@ -37,8 +37,11 @@ sostituisce e si annota quella vecchia come superata.
 | D9 | La richiesta di chiave per applicazioni di terzi si manda quando il progetto sta in piedi | Serve un progetto da mostrare; la chiave personale basta per sviluppare | Confermata |
 | D10 | La chiave sta in `.env` (gitignored) come `CURSEFORGE_API_KEY` e non lascia mai il backend Rust | Sicurezza; i termini CurseForge vietano di esporla | Confermata |
 | D11 | Niente scraping del sito CurseForge e niente riuso della chiave di WowUp | Violano i termini d'uso | Confermata |
-| D12 | Le fonti sono plugin dietro un'interfaccia comune | Permette di aggiungere Wago, WoWInterface e GitHub senza toccare il resto | Proposta |
+| D12 | Le fonti sono plugin dietro un'interfaccia comune | Permette di aggiungere Wago, WoWInterface e GitHub senza toccare il resto. Confermata con la specifica "Fonti libere" (issue #105) | Confermata |
 | D13 | I download rispettano `allowModDistribution = false` | Termini CurseForge | Proposta |
+| D31 | Fonti libere, senza accordi pubblicitari né chiavi: GitHub Releases (zip scelto con il `release.json` del packager di BigWigs, senza token), WoWInterface (API pubblica MMOUI, `filedetails`) e Tukui (`api.tukui.org/v1/addons`, ElvUI e Tukui). L'API di Wago resta esclusa. Il token GitHub facoltativo e la ricerca nel catalogo WoWInterface sono rimandati | Un solo sviluppatore non può ottenere accordi con Wago o Overwolf; queste API sono pubbliche (verificate il 2026-10-25). Approvato nella specifica "Fonti libere" (issue #102–#111) | Confermata |
+| D32 | Un addon che non si può scaricare (per esempio `allowModDistribution = false`) si installa trascinando nella finestra lo zip scaricato a mano dal sito, o scegliendolo con "Install from zip…": il backend lo estrae con le regole di D26, accetta solo cartelle di primo livello con un `.toc` dello stesso nome e sostituisce senza conferma le cartelle con lo stesso nome. Non scrive un record nuovo in `installed-addons.json`; se sostituisce cartelle di un progetto che l'app aveva installato, il record di quel progetto si toglie (issue #117), così l'abbinamento di D33 non descrive un file che non c'è più. Dopo, l'addon si riconosce dal fingerprint se è su CurseForge, oppure dai segni delle fonti libere (`## X-WoWI-ID`, cartelle di Tukui); un addon che sta solo su GitHub resta senza fonte finché non si aggiunge dal link, perché GitHub si abbina solo dai record | Completa D13 senza aggirarla: il download lo fa l'utente dal sito dell'autore. Approvato nella specifica "Fonti libere" (issue #102, #103) | Confermata |
+| D33 | Ordine di abbinamento delle cartelle installate tra le fonti: prima il record dell'app in `installed-addons.json` (v2, per fonte e id testuale), poi il fingerprint di CurseForge, poi le fonti libere (`## X-WoWI-ID` nel `.toc`, cartelle di `directories` per Tukui; GitHub solo dai record). Una cartella abbinata da una fonte non si rilegge con le altre | Evita doppioni quando lo stesso addon è su più fonti; la fonte da cui l'app l'ha installato vince. Approvato nella specifica "Fonti libere" (issue #104, #105) | Confermata |
 
 ## Stack
 
