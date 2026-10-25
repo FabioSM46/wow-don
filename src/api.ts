@@ -176,6 +176,10 @@ export type CatalogPage = {
   index: number;
   pageSize: number;
   totalCount: number;
+  /** Risultati letti dall'API in questa pagina, nascosti compresi: 0 vuol dire che è finita. */
+  fetched: number;
+  /** Risultati tolti perché senza un file Release per la versione del gioco (issue #140). */
+  hidden: number;
 };
 
 /** Un file del progetto nel dettaglio; `releaseType` 1 Release, 2 Beta. */

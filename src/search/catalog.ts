@@ -88,13 +88,19 @@ export type Results = {
   /** L'indice da chiedere per la pagina successiva. */
   nextIndex: number;
   totalCount: number;
-  /** L'ultima pagina era vuota: non c'è altro da chiedere anche se `totalCount` dice di più. */
+  /** Quanti risultati letti finora sono nascosti perché senza un file Release (issue #140). */
+  hidden: number;
+  /** L'API ha restituito una pagina vuota: non c'è altro da chiedere anche se `totalCount` dice
+   * di più. Una pagina vuota solo per il filtro non conta. */
   exhausted: boolean;
 };
 
 /** I risultati della prima pagina di una ricerca nuova. */
 export function firstPage(page: CatalogPage): Results {
-  return appendPage({ addons: [], nextIndex: 0, totalCount: 0, exhausted: false }, page);
+  return appendPage(
+    { addons: [], nextIndex: 0, totalCount: 0, hidden: 0, exhausted: false },
+    page,
+  );
 }
 
 /**
@@ -112,7 +118,8 @@ export function appendPage(results: Results, page: CatalogPage): Results {
     addons: [...results.addons, ...fresh],
     nextIndex: page.index + page.pageSize,
     totalCount: page.totalCount,
-    exhausted: page.addons.length === 0,
+    hidden: results.hidden + page.hidden,
+    exhausted: page.fetched === 0,
   };
 }
 
@@ -177,6 +184,22 @@ export function resultCount(results: Results): string {
   const shown = results.addons.length;
   const total = results.totalCount;
   if (total === 0) return "No results";
+  // Con dei nascosti il totale dell'API conterebbe anche addon che non si vedranno mai.
+  if (results.hidden > 0) {
+    return `${formatCount(shown)} shown · ${formatCount(results.hidden)} without a release for this game version`;
+  }
   if (shown >= total) return `${formatCount(total)} ${total === 1 ? "result" : "results"}`;
   return `${formatCount(shown)} of ${formatCount(total)} results`;
+}
+
+/**
+ * La frase dello stato vuoto quando i risultati letti sono tutti nascosti perché senza un file
+ * Release (issue #140), oppure `null` se non è questo il motivo della lista vuota. "Load more"
+ * resta sotto la lista, anche vuota, finché `hasMore` lo permette.
+ */
+export function hiddenOnlyMessage(results: Results): string | null {
+  if (results.addons.length > 0 || results.hidden === 0) return null;
+  return hasMore(results)
+    ? "No add-on with a release for this game version among the first results. Load more to keep looking."
+    : "No add-on with a release for this game version.";
 }

@@ -158,8 +158,14 @@ pub struct CatalogPage {
     pub index: u32,
     pub page_size: u32,
     /// Tutti i risultati della ricerca, anche quelli oltre [`MAX_RESULTS`] che l'API non
-    /// restituisce.
+    /// restituisce. Comprende anche quelli nascosti perché senza un file Release.
     pub total_count: u64,
+    /// Quanti risultati dell'API ha letto questa pagina, nascosti compresi: zero vuol dire che
+    /// l'API non ha altro, anche se `addons` è vuota per il filtro.
+    pub fetched: u32,
+    /// Quanti risultati letti sono stati tolti perché non hanno un file Release per la versione
+    /// cercata (issue #140): non si potrebbero installare.
+    pub hidden: u32,
 }
 
 /// Una ricerca come la chiede il frontend.
@@ -218,19 +224,33 @@ pub fn search_catalog<T: Transport>(
             index: request.index,
             page_size: PAGE_SIZE,
             total_count: page.pagination.total_count,
+            fetched: 0,
+            hidden: 0,
         });
     }
     let page = client.search_mods(&search).map_err(|e| e.to_string())?;
     let installed = installed_projects(installation, records);
+    // `gameVersionTypeId` include i progetti con un file di qualunque tipo per la versione (per
+    // esempio solo una Beta): l'installazione prende solo Release, quindi quelli senza si
+    // tolgono qui, con la stessa regola (`latest_release`).
+    let all: Vec<CatalogAddon> = page
+        .data
+        .iter()
+        .map(|found| CatalogAddon::new(found, version_type, &installed))
+        .collect();
+    let fetched = u32::try_from(all.len()).unwrap_or(u32::MAX);
+    let addons: Vec<CatalogAddon> = all
+        .into_iter()
+        .filter(|addon| addon.latest_file.is_some())
+        .collect();
+    let hidden = fetched - u32::try_from(addons.len()).unwrap_or(u32::MAX);
     Ok(CatalogPage {
-        addons: page
-            .data
-            .iter()
-            .map(|found| CatalogAddon::new(found, version_type, &installed))
-            .collect(),
+        addons,
         index: page.pagination.index,
         page_size: PAGE_SIZE,
         total_count: page.pagination.total_count,
+        fetched,
+        hidden,
     })
 }
 
@@ -425,9 +445,18 @@ mod tests {
            {"fileId": 13, "filename": "beta.zip", "releaseType": 2, "gameVersion": "12.1.5", "gameVersionTypeId": 517},
            {"fileId": 14, "filename": "era.zip", "releaseType": 1, "gameVersion": "1.15.7", "gameVersionTypeId": 67408}
          ]},
-        {"id": 3358, "name": "DBM"}
+        {"id": 3358, "name": "DBM",
+         "latestFilesIndexes": [
+           {"fileId": 20, "filename": "dbm.zip", "releaseType": 1, "gameVersion": "12.1.5", "gameVersionTypeId": 517},
+           {"fileId": 21, "filename": "dbm-era.zip", "releaseType": 1, "gameVersion": "1.15.7", "gameVersionTypeId": 67408}
+         ]},
+        {"id": 84208, "name": "RareScanner", "allowModDistribution": true,
+         "latestFilesIndexes": [
+           {"fileId": 30, "filename": "rs-beta.zip", "releaseType": 2, "gameVersion": "12.1.5", "gameVersionTypeId": 517},
+           {"fileId": 31, "filename": "rs-era.zip", "releaseType": 1, "gameVersion": "1.15.7", "gameVersionTypeId": 67408}
+         ]}
       ],
-      "pagination": {"index": 50, "pageSize": 50, "resultCount": 2, "totalCount": 12345}
+      "pagination": {"index": 50, "pageSize": 50, "resultCount": 3, "totalCount": 12345}
     }"#;
 
     #[test]
@@ -466,7 +495,11 @@ mod tests {
         let dbm = &page.addons[1];
         assert!(dbm.installed);
         assert!(!dbm.allow_mod_distribution);
-        assert_eq!((dbm.latest_file.clone(), dbm.url.clone()), (None, None));
+        assert_eq!(dbm.latest_file.as_ref().map(|f| f.id), Some(20));
+        assert_eq!(dbm.url, None);
+        // RareScanner ha per Retail solo una Beta: non si potrebbe installare e non compare.
+        assert_eq!(page.addons.len(), 2);
+        assert_eq!((page.fetched, page.hidden), (3, 1));
 
         assert_eq!(
             seen(&client),
@@ -488,6 +521,9 @@ mod tests {
         let client = client(200, PAGE);
         let page = search_catalog(&forever, &client, &InstalledRecords::new(), &request).unwrap();
         assert_eq!(page.addons[0].latest_file.as_ref().unwrap().id, 14);
+        // Per Classic Era RareScanner ha una Release: con un'altra versione il filtro cambia.
+        assert_eq!(page.addons.len(), 3);
+        assert_eq!((page.fetched, page.hidden), (3, 0));
         assert_eq!(
             seen(&client),
             [
@@ -530,6 +566,7 @@ mod tests {
             (page.index, page.page_size, page.total_count),
             (9_951, 50, 12345)
         );
+        assert_eq!((page.fetched, page.hidden), (0, 0));
         let urls = seen(&client);
         assert_eq!(urls.len(), 1);
         assert!(urls[0].ends_with("&index=0&pageSize=1"), "{}", urls[0]);
@@ -672,10 +709,16 @@ mod tests {
             index: 0,
             page_size: PAGE_SIZE,
             total_count: 1,
+            fetched: 1,
+            hidden: 0,
         };
         let json = serde_json::to_value(&page).unwrap();
         assert_eq!(json["pageSize"], 50);
         assert_eq!(json["totalCount"], 1);
+        assert_eq!(
+            (json["fetched"].clone(), json["hidden"].clone()),
+            (1.into(), 0.into())
+        );
         let addon = &json["addons"][0];
         for key in [
             "downloadCount",
