@@ -73,8 +73,15 @@ export type LocalInstall = {
 
 export type FileSummary = { id: number; name: string; date: string };
 
+/** Le fonti degli addon (D12, D31); su disco e nei tipi del backend sono in minuscolo. */
+export type SourceKind = "curseforge" | "github" | "wowinterface" | "tukui";
+
 export type Project = {
+  /** L'id CurseForge; `0` per le altre fonti, dove valgono `source` e `key`. */
   id: number;
+  source: SourceKind;
+  /** L'id del progetto nella fonte, come stringa (`61284`, `owner/repo`, `-2`). */
+  key: string;
   name: string;
   url: string | null;
   allowModDistribution: boolean;
@@ -83,6 +90,8 @@ export type Project = {
 /** Risultato di `check_updates` per una cartella; `status` dice quale variante è. */
 export type AddonUpdate = {
   folder: string;
+  /** La fonte che ha reclamato la cartella, se c'è. */
+  source: SourceKind | null;
   project: Project | null;
   installedFile: FileSummary | null;
   /** Versione del gioco forzata per il progetto (`gameVersionTypeId`), se c'è. */
@@ -98,7 +107,10 @@ export type AddonUpdate = {
 
 /** Esito di `update_addons` per un progetto; `message` spiega `skipped` ed `error`. */
 export type UpdateOutcome = {
+  /** L'id CurseForge; `0` per le altre fonti. */
   modId: number;
+  source: SourceKind;
+  key: string;
   name: string;
   status: "updated" | "skipped" | "error";
   message?: string;

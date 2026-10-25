@@ -300,7 +300,7 @@ const INSTALLED_ADDONS_VERSION_V1: u32 = 1;
 /// sconosciuta e chiede di aggiornare l'app lasciando il file com'è; con la stessa versione
 /// leggerebbe una fonte sconosciuta e direbbe che il file è danneggiato, invitando a spostarlo
 /// e a perdere tutti i record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceKind {
     Curseforge,
@@ -309,6 +309,18 @@ pub enum SourceKind {
     Github,
     Wowinterface,
     Tukui,
+}
+
+impl SourceKind {
+    /// Il nome della fonte mostrato nei messaggi (in inglese, come tutta l'interfaccia).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Curseforge => "CurseForge",
+            Self::Github => "GitHub",
+            Self::Wowinterface => "WoWInterface",
+            Self::Tukui => "Tukui",
+        }
+    }
 }
 
 /// Quello che l'app ha installato per un progetto di una fonte. `file` identifica il file
@@ -322,8 +334,11 @@ pub struct SourceRecord {
     pub folders: Vec<String>,
 }
 
-/// Fonte → id del progetto nella fonte (`61284`, `owner/repo`, `-2`) → record.
-type SourceRecords = BTreeMap<SourceKind, BTreeMap<String, SourceRecord>>;
+/// Id del progetto nella fonte (`61284`, `owner/repo`, `-2`) → record.
+pub type ProjectRecords = BTreeMap<String, SourceRecord>;
+
+/// Fonte → record dei suoi progetti.
+pub type SourceRecords = BTreeMap<SourceKind, ProjectRecords>;
 
 /// Id dell'installazione → record per fonte.
 type RecordsByInstallation = BTreeMap<String, SourceRecords>;
@@ -420,8 +435,19 @@ impl InstalledAddonsStore {
         )
     }
 
+    /// Tutti i record di un'installazione, per fonte; vuoto se l'app non vi ha ancora installato
+    /// niente.
+    pub fn source_records_for(&self, installation_id: &str) -> Result<SourceRecords, String> {
+        self.check_loaded()?;
+        Ok(self
+            .records
+            .get(installation_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     /// Registra (o sostituisce) il record di un progetto di qualsiasi fonte.
-    fn record_source(
+    pub fn record_source(
         &mut self,
         installation_id: &str,
         source: SourceKind,
