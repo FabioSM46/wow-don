@@ -13,6 +13,16 @@ import {
 import { AddonDetailView } from "./AddonDetail";
 import { CatalogTable } from "./CatalogTable";
 import { InstallAction, InstallResult, type InstallRun } from "./InstallAction";
+import { useInstallProgress } from "../addons/ProgressBar";
+import {
+  noRunProgress,
+  progressPercent,
+  runLabel,
+  withRunProgress,
+  withoutRun,
+  type RunProgress,
+} from "../addons/progress";
+import { projectId } from "../addons/sources";
 import { installedIds, summarizeInstall, withInstalled } from "./install";
 import {
   RequestTracker,
@@ -113,12 +123,26 @@ export function Search({ installation, active, keyConfigured, onInstalled }: Pro
     return ids;
   }, [installedKeys, installation.id]);
 
+  // L'avanzamento delle installazioni in corso (issue #128), dipendenze comprese.
+  // Le installazioni in corso stanno anche in un ref, aggiornato subito: il primo evento può
+  // arrivare prima che lo stato `runs` sia riletto.
+  const [runProgress, setRunProgress] = useState<RunProgress>(noRunProgress);
+  const runningRuns = useRef(new Map<string, Set<string>>());
+  useInstallProgress(installation.id, (event) => {
+    const running = runningRuns.current.get(installation.id) ?? new Set<string>();
+    setRunProgress((previous) => withRunProgress(previous, event, installation.id, running));
+  });
+
   function install(addon: CatalogAddon) {
     const id = installation.id;
     const key = installKey(id, addon.id);
     if (runs.get(key)?.status === "running") return;
     const setRun = (run: InstallRun) => setRuns((previous) => new Map(previous).set(key, run));
     setRun({ status: "running" });
+    const run = curseforgeRun(addon.id);
+    const running = runningRuns.current.get(id) ?? new Set<string>();
+    runningRuns.current.set(id, running.add(run));
+    setRunProgress((previous) => withoutRun(previous, run));
     setLastInstall(key);
     setPageError(null);
     api.installAddon(id, addon.id).then(
@@ -135,7 +159,12 @@ export function Search({ installation, active, keyConfigured, onInstalled }: Pro
         setRun({ status: "done", summary: summarizeInstall(outcomes, addon) });
       },
       (err) => setRun({ status: "failed", message: errorMessage(err) }),
-    );
+    )
+      // Non c'è una fase finale: la barra si chiude quando il comando restituisce gli esiti.
+      .finally(() => {
+        running.delete(run);
+        setRunProgress((previous) => withoutRun(previous, run));
+      });
   }
 
   function openPage(url: string) {
@@ -143,11 +172,18 @@ export function Search({ installation, active, keyConfigured, onInstalled }: Pro
     openUrl(url).catch((err) => setPageError(`The page could not be opened: ${errorMessage(err)}`));
   }
 
+  function runProgressOf(modId: number) {
+    const run = curseforgeRun(modId);
+    const event = runProgress.runs.get(run);
+    return { value: progressPercent(event), label: runLabel(event, run) };
+  }
+
   function renderInstall(variant: "row" | "detail") {
     return (addon: CatalogAddon) => (
       <InstallAction
         addon={addon}
         run={runs.get(installKey(installation.id, addon.id))}
+        progress={runProgressOf(addon.id)}
         variant={variant}
         onInstall={install}
         onOpenPage={openPage}
@@ -456,4 +492,9 @@ export function Search({ installation, active, keyConfigured, onInstalled }: Pro
       </div>
     </section>
   );
+}
+
+/** La chiave di un'installazione della Search negli eventi di avanzamento: un progetto CurseForge. */
+function curseforgeRun(modId: number): string {
+  return projectId({ source: "curseforge", key: String(modId) });
 }

@@ -1,5 +1,6 @@
 import type { CatalogAddon } from "../api";
 import type { InstallSummary } from "./install";
+import { ProgressBar } from "../addons/ProgressBar";
 
 /** Un'installazione avviata dalla tab Search: in corso, finita con gli esiti o rifiutata. */
 export type InstallRun =
@@ -10,6 +11,8 @@ export type InstallRun =
 type ActionProps = {
   addon: CatalogAddon;
   run: InstallRun | undefined;
+  /** La barra di un'installazione in corso: percentuale (o `null`) e fase. */
+  progress?: { value: number | null; label: string };
   /** `row`: piccolo, nella riga dei risultati; `detail`: nell'intestazione del dettaglio. */
   variant: "row" | "detail";
   onInstall: (addon: CatalogAddon) => void;
@@ -20,7 +23,8 @@ const BLOCKED_REASON =
   "The author does not allow downloads from other apps: install it from the CurseForge website.";
 
 /**
- * L'azione di installazione di un addon: Install, Installing…, Installed o il link al sito.
+ * L'azione di installazione di un addon: Install, la barra di avanzamento, Installed o il link
+ * al sito.
  * Nella riga compare al passaggio del mouse o del focus, e resta in vista durante
  * l'installazione e dopo un errore.
  */
@@ -39,7 +43,7 @@ function isFailed(run: InstallRun | undefined): boolean {
   return run?.status === "failed" || (run?.status === "done" && run.summary.error);
 }
 
-function ActionContent({ addon, run, variant, onInstall, onOpenPage }: ActionProps) {
+function ActionContent({ addon, run, progress, variant, onInstall, onOpenPage }: ActionProps) {
   const small = variant === "row" ? " small" : "";
   if (addon.installed) {
     // Nel dettaglio il segno "Installed" è già accanto al nome.
@@ -63,6 +67,15 @@ function ActionContent({ addon, run, variant, onInstall, onOpenPage }: ActionPro
     );
   }
   const running = run?.status === "running";
+  if (running) {
+    return (
+      <ProgressBar
+        value={progress?.value ?? null}
+        label={progress?.label ?? "Starting…"}
+        name={addon.name}
+      />
+    );
+  }
   const failed = isFailed(run);
   return (
     <>
@@ -73,14 +86,12 @@ function ActionContent({ addon, run, variant, onInstall, onOpenPage }: ActionPro
       )}
       <button
         className={variant === "row" ? "button secondary small" : "button"}
-        disabled={running}
-        aria-busy={running}
         onClick={(event) => {
           event.stopPropagation();
           onInstall(addon);
         }}
       >
-        {running ? "Installing…" : "Install"}
+        Install
       </button>
     </>
   );

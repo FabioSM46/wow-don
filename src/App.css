@@ -14,6 +14,8 @@
   --accent: #3b6ef5;
   --danger: #d1242f;
   --overlay: rgb(247 247 248 / 85%);
+  --progress-track: #e4e4e7;
+  --progress-height: 4px;
   --radius: 8px;
 
   --dark-bg: #111113;
@@ -25,6 +27,7 @@
   --dark-accent: #6d93ff;
   --dark-danger: #ff6b6b;
   --dark-overlay: rgb(17 17 19 / 85%);
+  --dark-progress-track: #2a2a2f;
 
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -50,6 +53,7 @@
     --accent: var(--dark-accent);
     --danger: var(--dark-danger);
     --overlay: var(--dark-overlay);
+    --progress-track: var(--dark-progress-track);
     color-scheme: dark;
   }
 }
@@ -64,6 +68,7 @@
   --accent: var(--dark-accent);
   --danger: var(--dark-danger);
   --overlay: var(--dark-overlay);
+  --progress-track: var(--dark-progress-track);
   color-scheme: dark;
 }
 
@@ -983,4 +988,64 @@ button:focus-visible {
   border-radius: var(--radius);
   background: var(--surface);
   font-weight: 500;
+}
+
+/* Barra di avanzamento di installazioni e aggiornamenti (issue #128): sottile, con la fase
+   scritta accanto. Determinata durante il download, altrimenti un tratto che scorre. */
+.progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 9rem;
+  vertical-align: middle;
+}
+
+.progress-track {
+  position: relative;
+  flex: 1 1 5rem;
+  min-width: 4rem;
+  height: var(--progress-height);
+  overflow: hidden;
+  border-radius: calc(var(--progress-height) / 2);
+  background: var(--progress-track);
+}
+
+.progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
+
+.progress-track.indeterminate .progress-fill {
+  width: 35%;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+
+.progress-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+@keyframes progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
+
+  /* Senza animazione la barra indeterminata resta un tratto fermo, a metà. */
+  .progress-track.indeterminate .progress-fill {
+    animation: none;
+    left: 32%;
+  }
 }
