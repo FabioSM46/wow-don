@@ -10,6 +10,7 @@ import {
   categoryOptions,
   defaultSearch,
   firstPage,
+  hiddenOnlyMessage,
   formatAuthors,
   formatDate,
   formatDownloads,
@@ -37,8 +38,15 @@ function addon(id: number, fields: Partial<CatalogAddon> = {}): CatalogAddon {
   };
 }
 
-function page(index: number, ids: number[], totalCount: number): CatalogPage {
-  return { addons: ids.map((id) => addon(id)), index, pageSize: 50, totalCount };
+function page(index: number, ids: number[], totalCount: number, hidden = 0): CatalogPage {
+  return {
+    addons: ids.map((id) => addon(id)),
+    index,
+    pageSize: 50,
+    totalCount,
+    fetched: ids.length + hidden,
+    hidden,
+  };
 }
 
 const ids = (addons: CatalogAddon[]) => addons.map((a) => a.id);
@@ -139,6 +147,26 @@ describe("pages", () => {
     assert.equal(hasMore(results), false);
   });
 
+  it("keeps going after a page that the filter emptied", () => {
+    const results = appendPage(firstPage(page(0, [1], 500)), page(50, [], 500, 50));
+    assert.equal(results.exhausted, false);
+    assert.equal(results.nextIndex, 100);
+    assert.equal(results.hidden, 50);
+    assert.equal(hasMore(results), true);
+  });
+
+  it("explains a list emptied by the filter, with or without more to load", () => {
+    const more = appendPage(firstPage(page(0, [], 500, 50)), page(50, [], 500, 50));
+    assert.equal(hasMore(more), true);
+    assert.equal((hiddenOnlyMessage(more) ?? "").includes("Load more"), true);
+    const done = firstPage(page(0, [], 3, 3));
+    assert.equal(hasMore(done), false);
+    assert.equal(hiddenOnlyMessage(done), "No add-on with a release for this game version.");
+    // Una lista vuota senza nascosti, o una lista con risultati, ha le sue frasi.
+    assert.equal(hiddenOnlyMessage(firstPage(page(0, [], 0))), null);
+    assert.equal(hiddenOnlyMessage(firstPage(page(0, [1], 10, 2))), null);
+  });
+
   it("stops at the API result limit", () => {
     const results = appendPage(firstPage(page(0, [1], 50_000)), page(9_950, [2], 50_000));
     assert.equal(results.nextIndex, 10_000);
@@ -196,5 +224,9 @@ describe("formatting", () => {
     assert.equal(resultCount(partial), "2 of 1,234 results");
     const all = firstPage(page(0, [1, 2], 2));
     assert.equal(resultCount(all), "2 results");
+    const filtered = appendPage(firstPage(page(0, [1, 2], 1_234, 3)), page(50, [4], 1_234, 1));
+    assert.equal(resultCount(filtered), "3 shown · 4 without a release for this game version");
+    const none = firstPage(page(0, [], 4, 4));
+    assert.equal(resultCount(none), "0 shown · 4 without a release for this game version");
   });
 });
