@@ -584,6 +584,12 @@ impl<T: Transport> CurseForgeClient<T> {
         &self.transport
     }
 
+    /// Se il client ha una chiave: senza, ogni chiamata all'API dà
+    /// [`CurseForgeError::MissingKey`].
+    pub fn has_key(&self) -> bool {
+        self.key.is_some()
+    }
+
     fn key(&self) -> Result<&ApiKey, CurseForgeError> {
         self.key.as_ref().ok_or(CurseForgeError::MissingKey)
     }
