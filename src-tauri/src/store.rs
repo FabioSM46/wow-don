@@ -288,11 +288,18 @@ fn read_addon_settings(file: &Path) -> Result<SettingsByInstallation, String> {
 pub const INSTALLED_ADDONS_FILE: &str = "installed-addons.json";
 /// Versione 2: record per fonte e id testuale (issue #104). La versione 1 aveva solo progetti
 /// CurseForge con id numerico; si legge ancora e si riscrive come 2 alla prima modifica.
+/// Una nuova variante di [`SourceKind`] richiede una versione nuova.
 const INSTALLED_ADDONS_VERSION: u32 = 2;
 const INSTALLED_ADDONS_VERSION_V1: u32 = 1;
 
 /// La fonte da cui l'app ha installato un progetto. Su disco è la chiave in minuscolo
 /// (`curseforge`, `github`, `wowinterface`, `tukui`).
+///
+/// **Aggiungere una variante cambia il formato del file**: va alzato anche
+/// [`INSTALLED_ADDONS_VERSION`]. Una versione dell'app più vecchia legge allora una versione
+/// sconosciuta e chiede di aggiornare l'app lasciando il file com'è; con la stessa versione
+/// leggerebbe una fonte sconosciuta e direbbe che il file è danneggiato, invitando a spostarlo
+/// e a perdere tutti i record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceKind {
