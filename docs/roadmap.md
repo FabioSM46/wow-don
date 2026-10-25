@@ -68,7 +68,7 @@ Fonti senza accordi pubblicitari né chiavi (D31), dietro l'interfaccia comune (
 - Tukui (ElvUI, Tukui), WoWInterface e GitHub Releases, con l'installazione da link nella tab
   Search e la fonte di ogni addon nella tab Installed.
 
-Iteration 3: #102, #103, #104, #105, #106, #111. Dopo: #107, #108, #109, #110.
+Iteration 3: #102, #103, #104, #105, #106, #111, #117. Dopo: #107, #108, #109, #110.
 
 ## M5 — Richiesta chiave per applicazioni di terzi
 
