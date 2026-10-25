@@ -702,8 +702,19 @@ pub(crate) fn install_file<T: Transport>(
     check: &dyn Fn(&[String]) -> Result<(), String>,
 ) -> Result<Vec<String>, String> {
     let bytes = client.download(file).map_err(|e| e.to_string())?;
+    install_bytes(&bytes, addons_dir, old_modules, check)
+}
+
+/// Estrae lo zip `bytes` in staging e sostituisce le cartelle, come [`install_file`] dopo il
+/// download: lo usano anche le fonti che scaricano con un proprio trasporto.
+pub(crate) fn install_bytes(
+    bytes: &[u8],
+    addons_dir: &Path,
+    old_modules: &[String],
+    check: &dyn Fn(&[String]) -> Result<(), String>,
+) -> Result<Vec<String>, String> {
     let staging = install::WorkDir::staging(addons_dir)?;
-    let folders = install::extract(&bytes, staging.path())?;
+    let folders = install::extract(bytes, staging.path())?;
     check(&folders)?;
     let new: HashSet<String> = folders.iter().map(|f| f.to_lowercase()).collect();
     let obsolete: Vec<String> = old_modules

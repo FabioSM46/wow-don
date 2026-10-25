@@ -142,7 +142,7 @@ impl ReqwestTransport {
     }
 }
 
-fn transport_error(error: reqwest::Error) -> TransportError {
+pub(crate) fn transport_error(error: reqwest::Error) -> TransportError {
     if error.is_timeout() {
         TransportError::Timeout
     } else if error.is_connect() {
@@ -157,7 +157,7 @@ fn transport_error(error: reqwest::Error) -> TransportError {
 /// buffer resta entro `max_len`: la crescita raddoppia come quella di `Vec`, ma senza superare
 /// il limite. `declared` è il `Content-Length` già confrontato con il limite, usato per
 /// allocare una volta sola.
-fn read_limited(
+pub(crate) fn read_limited(
     reader: &mut impl Read,
     max_len: u64,
     declared: Option<u64>,
@@ -229,19 +229,7 @@ impl Transport for ReqwestTransport {
 /// Un URL da cui si può scaricare: `https`, senza credenziali né porta esplicita, verso un
 /// dominio di [`DOWNLOAD_DOMAINS`] o un suo sottodominio.
 fn is_download_url(url: &reqwest::Url) -> bool {
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    url.scheme() == "https"
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.port().is_none()
-        && DOWNLOAD_DOMAINS.iter().any(|domain| {
-            host == *domain
-                || host
-                    .strip_suffix(domain)
-                    .is_some_and(|rest| rest.ends_with('.'))
-        })
+    super::http::is_allowed_url(url, &DOWNLOAD_DOMAINS)
 }
 
 // ── Errori ──────────────────────────────────────────────────────────────────
