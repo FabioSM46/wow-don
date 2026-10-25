@@ -323,6 +323,16 @@ mod tests {
         assert!(error.contains("outside a folder"), "{error}");
         assert!(listing(&fx.addons).is_empty());
         assert_no_leftovers(&fx);
+
+        // Uno zip valido senza voci non installa niente: `extract` lo rifiuta, quindi il controllo
+        // dei `.toc` non può passare a vuoto.
+        let empty = fx.zip("empty.zip", &[]);
+        assert_eq!(
+            install_zip(&fx.addons, &empty).unwrap_err(),
+            "The zip is empty."
+        );
+        assert!(listing(&fx.addons).is_empty());
+        assert_no_leftovers(&fx);
     }
 
     #[test]
