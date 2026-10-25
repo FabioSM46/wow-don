@@ -262,13 +262,22 @@ export function authorsOf(addons: InstalledAddon[]): string[] {
   return [...authors].sort((a, b) => a.localeCompare(b, "it", { sensitivity: "base" }));
 }
 
+/**
+ * La fonte di un addon con la stessa regola di `groupAddons`: quella del progetto del controllo,
+ * altrimenti CurseForge se il registro dell'app (`installedProject`, solo CurseForge) lo conosce.
+ */
+export function sourceOf(addon: InstalledAddon, update?: AddonUpdate): SourceKind | null {
+  if (update?.project) return update.project.source;
+  return addon.installedProject ? "curseforge" : null;
+}
+
 export function matchesFilters(
   addon: InstalledAddon,
   filters: Filters,
   update?: AddonUpdate,
 ): boolean {
   if (filters.onlyUpdates && update?.status !== "updateAvailable") return false;
-  if (filters.source !== null && update?.project?.source !== filters.source) return false;
+  if (filters.source !== null && sourceOf(addon, update) !== filters.source) return false;
   if (filters.author !== null && addon.author !== filters.author) return false;
   if (filters.hideLoadOnDemand && addon.loadOnDemand) return false;
   if (filters.onlyErrors && addon.error === null) return false;

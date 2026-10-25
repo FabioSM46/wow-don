@@ -317,6 +317,13 @@ export function AddonTable({ installation, reload = 0 }: Props) {
   }
   const updatableIds = [...updatable.values()];
   const sources = useMemo(() => sourcesIn(updates), [updates]);
+  // Una fonte scelta che non compare più nel controllo (addon tolto, nuovo controllo) nasconderebbe
+  // tutto senza un menu per toglierla. Un controllo ancora vuoto non cancella la scelta.
+  useEffect(() => {
+    if (sources.length > 0 && filters.source !== null && !sources.includes(filters.source)) {
+      setFilters((previous) => ({ ...previous, source: null }));
+    }
+  }, [sources, filters.source]);
   const busy = updating.size > 0;
 
   function update(patch: Partial<Filters>) {

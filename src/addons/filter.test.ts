@@ -420,4 +420,15 @@ describe("matchesGroup with the source filter", () => {
     assert.deepEqual(shown("github"), ["Beta"]);
     assert.deepEqual(shown("tukui"), []);
   });
+
+  it("counts the app's record as CurseForge, like the grouping does", () => {
+    const known = addon("Known", { installedProject: { id: 7, folders: ["Known"] } });
+    const other = addon("Other");
+    const updates = fromSources([[other, "github", "owner/other", ["Other"]]]);
+    const groups = groupAddons([known, other], updates);
+    const shown = groups
+      .filter((g) => matchesGroup(g, { ...defaultFilters, source: "curseforge" }, updates))
+      .map((g) => g.main.folder);
+    assert.deepEqual(shown, ["Known"]);
+  });
 });
