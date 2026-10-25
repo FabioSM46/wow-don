@@ -277,6 +277,10 @@ pub struct ImportResult {
     /// Perché *Replace all* non ha tolto niente, quando non ci ha nemmeno provato.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub removal_skipped: Option<String>,
+    /// Perché non si è potuto sapere prima se i progetti si possono scaricare: gli esiti dei
+    /// singoli progetti dicono poi cosa è successo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lookup_error: Option<String>,
 }
 
 /// Chi installa un progetto della stringa. Nel comando sono le fonti vere; nei test una finta.
@@ -318,6 +322,7 @@ pub fn run_import(
         not_confirmed: Vec::new(),
         removal_errors: Vec::new(),
         removal_skipped: None,
+        lookup_error: None,
     };
     if mode == ImportMode::Keep {
         return result;
@@ -557,6 +562,29 @@ mod tests {
         );
         // DBM resta con la sua libreria e la sua dipendenza dichiarata; Details e lo zip no.
         assert_eq!(preview.removals, ["Details", "ZipAddon"]);
+    }
+
+    #[test]
+    fn a_required_dependency_from_the_toc_stays() {
+        // Dal testo vero del `.toc`: `## RequiredDeps` è un alias di `## Dependencies`.
+        let mut core = listed("DBM-Core", &[]);
+        core.addon.toc = crate::addons::toc::parse_toc(
+            "## Title: DBM\n## RequiredDeps: LibFoo\n## OptionalDeps: LibBar\n",
+        );
+        let refresh = state(
+            vec![
+                core,
+                listed("LibFoo", &[]),
+                listed("LibBar", &[]),
+                listed("Other", &[]),
+            ],
+            vec![matched("DBM-Core", "3358", &[])],
+        );
+        let keep = HashSet::from([(SourceKind::Curseforge, "3358".to_owned())]);
+        assert_eq!(
+            removal_candidates(&refresh, &SourceRecords::new(), &keep),
+            ["Other"]
+        );
     }
 
     #[test]

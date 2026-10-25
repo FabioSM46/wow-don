@@ -462,7 +462,8 @@ pub async fn import_addons(
         let has_key = key.is_some();
         let client = CurseForgeClient::new(transport, key.clone());
         let tukui = tukui_source()?;
-        let (availability, _) = import_availability(&decoded.list.addons, &client, has_key, &tukui);
+        let (availability, lookup_error) =
+            import_availability(&decoded.list.addons, &client, has_key, &tukui);
         let mut installer = CommandInstaller {
             app: &app,
             installation: &installation,
@@ -470,7 +471,7 @@ pub async fn import_addons(
             tukui: &tukui,
             availability: &availability,
         };
-        let result = addon_import::run_import(
+        let mut result = addon_import::run_import(
             &addons_dir,
             &decoded,
             mode,
@@ -480,6 +481,7 @@ pub async fn import_addons(
             &mut installer,
             &mut || read_state(),
         );
+        result.lookup_error = lookup_error;
         if !result.removed.is_empty() {
             cache.forget(&addons_dir, &result.removed);
             // Le cartelle sono già tolte: un registro che non si aggiorna non annulla niente.
@@ -493,6 +495,9 @@ pub async fn import_addons(
 }
 
 type Availabilities = HashMap<(SourceKind, String), addon_import::Availability>;
+
+/// I progetti CurseForge chiesti in una sola `get_mods` dall'anteprima di un import.
+const MODS_PER_REQUEST: usize = 100;
 
 /// Se i progetti della stringa si possono scaricare: per CurseForge da `allowModDistribution`
 /// (una sola richiesta per tutti), per Tukui dal suo elenco. Se una fonte non risponde, i suoi
@@ -526,24 +531,33 @@ fn import_availability(
                 );
             }
         } else {
-            match client.get_mods(&mod_ids) {
-                Ok(mods) => {
-                    let by_id: HashMap<u32, _> = mods.into_iter().map(|m| (m.id, m)).collect();
-                    for id in &mod_ids {
-                        let state = match by_id.get(id) {
-                            Some(found) if found.allow_mod_distribution == Some(true) => {
-                                Availability::Available
-                            }
-                            Some(found) => not_downloadable(
-                                "The author does not allow downloads from third-party apps: install it from the CurseForge website.",
-                                found.links.website_url.clone(),
-                            ),
-                            None => not_downloadable("Addon not found on CurseForge.", None),
-                        };
-                        availability.insert((SourceKind::Curseforge, id.to_string()), state);
+            // A pezzi: una stringa può avere fino a 1.000 progetti, e un pezzo che fallisce non
+            // toglie le risposte degli altri.
+            for chunk in mod_ids.chunks(MODS_PER_REQUEST) {
+                match client.get_mods(chunk) {
+                    Ok(mods) => {
+                        let by_id: HashMap<u32, _> = mods.into_iter().map(|m| (m.id, m)).collect();
+                        for id in chunk {
+                            let state = match by_id.get(id) {
+                                Some(found) if found.allow_mod_distribution == Some(true) => {
+                                    Availability::Available
+                                }
+                                Some(found) => not_downloadable(
+                                    "The author does not allow downloads from third-party apps: install it from the CurseForge website.",
+                                    found.links.website_url.clone(),
+                                ),
+                                None => not_downloadable("Addon not found on CurseForge.", None),
+                            };
+                            availability.insert((SourceKind::Curseforge, id.to_string()), state);
+                        }
+                    }
+                    Err(error) => {
+                        let error = error.to_string();
+                        if !errors.contains(&error) {
+                            errors.push(error);
+                        }
                     }
                 }
-                Err(error) => errors.push(error.to_string()),
             }
         }
     }
