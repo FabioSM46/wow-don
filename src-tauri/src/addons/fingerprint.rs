@@ -16,13 +16,16 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
+use std::rc::Rc;
 
 /// Byte che il calcolo salta: tab, a capo, ritorno carrello, spazio.
 fn is_skipped(byte: u8) -> bool {
     matches!(byte, 9 | 10 | 13 | 32)
 }
 
-/// MurmurHash2 a 32 bit (Austin Appleby).
+/// MurmurHash2 a 32 bit (Austin Appleby), su un buffer intero. Resta come riferimento dei
+/// test: `curse_hash` fa lo stesso calcolo in streaming.
+#[cfg(test)]
 pub fn murmur2(data: &[u8], seed: u32) -> u32 {
     const M: u32 = 0x5bd1_e995;
     const R: u32 = 24;
@@ -52,9 +55,40 @@ pub fn murmur2(data: &[u8], seed: u32) -> u32 {
 }
 
 /// L'hash di CurseForge: MurmurHash2 con seme 1 sui soli byte che non sono spaziatura.
+///
+/// Calcolato senza copiare i byte tenuti: la lunghezza filtrata entra nel valore iniziale, quindi
+/// una prima passata la conta e la seconda forma le parole da 4 byte saltando la spaziatura. Il
+/// risultato è quello di `murmur2` sui byte filtrati (lo verificano i test).
 pub fn curse_hash(data: &[u8]) -> u32 {
-    let kept: Vec<u8> = data.iter().copied().filter(|b| !is_skipped(*b)).collect();
-    murmur2(&kept, 1)
+    const M: u32 = 0x5bd1_e995;
+    const R: u32 = 24;
+    let kept = data.iter().filter(|&&b| !is_skipped(b)).count();
+    let mut h = 1 ^ kept as u32;
+    let mut word = 0u32;
+    let mut filled = 0u32;
+    for &byte in data {
+        if is_skipped(byte) {
+            continue;
+        }
+        word |= u32::from(byte) << (8 * filled);
+        filled += 1;
+        if filled == 4 {
+            let mut k = word.wrapping_mul(M);
+            k ^= k >> R;
+            k = k.wrapping_mul(M);
+            h = h.wrapping_mul(M) ^ k;
+            word = 0;
+            filled = 0;
+        }
+    }
+    // La coda (1-3 byte) è già in `word` nell'ordine di `murmur2`.
+    if filled > 0 {
+        h ^= word;
+        h = h.wrapping_mul(M);
+    }
+    h ^= h >> 13;
+    h = h.wrapping_mul(M);
+    h ^ (h >> 15)
 }
 
 /// Combina gli hash dei file nel fingerprint della cartella.
@@ -76,13 +110,13 @@ const TOC_SUFFIXES: &[&str] = &[
 /// Wine e su macOS non distingue maiuscole e minuscole, e gli addon contano su questo.
 pub type FileIndex = BTreeMap<String, String>;
 
-/// Sceglie i file che entrano nel fingerprint. `read` restituisce il testo di un file dato il
-/// suo percorso reale (relativo, come nell'indice). Restituisce percorsi reali, ordinati per
-/// percorso in minuscolo.
-pub fn select_files(
+/// Sceglie i file che entrano nel fingerprint. `read` restituisce il contenuto di un file dato
+/// il suo percorso reale (relativo, come nell'indice); il testo si ricava senza copia quando è
+/// UTF-8 valido. Restituisce percorsi reali, ordinati per percorso in minuscolo.
+pub fn select_files<T: AsRef<[u8]>>(
     folder: &str,
     files: &FileIndex,
-    read: impl Fn(&str) -> Option<String>,
+    read: impl Fn(&str) -> Option<T>,
 ) -> Vec<String> {
     let folder_lower = folder.to_lowercase();
     let mut selected: Vec<String> = Vec::new();
@@ -125,10 +159,10 @@ fn is_counted_toc(folder_lower: &str, name: &str) -> bool {
 }
 
 /// Aggiunge `path` e, ricorsivamente, i file che include.
-fn include(
+fn include<T: AsRef<[u8]>>(
     path: &str,
     files: &FileIndex,
-    read: &impl Fn(&str) -> Option<String>,
+    read: &impl Fn(&str) -> Option<T>,
     selected: &mut Vec<String>,
 ) {
     if selected.iter().any(|existing| existing == path) {
@@ -136,10 +170,11 @@ fn include(
     }
     selected.push(path.to_owned());
     let lower = path.to_lowercase();
+    // I file non sono sempre UTF-8: quello che non lo è diventa un carattere sostitutivo.
     let includes = if lower.ends_with(".toc") {
-        read(path).map(|text| toc_includes(&text))
+        read(path).map(|bytes| toc_includes(&String::from_utf8_lossy(bytes.as_ref())))
     } else if lower.ends_with(".xml") {
-        read(path).map(|text| xml_includes(&text))
+        read(path).map(|bytes| xml_includes(&String::from_utf8_lossy(bytes.as_ref())))
     } else {
         None
     };
@@ -169,11 +204,17 @@ fn toc_includes(text: &str) -> Vec<String> {
                 None => line,
             }
             .trim();
-            let lower = line.to_lowercase();
-            let wanted = lower.ends_with(".lua") || lower.ends_with(".xml");
+            // Confronto ASCII al posto di `to_lowercase`, senza un'allocazione per riga: nessun
+            // carattere non ASCII diventa `.`, `l`, `u`, `a`, `x` o `m` in minuscolo.
+            let wanted = ends_with_ignore_case(line, ".lua") || ends_with_ignore_case(line, ".xml");
             (wanted && !line.contains("..")).then(|| line.to_owned())
         })
         .collect()
+}
+
+fn ends_with_ignore_case(text: &str, suffix: &str) -> bool {
+    text.len() >= suffix.len()
+        && text.as_bytes()[text.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
 }
 
 /// Le inclusioni di un `.xml`: il primo `<Include file="…"/>` o `<Script file="…"/>` di ogni
@@ -311,22 +352,45 @@ pub fn folder_fingerprint(addon_dir: &Path) -> Option<u32> {
     let addons_dir = addon_dir.parent()?;
     let files = index_files(addon_dir, folder);
     // I `.toc` e gli `.xml` si leggono per trovare le inclusioni e di nuovo per l'hash: i byte
-    // letti la prima volta si riusano.
-    let cache: RefCell<HashMap<String, Option<Vec<u8>>>> = RefCell::new(HashMap::new());
+    // letti la prima volta si riusano, condivisi e non copiati (alcuni `.toc` superano i 50 MB).
+    let cache: RefCell<HashMap<String, Option<Rc<[u8]>>>> = RefCell::new(HashMap::new());
     let bytes_of = |relative: &str| {
         cache
             .borrow_mut()
             .entry(relative.to_owned())
-            .or_insert_with(|| fs::read(addons_dir.join(relative)).ok())
+            .or_insert_with(|| fs::read(addons_dir.join(relative)).ok().map(Rc::from))
             .clone()
     };
-    let selected = select_files(folder, &files, |relative| {
-        bytes_of(relative).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-    });
+    let selected = select_files(folder, &files, bytes_of);
     let hashes: Vec<u32> = selected
         .iter()
         .filter_map(|relative| bytes_of(relative))
         .map(|bytes| curse_hash(&bytes))
+        .collect();
+    if hashes.is_empty() {
+        return None;
+    }
+    Some(combine(hashes))
+}
+
+/// Il calcolo di prima, che copiava i byte e convertiva i file in `String`: il riferimento dei
+/// test di parità sulle cartelle vere.
+#[cfg(test)]
+pub fn reference_fingerprint(addon_dir: &Path) -> Option<u32> {
+    let folder = addon_dir.file_name()?.to_str()?;
+    let addons_dir = addon_dir.parent()?;
+    let files = index_files(addon_dir, folder);
+    let read = |relative: &str| fs::read(addons_dir.join(relative)).ok();
+    let selected = select_files(folder, &files, |relative| {
+        read(relative).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    });
+    let hashes: Vec<u32> = selected
+        .iter()
+        .filter_map(|relative| read(relative))
+        .map(|bytes| {
+            let kept: Vec<u8> = bytes.into_iter().filter(|b| !is_skipped(*b)).collect();
+            murmur2(&kept, 1)
+        })
         .collect();
     if hashes.is_empty() {
         return None;
@@ -365,6 +429,61 @@ mod tests {
         );
         assert_eq!(curse_hash(b" \t\r\n"), curse_hash(b""));
         assert_eq!(curse_hash(b"a b\r\nc"), curse_hash(b"abc"));
+    }
+
+    /// Il calcolo di prima, sui byte filtrati copiati in un buffer: il riferimento di
+    /// `curse_hash` in streaming.
+    fn reference_hash(data: &[u8]) -> u32 {
+        let kept: Vec<u8> = data.iter().copied().filter(|b| !is_skipped(*b)).collect();
+        murmur2(&kept, 1)
+    }
+
+    #[test]
+    fn streaming_hash_matches_the_buffered_one_at_every_length() {
+        // Contenuti deterministici con spaziatura sparsa: ogni lunghezza filtrata da 0 a oltre
+        // 300 byte, quindi ogni resto modulo 4 della coda, con e senza spaziatura in coda.
+        let mut state = 0x1234_5678u32;
+        for len in 0..=320 {
+            let data: Vec<u8> = (0..len)
+                .map(|_| {
+                    state = state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    match state >> 28 {
+                        0 => b' ',
+                        1 => b'\n',
+                        2 => b'\t',
+                        3 => b'\r',
+                        _ => (state >> 16) as u8,
+                    }
+                })
+                .collect();
+            assert_eq!(curse_hash(&data), reference_hash(&data), "len {len}");
+            let plain: Vec<u8> = data.iter().copied().filter(|b| !is_skipped(*b)).collect();
+            assert_eq!(curse_hash(&plain), murmur2(&plain, 1), "plain len {len}");
+        }
+    }
+
+    #[test]
+    fn ascii_suffix_check_matches_lowercase() {
+        for line in [
+            "Core.LUA",
+            "a.Xml",
+            "x.lua ",
+            "ä.lua",
+            "İ.LUA",
+            "\u{212A}.lua",
+            "lua",
+            ".lu",
+            "",
+            "Ω.XmL",
+            "file.luac",
+        ] {
+            let lower = line.to_lowercase();
+            assert_eq!(
+                ends_with_ignore_case(line, ".lua") || ends_with_ignore_case(line, ".xml"),
+                lower.ends_with(".lua") || lower.ends_with(".xml"),
+                "{line:?}"
+            );
+        }
     }
 
     #[test]
@@ -451,7 +570,7 @@ mod tests {
             "Foo/Foo_Standard.toc",
             "Foo/Other.toc",
         ]);
-        let selected = select_files("Foo", &files, |_| None);
+        let selected = select_files("Foo", &files, |_| None::<String>);
         assert_eq!(
             selected,
             ["Foo/Foo-Classic.toc", "Foo/Foo.toc", "Foo/Foo_Vanilla.toc"]

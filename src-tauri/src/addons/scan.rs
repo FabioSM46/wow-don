@@ -2,7 +2,11 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
+use std::thread;
 use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
@@ -51,6 +55,8 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
     };
 
     let mut addons = Vec::new();
+    // Le cartelle da leggere: la lettura (e il fingerprint) si fa dopo, in parallelo.
+    let mut folders = Vec::new();
     let mut unreadable = 0;
     for entry in entries {
         let entry = match entry {
@@ -86,8 +92,9 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
             .ok()
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .and_then(|duration| u64::try_from(duration.as_millis()).ok());
-        addons.push(read_addon(&entry.path(), folder, flavor, modified_ms));
+        folders.push((entry.path(), folder, modified_ms));
     }
+    addons.extend(read_addons(folders, flavor));
     addons.sort_by(|a, b| {
         a.folder
             .to_lowercase()
@@ -96,6 +103,47 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
     });
     Ok(addons)
 }
+
+/// Legge le cartelle con più thread: il costo è quasi tutto nel fingerprint, che legge per
+/// intero i file dell'addon. Ogni thread prende la prossima cartella libera, così una cartella
+/// molto grande non blocca le altre dietro di sé; ogni risultato resta al posto della sua
+/// cartella, quindi l'ordine non dipende da quale thread finisce prima.
+fn read_addons(folders: Vec<Folder>, flavor: &str) -> Vec<InstalledAddon> {
+    let threads = thread::available_parallelism()
+        .map_or(1, NonZeroUsize::get)
+        .min(folders.len());
+    let results: Vec<Mutex<Option<InstalledAddon>>> =
+        folders.iter().map(|_| Mutex::new(None)).collect();
+    let next = AtomicUsize::new(0);
+    let work = || {
+        loop {
+            let index = next.fetch_add(1, Ordering::Relaxed);
+            let Some((dir, folder, modified_ms)) = folders.get(index) else {
+                return;
+            };
+            let addon = read_addon(dir, folder.clone(), flavor, *modified_ms);
+            *results[index]
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(addon);
+        }
+    };
+    if threads <= 1 {
+        work();
+    } else {
+        thread::scope(|scope| {
+            for _ in 0..threads {
+                scope.spawn(work);
+            }
+        });
+    }
+    results
+        .into_iter()
+        .filter_map(|result| result.into_inner().unwrap_or_else(PoisonError::into_inner))
+        .collect()
+}
+
+/// Una cartella da leggere: percorso, nome e data di modifica in millisecondi.
+type Folder = (PathBuf, String, Option<u64>);
 
 fn unreadable_entry(folder: String, error: &std::io::Error) -> InstalledAddon {
     InstalledAddon {
@@ -254,6 +302,64 @@ mod tests {
         }
         out.sort();
         out
+    }
+
+    #[test]
+    fn folders_read_in_parallel_keep_their_own_results_and_order() {
+        let tmp = TempDir::new();
+        let names: Vec<String> = (0..40).map(|i| format!("Addon{i:02}")).collect();
+        for name in &names {
+            let toc = (
+                format!("{name}.toc"),
+                format!("## Title: {name}\n{name}.lua\n"),
+            );
+            let lua = (format!("{name}.lua"), format!("print('{name}')\n"));
+            addon(
+                tmp.path(),
+                name,
+                &[
+                    (toc.0.as_str(), toc.1.as_str()),
+                    (lua.0.as_str(), lua.1.as_str()),
+                ],
+            );
+        }
+        let addons = scan_addons(tmp.path(), "retail").unwrap();
+        let folders: Vec<&str> = addons.iter().map(|a| a.folder.as_str()).collect();
+        assert_eq!(
+            folders,
+            names.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        for addon in &addons {
+            assert_eq!(addon.toc.title.as_deref(), Some(addon.folder.as_str()));
+            let dir = tmp
+                .path()
+                .join("Interface")
+                .join("AddOns")
+                .join(&addon.folder);
+            assert_eq!(addon.fingerprint, fingerprint::folder_fingerprint(&dir));
+        }
+    }
+
+    /// Fingerprint della cartella AddOns vera indicata da `WOWDON_FINGERPRINT_DIR` (la cartella
+    /// dell'installazione, `_<flavor>_`): ogni cartella deve dare lo stesso valore del calcolo
+    /// di riferimento, e il tempo della scansione si stampa. `cargo test --release -- --ignored
+    /// real_folder_fingerprints --nocapture`.
+    #[test]
+    #[ignore = "needs a real installation folder"]
+    fn real_folder_fingerprints_match_the_reference() {
+        let Ok(dir) = std::env::var("WOWDON_FINGERPRINT_DIR") else {
+            panic!("set WOWDON_FINGERPRINT_DIR to an installation folder");
+        };
+        let dir = PathBuf::from(dir);
+        let started = std::time::Instant::now();
+        let addons = scan_addons(&dir, "retail").unwrap();
+        eprintln!("scan: {} folders in {:?}", addons.len(), started.elapsed());
+        let addons_dir = dir.join("Interface").join("AddOns");
+        for addon in &addons {
+            let expected = fingerprint::reference_fingerprint(&addons_dir.join(&addon.folder));
+            assert_eq!(addon.fingerprint, expected, "{}", addon.folder);
+            eprintln!("{} {:?}", addon.folder, addon.fingerprint);
+        }
     }
 
     #[test]
