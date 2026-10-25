@@ -145,8 +145,9 @@ pub enum UpdateStatus {
     UpdateAvailable {
         latest: FileSummary,
     },
-    /// Per la versione non c'è una Release più recente, ma una Beta sì, e l'opzione "Beta
-    /// quando non c'è una Release" è spenta (issue #141).
+    /// Per la versione non c'è nessuna Release, ma una Beta più recente del file installato sì, e
+    /// l'opzione "Beta quando non c'è una Release" è spenta (issue #141). Se una Release esiste,
+    /// la Beta non conta nemmeno con l'opzione accesa, quindi lo stato resta `UpToDate`.
     BetaOnly {
         latest: FileSummary,
     },
@@ -264,6 +265,8 @@ pub fn evaluate_with(
                 Some(latest) if is_newer(latest, &found.file) => UpdateStatus::UpdateAvailable {
                     latest: FileSummary::from(latest),
                 },
+                // Con una Release per la versione la Beta non si usa mai (`pick_file`), con
+                // l'opzione o senza: niente da suggerire.
                 Some(_) => UpdateStatus::UpToDate,
                 // Senza Release: se una Beta più recente c'è, lo si dice invece di "aggiornato".
                 None => match newest_file(found, target, true) {
@@ -1138,6 +1141,20 @@ mod tests {
         // L'Alpha non conta mai.
         let alpha = beta_match(vec![file(15, "2026-10-05T00:00:00Z", 3, FOREVER, &[])]);
         assert_eq!(evaluate_beta(alpha, true), UpdateStatus::UpToDate);
+        // Con una Release per la versione la Beta non conta, nemmeno senza l'opzione: nessun
+        // suggerimento, perché accenderla non cambierebbe niente.
+        let release_installed = FingerprintMatch {
+            id: 7,
+            file: file(10, "2026-09-01T00:00:00Z", 1, FOREVER, &[100]),
+            latest_files: vec![
+                file(10, "2026-09-01T00:00:00Z", 1, FOREVER, &[]),
+                file(13, "2026-10-02T00:00:00Z", 2, FOREVER, &[]),
+            ],
+        };
+        assert_eq!(
+            evaluate_beta(release_installed, false),
+            UpdateStatus::UpToDate
+        );
         // La Beta installata è già la più recente.
         let same = beta_match(vec![file(10, "2026-09-01T00:00:00Z", 2, FOREVER, &[])]);
         assert_eq!(evaluate_beta(same, true), UpdateStatus::UpToDate);

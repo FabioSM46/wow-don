@@ -106,7 +106,7 @@ export type AddonUpdate = {
   | { status: "notMatched" }
   | { status: "upToDate" }
   | { status: "updateAvailable"; latest: FileSummary }
-  /** Nessuna Release più recente, ma una Beta sì, con l'opzione della Beta spenta. */
+  /** Nessuna Release per la versione, ma una Beta più recente sì, con l'opzione spenta. */
   | { status: "betaOnly"; latest: FileSummary }
   | { status: "error"; message: string }
 );
