@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage, type AppStatus, type Installation, type Theme } from "./api";
 import { AddonTable } from "./addons/AddonTable";
+import { ZipDrop } from "./addons/ZipDrop";
+import { describeZipInstall, fileName, pickZip } from "./addons/zip";
 import { Discovered } from "./installations/Discovered";
 import { Installations } from "./installations/Installations";
 import { Appearance } from "./options/Appearance";
@@ -33,6 +36,9 @@ function App() {
   // lo stato sta nel backend, un breve lampo all'avvio è accettato).
   const [theme, setTheme] = useState<Theme | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  // Installazione di uno zip trascinato o scelto (D32): una alla volta, con il suo esito.
+  const [zipBusy, setZipBusy] = useState(false);
+  const [zipMessage, setZipMessage] = useState<{ text: string; error: boolean } | null>(null);
 
   useEffect(() => {
     if (theme !== null) applyTheme(document.documentElement, theme);
@@ -66,6 +72,55 @@ function App() {
   }, [tab, installedStale]);
 
   const active = installations?.find((installation) => installation.id === activeId) ?? null;
+
+  async function installZip(paths: string[]) {
+    if (zipBusy) {
+      setZipMessage({ text: "A zip is already being installed: wait for it to finish.", error: true });
+      return;
+    }
+    const picked = pickZip(paths, active !== null);
+    if ("problem" in picked) {
+      setZipMessage({ text: picked.problem, error: true });
+      return;
+    }
+    if (active === null) return;
+    const target = active;
+    setZipBusy(true);
+    setZipMessage(null);
+    try {
+      const result = await api.installZip(target.id, picked.path);
+      setZipMessage({
+        text: describeZipInstall(result, fileName(picked.path), target.name),
+        // Un avviso del backend (per esempio record non aggiornati) si mostra come errore.
+        error: Boolean(result.warning),
+      });
+      // Gli addon sul disco sono cambiati: la tab Installed si rilegge.
+      setInstalledStale(true);
+    } catch (err) {
+      setZipMessage({
+        text: `Could not install ${fileName(picked.path)}: ${errorMessage(err)}`,
+        error: true,
+      });
+    } finally {
+      setZipBusy(false);
+    }
+  }
+
+  async function chooseZip() {
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        title: "Choose an addon .zip",
+        filters: [{ name: "Zip archives", extensions: ["zip", "ZIP"] }],
+      });
+      // Selettore annullato: non succede niente.
+      if (typeof selected !== "string") return;
+      await installZip([selected]);
+    } catch (err) {
+      setZipMessage({ text: `The file picker could not be opened: ${errorMessage(err)}`, error: true });
+    }
+  }
 
   function changeInstallations(list: Installation[]) {
     setInstallations(list);
@@ -152,6 +207,18 @@ function App() {
           </p>
         )}
         {installations === null && !error && <p className="muted">Loading…</p>}
+        {zipBusy && <p className="message muted">Installing the zip…</p>}
+        {zipMessage && (
+          <p
+            className={zipMessage.error ? "message error" : "message"}
+            role={zipMessage.error ? "alert" : "status"}
+          >
+            {zipMessage.text}{" "}
+            <button className="link subtle" onClick={() => setZipMessage(null)}>
+              Dismiss
+            </button>
+          </p>
+        )}
 
         {/* Le tab restano montate e nascoste: ricerca, filtri e controlli in corso non si
             perdono passando da una tab all'altra. */}
@@ -161,7 +228,14 @@ function App() {
           aria-labelledby="tab-installed"
           hidden={tab !== "installed"}
         >
-          {active && <AddonTable installation={active} reload={reload} />}
+          {active && (
+            <AddonTable
+              installation={active}
+              reload={reload}
+              onInstallZip={() => void chooseZip()}
+              zipBusy={zipBusy}
+            />
+          )}
           {installations !== null && installations.length === 0 && (
             <p className="empty">
               No installations yet. Add one in{" "}
@@ -222,6 +296,8 @@ function App() {
           <Appearance theme={theme} loadError={settingsError} onChange={setTheme} />
         </div>
       </main>
+
+      <ZipDrop target={active?.name ?? null} onDrop={(paths) => void installZip(paths)} />
 
       {status && (
         <footer className="app-footer">

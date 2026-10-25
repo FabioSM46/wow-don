@@ -13,6 +13,7 @@
   --hover: #f0f0f2;
   --accent: #3b6ef5;
   --danger: #d1242f;
+  --overlay: rgb(247 247 248 / 85%);
   --radius: 8px;
 
   --dark-bg: #111113;
@@ -23,6 +24,7 @@
   --dark-hover: #202024;
   --dark-accent: #6d93ff;
   --dark-danger: #ff6b6b;
+  --dark-overlay: rgb(17 17 19 / 85%);
 
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -47,6 +49,7 @@
     --hover: var(--dark-hover);
     --accent: var(--dark-accent);
     --danger: var(--dark-danger);
+    --overlay: var(--dark-overlay);
     color-scheme: dark;
   }
 }
@@ -60,6 +63,7 @@
   --hover: var(--dark-hover);
   --accent: var(--dark-accent);
   --danger: var(--dark-danger);
+  --overlay: var(--dark-overlay);
   color-scheme: dark;
 }
 
@@ -956,4 +960,27 @@ button:focus-visible {
 .detail-file-meta {
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+/* Trascinamento di uno zip sulla finestra (D32): un solo strato neutro con il bordo tratteggiato
+   nel colore d'accento, sopra tutto, che non intercetta il puntatore. */
+.zip-drop {
+  position: fixed;
+  inset: 12px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: var(--overlay);
+  pointer-events: none;
+}
+
+.zip-drop-text {
+  margin: 0;
+  padding: 12px 20px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-weight: 500;
 }
