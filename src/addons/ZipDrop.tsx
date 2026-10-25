@@ -38,8 +38,9 @@ export function ZipDrop({ target, onDrop }: Props) {
         if (disposed) stop();
         else unlisten = stop;
       })
-      // Fuori da Tauri (per esempio `vite` nel browser) non c'è niente da ascoltare.
-      .catch(() => {});
+      // Fuori da Tauri (per esempio `vite` nel browser) non c'è niente da ascoltare; dentro
+      // l'app un errore qui vuol dire che il trascinamento non funziona: se ne lascia traccia.
+      .catch((err) => console.warn("Drag and drop is unavailable:", err));
     return () => {
       disposed = true;
       unlisten?.();
