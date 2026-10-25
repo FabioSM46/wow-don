@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::addons::scan::ListedAddon;
 use crate::store::{SourceKind, SourceRecords};
-use crate::updates::{AddonUpdate, Refresh, is_known_version_type};
+use crate::updates::{Refresh, VersionOverrides, is_known_version_type};
 
 /// Il prefisso della versione 1 del formato.
 pub const PREFIX: &str = "WOWDON1:";
@@ -27,9 +27,7 @@ pub const MAX_TEXT_BYTES: usize = 64 * 1024;
 #[allow(dead_code)]
 /// Il numero massimo di voci di una stringa.
 pub const MAX_ENTRIES: usize = 1000;
-#[allow(dead_code)]
 const MAX_KEY_CHARS: usize = 64;
-#[allow(dead_code)]
 const MAX_NAME_CHARS: usize = 200;
 #[allow(dead_code)]
 const MAX_FLAVOR_CHARS: usize = 64;
@@ -225,14 +223,24 @@ pub struct Export {
     /// Le cartelle che nessun progetto riconosce (per esempio addon installati da zip): non si
     /// possono riscaricare, quindi non entrano nella stringa.
     pub skipped: Vec<String>,
+    /// Perché il controllo non è riuscito, se è fallito: senza controllo un progetto si riconosce
+    /// solo dai record dell'app, quindi `skipped` può contenere cartelle che hanno un progetto.
+    pub check_error: Option<String>,
 }
 
 /// La lista di un'installazione dai risultati di una scansione (`refresh`) e dai record
 /// dell'app (`records`). Un progetto riconosciuto dal controllo entra con il suo nome e la sua
 /// versione forzata; un progetto registrato che il controllo non ha riconosciuto (per esempio
 /// CurseForge senza chiave) entra se almeno una sua cartella è ancora sul disco. Le cartelle
-/// che nessun progetto copre restano in `skipped`, per nome.
-pub fn export_list(flavor: &str, refresh: &Refresh, records: &SourceRecords) -> Export {
+/// che nessun progetto copre restano in `skipped`, per nome. Una voce esce con gli stessi limiti
+/// che [`decode`] controlla: un nome troppo lungo si accorcia, una chiave non valida resta fuori
+/// e le sue cartelle finiscono in `skipped`, così ogni stringa esportata si rilegge per intero.
+pub fn export_list(
+    flavor: &str,
+    refresh: &Refresh,
+    records: &SourceRecords,
+    overrides: &VersionOverrides,
+) -> Export {
     let mut entries: Vec<ListEntry> = Vec::new();
     let mut seen: HashSet<(SourceKind, String)> = HashSet::new();
     let mut covered: HashSet<String> = HashSet::new();
@@ -241,13 +249,16 @@ pub fn export_list(flavor: &str, refresh: &Refresh, records: &SourceRecords) -> 
         let Some(project) = &update.project else {
             continue;
         };
+        if !exportable_key(project.source, &project.key) {
+            continue;
+        }
         covered.insert(update.folder.to_lowercase());
         covered.extend(update.project_folders.iter().map(|f| f.to_lowercase()));
         if seen.insert((project.source, project.key.clone())) {
             entries.push(ListEntry {
                 source: project.source,
                 key: project.key.clone(),
-                name: project.name.clone(),
+                name: exportable_name(&project.name),
                 version_type: update.version_override,
             });
         }
@@ -266,7 +277,7 @@ pub fn export_list(flavor: &str, refresh: &Refresh, records: &SourceRecords) -> 
             let Some(first) = present.first() else {
                 continue;
             };
-            if *source == SourceKind::Curseforge && key.parse::<u32>().is_err() {
+            if !exportable_key(*source, key) {
                 continue;
             }
             seen.insert((*source, key.clone()));
@@ -274,14 +285,21 @@ pub fn export_list(flavor: &str, refresh: &Refresh, records: &SourceRecords) -> 
             entries.push(ListEntry {
                 source: *source,
                 key: key.clone(),
-                name: first
-                    .addon
-                    .toc
-                    .title
-                    .clone()
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or_else(|| first.addon.folder.clone()),
-                version_type: version_override_for(&refresh.updates, *source, key),
+                name: exportable_name(
+                    first
+                        .addon
+                        .toc
+                        .title
+                        .as_deref()
+                        .filter(|title| !title.is_empty())
+                        .unwrap_or(&first.addon.folder),
+                ),
+                // Il controllo non ha riconosciuto il progetto, quindi la sua versione forzata
+                // si legge dalle impostazioni (solo CurseForge ne ha).
+                version_type: (*source == SourceKind::Curseforge)
+                    .then(|| key.parse::<u32>().ok())
+                    .flatten()
+                    .and_then(|mod_id| overrides.get(&mod_id).copied()),
             });
         }
     }
@@ -302,26 +320,36 @@ pub fn export_list(flavor: &str, refresh: &Refresh, records: &SourceRecords) -> 
         text: encode(&list),
         exported: list.addons,
         skipped,
+        check_error: refresh.check_error.clone(),
     }
+}
+
+/// Una chiave che [`decode`] accetta per la fonte.
+fn exportable_key(source: SourceKind, key: &str) -> bool {
+    !key.trim().is_empty()
+        && key == key.trim()
+        && key.chars().count() <= MAX_KEY_CHARS
+        && !key.chars().any(char::is_control)
+        && (source != SourceKind::Curseforge || key.parse::<u32>().is_ok())
+}
+
+/// Il nome come [`decode`] lo rilegge: senza caratteri di controllo né spazi ai lati, entro
+/// [`MAX_NAME_CHARS`].
+fn exportable_name(name: &str) -> String {
+    let clean: String = name.chars().filter(|c| !c.is_control()).collect();
+    clean
+        .trim()
+        .chars()
+        .take(MAX_NAME_CHARS)
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
 }
 
 fn folder_named<'a>(addons: &'a [ListedAddon], folder: &str) -> Option<&'a ListedAddon> {
     addons
         .iter()
         .find(|listed| listed.addon.folder.eq_ignore_ascii_case(folder))
-}
-
-/// La versione forzata nota per un progetto, anche se il controllo non l'ha riconosciuto: oggi
-/// solo il controllo la riporta, quindi qui si guarda tra i suoi risultati.
-fn version_override_for(updates: &[AddonUpdate], source: SourceKind, key: &str) -> Option<u32> {
-    updates
-        .iter()
-        .filter(|u| {
-            u.project
-                .as_ref()
-                .is_some_and(|p| p.source == source && p.key == key)
-        })
-        .find_map(|u| u.version_override)
 }
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -386,7 +414,7 @@ mod tests {
     use crate::addons::scan::InstalledAddon;
     use crate::addons::toc::TocInfo;
     use crate::store::{ProjectRecords, SourceRecord};
-    use crate::updates::{Project, UpdateStatus};
+    use crate::updates::{AddonUpdate, Project, UpdateStatus};
 
     fn entry(source: SourceKind, key: &str, name: &str, version_type: Option<u32>) -> ListEntry {
         ListEntry {
@@ -634,7 +662,8 @@ mod tests {
                 ),
             ]),
         )]);
-        let export = export_list("retail", &refresh, &records);
+        let overrides = VersionOverrides::from([(777, crate::updates::RETAIL)]);
+        let export = export_list("retail", &refresh, &records, &overrides);
         assert_eq!(
             export.exported,
             [
@@ -645,12 +674,45 @@ mod tests {
                     Some(crate::updates::CLASSIC_ERA)
                 ),
                 entry(SourceKind::Tukui, "-2", "ElvUI", None),
-                entry(SourceKind::Curseforge, "777", "Recorded Addon", None),
+                entry(
+                    SourceKind::Curseforge,
+                    "777",
+                    "Recorded Addon",
+                    Some(crate::updates::RETAIL)
+                ),
             ]
         );
         assert_eq!(export.skipped, ["MyZipAddon"]);
+        assert_eq!(export.check_error, None);
         let decoded = decode(&export.text).unwrap();
         assert_eq!(decoded.list.addons, export.exported);
         assert_eq!(decoded.list.flavor, "retail");
+    }
+
+    #[test]
+    fn every_exported_entry_reads_back() {
+        let long_name = format!("  {}\u{7}  ", "N".repeat(250));
+        let long_key = "o/".repeat(40);
+        let refresh = Refresh {
+            addons: vec![listed("Long", None), listed("BadKey", None)],
+            updates: vec![
+                matched("Long", SourceKind::Tukui, "-3", &long_name, &[]),
+                matched("BadKey", SourceKind::Github, &long_key, "Repo", &[]),
+            ],
+            check_error: Some("network down".to_owned()),
+        };
+        let export = export_list(
+            "retail",
+            &refresh,
+            &SourceRecords::new(),
+            &VersionOverrides::new(),
+        );
+        assert_eq!(export.exported.len(), 1);
+        assert_eq!(export.exported[0].name.chars().count(), MAX_NAME_CHARS);
+        assert_eq!(export.skipped, ["BadKey"]);
+        assert_eq!(export.check_error.as_deref(), Some("network down"));
+        let decoded = decode(&export.text).unwrap();
+        assert!(decoded.invalid.is_empty());
+        assert_eq!(decoded.list.addons, export.exported);
     }
 }

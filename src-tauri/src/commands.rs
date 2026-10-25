@@ -345,6 +345,7 @@ pub async fn export_addons(
             &installation.flavor,
             &refresh,
             &records,
+            &overrides,
         ))
     })
     .await
