@@ -228,6 +228,75 @@ export type Refresh = {
   checkError: string | null;
 };
 
+/** Un progetto della stringa di import/export (issue #133). */
+export type ListEntry = {
+  source: SourceKind;
+  key: string;
+  name: string;
+  /** La versione del gioco forzata per il progetto (`gameVersionTypeId`). */
+  versionType?: number;
+};
+
+/** Il risultato di `export_addons`: la stringa, i progetti esportati e le cartelle rimaste fuori. */
+export type ExportResult = {
+  text: string;
+  exported: ListEntry[];
+  skipped: string[];
+  /** Il controllo non è riuscito: i progetti vengono solo dai record dell'app. */
+  checkError: string | null;
+};
+
+/** Una voce della stringa che non si è potuta leggere: posizione (da 1) e motivo. */
+export type InvalidEntry = { position: number; reason: string };
+
+export type PreviewState = "new" | "installed" | "notDownloadable";
+
+export type PreviewEntry = {
+  source: SourceKind;
+  key: string;
+  name: string;
+  state: PreviewState;
+  message?: string;
+  /** La pagina dell'addon, per quelli che non si possono scaricare. */
+  url?: string;
+};
+
+/** L'anteprima di `preview_import` (issue #134): non scrive niente. */
+export type ImportPreview = {
+  flavor: string;
+  entries: PreviewEntry[];
+  invalid: InvalidEntry[];
+  /** Le cartelle che "Replace all" toglierebbe ora. */
+  removals: string[];
+  checkError?: string;
+  lookupError?: string;
+};
+
+export type ImportMode = "keep" | "replace";
+
+export type ImportEntryStatus = "installed" | "alreadyInstalled" | "skipped" | "error";
+
+export type ImportEntryOutcome = {
+  source: SourceKind;
+  key: string;
+  name: string;
+  status: ImportEntryStatus;
+  message?: string;
+};
+
+/** Il risultato di `import_addons`. */
+export type ImportResult = {
+  entries: ImportEntryOutcome[];
+  invalid: InvalidEntry[];
+  removed: string[];
+  /** Cartelle comparse dopo l'anteprima: non confermate, restano. */
+  notConfirmed: string[];
+  removalErrors: { folder: string; message: string }[];
+  /** Perché "Replace all" non ha tolto niente. */
+  removalSkipped?: string;
+  lookupError?: string;
+};
+
 export const api = {
   appStatus: () => invoke<AppStatus>("app_status"),
   listInstallations: () => invoke<Installation[]>("list_installations"),
@@ -284,6 +353,17 @@ export const api = {
   setTheme: (theme: Theme) => invoke<AppSettings>("set_theme", { theme }),
   setBetaWhenNoRelease: (enabled: boolean) =>
     invoke<AppSettings>("set_beta_when_no_release", { enabled }),
+  exportAddons: (installationId: string) =>
+    invoke<ExportResult>("export_addons", { installationId }),
+  previewImport: (installationId: string, text: string) =>
+    invoke<ImportPreview>("preview_import", { installationId, text }),
+  /** `confirmedRemovals`: le cartelle che l'utente ha visto e confermato per "Replace all". */
+  importAddons: (
+    installationId: string,
+    text: string,
+    mode: ImportMode,
+    confirmedRemovals: string[] = [],
+  ) => invoke<ImportResult>("import_addons", { installationId, text, mode, confirmedRemovals }),
 };
 
 /** I comandi rifiutano con il messaggio del backend; qualunque altra cosa diventa testo. */

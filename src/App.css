@@ -242,6 +242,111 @@ button:focus-visible {
   margin-top: 4px;
 }
 
+/* Import / export (issue #135): due blocchi compatti, il colore solo per errore e conferma. */
+.import-export {
+  margin-top: 32px;
+}
+
+.import-export-block + .import-export-block {
+  margin-top: 20px;
+}
+
+.import-export-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.import-text {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  padding: 8px 10px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: inherit;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  resize: vertical;
+  word-break: break-all;
+}
+
+.import-text:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.import-preview,
+.import-progress,
+.import-result,
+.import-confirm {
+  margin-top: 12px;
+}
+
+.import-preview p,
+.import-result p,
+.import-confirm p {
+  margin: 0 0 8px;
+}
+
+.import-mode {
+  display: flex;
+  gap: 16px;
+  margin: 12px 0 4px;
+  padding: 0;
+  border: none;
+}
+
+.import-preview .hint {
+  margin-bottom: 12px;
+}
+
+.import-list {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  font-size: 0.85rem;
+}
+
+.import-list .hint {
+  display: inline;
+  margin-left: 8px;
+}
+
+.import-details summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.import-details ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 0.85rem;
+}
+
+.import-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.button.danger {
+  background: var(--danger);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* Installazioni trovate: cartella del gioco e provenienza accanto al nome, in tono neutro. */
 .discovered-meta {
   margin-left: 8px;

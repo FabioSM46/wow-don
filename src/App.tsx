@@ -10,6 +10,7 @@ import { Discovered } from "./installations/Discovered";
 import { Installations } from "./installations/Installations";
 import { Appearance } from "./options/Appearance";
 import { BetaOption } from "./options/BetaOption";
+import { ImportExport } from "./options/ImportExport";
 import { applyTheme } from "./options/theme";
 import { Search } from "./search/Search";
 import "./App.css";
@@ -328,6 +329,9 @@ function App() {
               setInstalledStale(true);
             }}
           />
+          {installations !== null && (
+            <ImportExport installation={active ?? null} onImported={() => setInstalledStale(true)} />
+          )}
         </div>
       </main>
 
