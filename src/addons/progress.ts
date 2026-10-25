@@ -56,14 +56,33 @@ export function progressLabel(event: InstallProgress | undefined, idle = "Waitin
   }
 }
 
-/** Aggiunge un evento alla mappa chiave → ultimo evento, se è dell'installazione indicata. */
+/**
+ * Vero se i due eventi si mostrano allo stesso modo: stessa fase, stesso nome e stessa
+ * percentuale. Un evento così non cambia la barra e non deve ridisegnare la lista.
+ */
+export function sameView(a: InstallProgress | undefined, b: InstallProgress): boolean {
+  return (
+    a !== undefined &&
+    progressKey(a) === progressKey(b) &&
+    a.phase === b.phase &&
+    a.name === b.name &&
+    progressPercent(a) === progressPercent(b)
+  );
+}
+
+/**
+ * Aggiunge un evento alla mappa chiave → ultimo evento, se è dell'installazione indicata. Un
+ * evento che non cambia niente di visibile restituisce la stessa mappa, così React non ridisegna.
+ */
 export function withProgress(
   previous: Map<string, InstallProgress>,
   event: InstallProgress,
   installationId: string,
 ): Map<string, InstallProgress> {
   if (event.installationId !== installationId) return previous;
-  return new Map(previous).set(progressKey(event), event);
+  const key = progressKey(event);
+  if (sameView(previous.get(key), event)) return previous;
+  return new Map(previous).set(key, event);
 }
 
 /**
@@ -108,6 +127,7 @@ export function withRunProgress(
       ? previous.current
       : null;
   if (current === null) return previous;
+  if (current === previous.current && sameView(previous.runs.get(current), event)) return previous;
   return { current, runs: new Map(previous.runs).set(current, event) };
 }
 

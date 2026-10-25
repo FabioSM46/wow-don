@@ -75,6 +75,29 @@ describe("withProgress", () => {
   });
 });
 
+describe("unchanged events", () => {
+  it("keep the same map when nothing visible changes", () => {
+    const first = withProgress(
+      new Map(),
+      event({ phase: "downloading", received: 420, total: 1000 }),
+      "a",
+    );
+    const same = withProgress(first, event({ phase: "downloading", received: 429, total: 1000 }), "a");
+    assert.equal(same, first);
+    const next = withProgress(first, event({ phase: "downloading", received: 430, total: 1000 }), "a");
+    assert.equal(next === first, false);
+    assert.equal(withProgress(next, event({ phase: "installing" }), "a") === next, false);
+  });
+
+  it("keep the same run state for a repeated dependency step", () => {
+    const running = new Set(["curseforge:1"]);
+    let state = withRunProgress(noRunProgress, event({ key: "1" }), "a", running);
+    state = withRunProgress(state, event({ key: "7", name: "Lib", phase: "extracting" }), "a", running);
+    const again = withRunProgress(state, event({ key: "7", name: "Lib", phase: "extracting" }), "a", running);
+    assert.equal(again, state);
+  });
+});
+
 describe("progressPosition", () => {
   it("counts the projects that left the initial check", () => {
     let map = new Map<string, InstallProgress>();

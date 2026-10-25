@@ -46,7 +46,10 @@ export function useInstallProgress(
   onProgress: (event: InstallProgress) => void,
 ) {
   const latest = useRef({ installationId, onProgress });
-  latest.current = { installationId, onProgress };
+  // Aggiornato dopo il commit, non durante il render: un render scartato non lo tocca.
+  useEffect(() => {
+    latest.current = { installationId, onProgress };
+  });
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
