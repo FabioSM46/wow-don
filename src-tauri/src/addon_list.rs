@@ -20,16 +20,12 @@ use crate::updates::{Refresh, VersionOverrides, is_known_version_type};
 pub const PREFIX: &str = "WOWDON1:";
 /// La versione del JSON dentro la stringa.
 const FORMAT_VERSION: u64 = 1;
-// La lettura della stringa la usa l'import (#134): finché non c'è, solo i test la chiamano.
-#[allow(dead_code)]
 /// La stringa più lunga accettata, in byte, dopo aver tolto gli spazi intorno.
 pub const MAX_TEXT_BYTES: usize = 64 * 1024;
-#[allow(dead_code)]
 /// Il numero massimo di voci di una stringa.
 pub const MAX_ENTRIES: usize = 1000;
 const MAX_KEY_CHARS: usize = 64;
 const MAX_NAME_CHARS: usize = 200;
-#[allow(dead_code)]
 const MAX_FLAVOR_CHARS: usize = 64;
 
 /// Un progetto della stringa.
@@ -53,7 +49,6 @@ pub struct AddonList {
     pub addons: Vec<ListEntry>,
 }
 
-#[allow(dead_code)]
 /// Una voce della stringa che non si è potuta leggere: la posizione (da 1) e il motivo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,7 +57,6 @@ pub struct InvalidEntry {
     pub reason: String,
 }
 
-#[allow(dead_code)]
 /// Il risultato di [`decode`]: le voci valide e quelle saltate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decoded {
@@ -77,7 +71,6 @@ pub fn encode(list: &AddonList) -> String {
     format!("{PREFIX}{}", base64url_encode(&json))
 }
 
-#[allow(dead_code)]
 /// Legge una stringa incollata. Rifiuta tutta la stringa se il prefisso, la versione, la base64
 /// o il JSON non vanno, o se supera i limiti; una voce non valida invece si salta e finisce in
 /// `invalid`. Una voce ripetuta (stessa fonte e chiave) vale una volta sola. Un `versionType`
@@ -157,7 +150,6 @@ pub fn decode(text: &str) -> Result<Decoded, String> {
     })
 }
 
-#[allow(dead_code)]
 /// `WOWDON<n>:` con `n` diverso da 1: una stringa di un formato futuro.
 fn is_newer_prefix(text: &str) -> bool {
     text.strip_prefix("WOWDON")
@@ -167,7 +159,6 @@ fn is_newer_prefix(text: &str) -> bool {
         })
 }
 
-#[allow(dead_code)]
 fn read_entry(entry: &Value) -> Result<ListEntry, String> {
     let object = entry
         .as_object()
@@ -372,7 +363,6 @@ fn base64url_encode(data: &[u8]) -> String {
     out
 }
 
-#[allow(dead_code)]
 /// L'inverso di [`base64url_encode`]. Accetta il padding `=` finale (alcuni strumenti lo
 /// aggiungono) e niente altro: un carattere fuori dall'alfabeto o una lunghezza impossibile
 /// danno `None`.
