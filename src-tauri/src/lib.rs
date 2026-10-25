@@ -64,6 +64,7 @@ pub fn run() {
             commands::add_installation,
             commands::remove_installation,
             commands::discover_installations,
+            commands::refresh_addons,
             commands::list_addons,
             commands::list_version_types,
             commands::set_version_override,

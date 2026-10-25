@@ -12,7 +12,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::addons::cache::FingerprintCache;
-use crate::addons::scan::{self, InstalledAddon};
+use crate::addons::scan::{self, InstalledAddon, ListedAddon};
 use crate::install;
 use crate::installations::Installation;
 use crate::progress::{Phase, ProgressSink, Reporter};
@@ -21,7 +21,7 @@ use crate::sources::curseforge::{
     RELEASE_TYPE_RELEASE, Transport,
 };
 use crate::sources::{ProjectKey, RecordWriter, Source, SourceKind, UpdateTarget};
-use crate::store::{ProjectRecords, SourceRecord, SourceRecords};
+use crate::store::{InstalledRecords, ProjectRecords, SourceRecord, SourceRecords};
 
 /// Tipi di versione del gioco di CurseForge (`gameVersionTypeId`), verificati il 2026-10-22 con
 /// il test `live_version_types` di `sources::curseforge` sull'API reale.
@@ -308,6 +308,52 @@ fn scan_and_check(
     records: &SourceRecords,
 ) -> Result<(Vec<InstalledAddon>, Vec<AddonUpdate>), String> {
     let addons = scan::scan_addons_with(&installation.path, &installation.flavor, cache)?;
+    let updates = check_scanned(installation, &addons, sources, records)?;
+    Ok((addons, updates))
+}
+
+/// La lista degli addon e i loro stati da una sola scansione (`refresh_addons`, issue #126).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Refresh {
+    /// Come `list_addons`.
+    pub addons: Vec<ListedAddon>,
+    /// Come `check_updates`; vuoto se il controllo è fallito.
+    pub updates: Vec<AddonUpdate>,
+    /// Perché il controllo è fallito per intero: la lista arriva comunque.
+    pub check_error: Option<String>,
+}
+
+/// Scansiona una volta l'installazione e ne ricava sia la lista per la tab Installed (con i
+/// progetti di `installed`) sia gli stati di aggiornamento (D33, con `records`). Un controllo
+/// fallito non toglie la lista: finisce in `check_error`. Solo una scansione fallita è `Err`.
+/// Bloccante.
+pub fn refresh_addons(
+    installation: &Installation,
+    cache: Option<&FingerprintCache>,
+    sources: &[&dyn Source],
+    records: &SourceRecords,
+    installed: &InstalledRecords,
+) -> Result<Refresh, String> {
+    let addons = scan::scan_addons_with(&installation.path, &installation.flavor, cache)?;
+    let (updates, check_error) = match check_scanned(installation, &addons, sources, records) {
+        Ok(updates) => (updates, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    Ok(Refresh {
+        addons: scan::with_installed_projects(addons, installed),
+        updates,
+        check_error,
+    })
+}
+
+/// Il controllo di `check_updates` su una scansione già fatta.
+fn check_scanned(
+    installation: &Installation,
+    addons: &[InstalledAddon],
+    sources: &[&dyn Source],
+    records: &SourceRecords,
+) -> Result<Vec<AddonUpdate>, String> {
     let no_records = ProjectRecords::new();
     // Cartella (in minuscolo) → la fonte del record che la nomina. Una cartella nei record di
     // più fonti non appartiene a nessuna.
@@ -393,7 +439,7 @@ fn scan_and_check(
                 .unwrap_or_else(|| unclaimed(addon, UpdateStatus::NotMatched))
         })
         .collect();
-    Ok((addons, updates))
+    Ok(updates)
 }
 
 /// La voce di una cartella che nessuna fonte ha reclamato.
@@ -2104,6 +2150,79 @@ mod tests {
             // Una cartella reclamata non si offre alla fonte successiva.
             assert_eq!(first.offered(), ["Alpha", "Beta", "Gamma"]);
             assert_eq!(second.offered(), ["Beta", "Gamma"]);
+        }
+
+        #[test]
+        fn a_refresh_gives_the_list_and_the_states_from_one_scan() {
+            let fx = fixture(&[("Alpha", "a"), ("Beta", "b")]);
+            let first = FakeSource::new(SourceKind::Curseforge, &["Alpha"]);
+            let installed = InstalledRecords::from([(
+                7,
+                crate::store::InstalledRecord {
+                    file_id: 1,
+                    folders: vec!["Alpha".to_owned()],
+                },
+            )]);
+            let refresh = refresh_addons(
+                &fx.installation,
+                None,
+                &[&first],
+                &SourceRecords::new(),
+                &installed,
+            )
+            .unwrap();
+            let folders: Vec<&str> = refresh
+                .addons
+                .iter()
+                .map(|a| a.addon.folder.as_str())
+                .collect();
+            assert_eq!(folders, ["Alpha", "Beta"]);
+            assert_eq!(
+                refresh.addons[0].installed_project.as_ref().map(|p| p.id),
+                Some(7)
+            );
+            assert_eq!(
+                sources_of(&refresh.updates),
+                [("Alpha", Some(SourceKind::Curseforge)), ("Beta", None)]
+            );
+            assert_eq!(refresh.check_error, None);
+            // Le cartelle sono state offerte una volta sola: una scansione, un controllo.
+            assert_eq!(first.offered(), ["Alpha", "Beta"]);
+        }
+
+        #[test]
+        fn a_failed_check_keeps_the_list_with_the_reason() {
+            let fx = fixture(&[("Alpha", "a")]);
+            let failing = FakeSource::failing(SourceKind::Curseforge, "network down");
+            let refresh = refresh_addons(
+                &fx.installation,
+                None,
+                &[&failing],
+                &SourceRecords::new(),
+                &InstalledRecords::new(),
+            )
+            .unwrap();
+            assert_eq!(refresh.addons.len(), 1);
+            assert!(refresh.updates.is_empty());
+            assert_eq!(refresh.check_error.as_deref(), Some("network down"));
+        }
+
+        #[test]
+        fn a_refresh_of_a_missing_installation_is_an_error() {
+            let fx = fixture(&[("Alpha", "a")]);
+            let mut gone = fx.installation.clone();
+            gone.path = fx.installation.path.join("missing");
+            let first = FakeSource::new(SourceKind::Curseforge, &[]);
+            assert!(
+                refresh_addons(
+                    &gone,
+                    None,
+                    &[&first],
+                    &SourceRecords::new(),
+                    &InstalledRecords::new()
+                )
+                .is_err()
+            );
         }
 
         #[test]
