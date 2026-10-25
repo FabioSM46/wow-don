@@ -286,10 +286,44 @@ fn read_addon_settings(file: &Path) -> Result<SettingsByInstallation, String> {
 // ── Addon installati dall'app ───────────────────────────────────────────────
 
 pub const INSTALLED_ADDONS_FILE: &str = "installed-addons.json";
-const INSTALLED_ADDONS_VERSION: u32 = 1;
+/// Versione 2: record per fonte e id testuale (issue #104). La versione 1 aveva solo progetti
+/// CurseForge con id numerico; si legge ancora e si riscrive come 2 alla prima modifica.
+const INSTALLED_ADDONS_VERSION: u32 = 2;
+const INSTALLED_ADDONS_VERSION_V1: u32 = 1;
+
+/// La fonte da cui l'app ha installato un progetto. Su disco è la chiave in minuscolo
+/// (`curseforge`, `github`, `wowinterface`, `tukui`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceKind {
+    Curseforge,
+    // Le fonti libere scriveranno i loro record con le issue #106, #107 e #108; per ora queste
+    // varianti si leggono solo da file.
+    Github,
+    Wowinterface,
+    Tukui,
+}
+
+/// Quello che l'app ha installato per un progetto di una fonte. `file` identifica il file
+/// installato nel modo della fonte: l'id del file per CurseForge, il tag per GitHub, la
+/// versione per WoWInterface e Tukui.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRecord {
+    pub file: String,
+    /// I nomi delle cartelle di primo livello dello zip, come li ha restituiti l'estrazione.
+    pub folders: Vec<String>,
+}
+
+/// Fonte → id del progetto nella fonte (`61284`, `owner/repo`, `-2`) → record.
+type SourceRecords = BTreeMap<SourceKind, BTreeMap<String, SourceRecord>>;
+
+/// Id dell'installazione → record per fonte.
+type RecordsByInstallation = BTreeMap<String, SourceRecords>;
 
 /// Quello che l'app ha installato per un progetto CurseForge: il file e le cartelle del suo
 /// zip. Serve a ritrovare le cartelle di un progetto senza indovinarle dai `.toc` (issue #62).
+/// È la vista CurseForge dei record v2, quella che usano oggi controllo e installazione.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledRecord {
@@ -301,13 +335,21 @@ pub struct InstalledRecord {
 /// Id del progetto CurseForge → il suo record.
 pub type InstalledRecords = BTreeMap<u32, InstalledRecord>;
 
-/// Id dell'installazione → record dei progetti.
-type RecordsByInstallation = BTreeMap<String, InstalledRecords>;
-
 #[derive(Debug, Serialize, Deserialize)]
 struct StoredInstalledAddons {
     version: u32,
     installations: RecordsByInstallation,
+}
+
+/// Il formato della versione 1, letto solo per la migrazione.
+#[derive(Debug, Deserialize)]
+struct StoredInstalledAddonsV1 {
+    installations: BTreeMap<String, InstalledRecords>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredVersion {
+    version: u32,
 }
 
 /// I progetti installati dall'app, con le stesse regole di [`InstallationStore`]: rilettura
@@ -335,28 +377,57 @@ impl InstalledAddonsStore {
         }
     }
 
-    /// I record di un'installazione; vuoto se l'app non vi ha ancora installato niente.
+    /// I record CurseForge di un'installazione; vuoto se l'app non vi ha ancora installato
+    /// niente. I record delle altre fonti restano nel file e non compaiono qui.
     pub fn records_for(&self, installation_id: &str) -> Result<InstalledRecords, String> {
         self.check_loaded()?;
-        Ok(self
+        let Some(projects) = self
             .records
             .get(installation_id)
-            .cloned()
-            .unwrap_or_default())
+            .and_then(|sources| sources.get(&SourceKind::Curseforge))
+        else {
+            return Ok(InstalledRecords::new());
+        };
+        projects
+            .iter()
+            .map(|(id, record)| curseforge_record(id, record))
+            .collect()
     }
 
-    /// Registra (o sostituisce) quello che l'app ha appena installato per `mod_id`.
+    /// Registra (o sostituisce) quello che l'app ha appena installato per il progetto
+    /// CurseForge `mod_id`.
     pub fn record(
         &mut self,
         installation_id: &str,
         mod_id: u32,
         record: InstalledRecord,
     ) -> Result<(), String> {
+        self.record_source(
+            installation_id,
+            SourceKind::Curseforge,
+            &mod_id.to_string(),
+            SourceRecord {
+                file: record.file_id.to_string(),
+                folders: record.folders,
+            },
+        )
+    }
+
+    /// Registra (o sostituisce) il record di un progetto di qualsiasi fonte.
+    fn record_source(
+        &mut self,
+        installation_id: &str,
+        source: SourceKind,
+        project_id: &str,
+        record: SourceRecord,
+    ) -> Result<(), String> {
         self.reload()?;
         let mut next = self.records.clone();
         next.entry(installation_id.to_owned())
             .or_default()
-            .insert(mod_id, record);
+            .entry(source)
+            .or_default()
+            .insert(project_id.to_owned(), record);
         self.save(next)
     }
 
@@ -400,6 +471,25 @@ impl InstalledAddonsStore {
     }
 }
 
+/// Un record v2 di CurseForge nella forma usata da controllo e installazione. Id del progetto
+/// e del file devono essere numerici: [`read_installed_addons`] lo verifica già alla lettura.
+fn curseforge_record(id: &str, record: &SourceRecord) -> Result<(u32, InstalledRecord), String> {
+    match (id.parse(), record.file.parse()) {
+        (Ok(mod_id), Ok(file_id)) => Ok((
+            mod_id,
+            InstalledRecord {
+                file_id,
+                folders: record.folders.clone(),
+            },
+        )),
+        _ => Err(damaged_installed_addons()),
+    }
+}
+
+fn damaged_installed_addons() -> String {
+    format!("{INSTALLED_ADDONS_FILE} is damaged: fix it or move it away and restart the app.")
+}
+
 fn read_installed_addons(file: &Path) -> Result<RecordsByInstallation, String> {
     let text = match read_text(file) {
         Ok(Some(text)) => text,
@@ -411,16 +501,61 @@ fn read_installed_addons(file: &Path) -> Result<RecordsByInstallation, String> {
             ));
         }
     };
-    let stored: StoredInstalledAddons = serde_json::from_str(&text).map_err(|_| {
-        format!("{INSTALLED_ADDONS_FILE} is damaged: fix it or move it away and restart the app.")
-    })?;
-    if stored.version != INSTALLED_ADDONS_VERSION {
-        return Err(format!(
-            "{INSTALLED_ADDONS_FILE} has an unsupported version ({}): update the app or move the file away, then restart.",
-            stored.version
-        ));
+    let version: StoredVersion =
+        serde_json::from_str(&text).map_err(|_| damaged_installed_addons())?;
+    let records = match version.version {
+        INSTALLED_ADDONS_VERSION => {
+            let stored: StoredInstalledAddons =
+                serde_json::from_str(&text).map_err(|_| damaged_installed_addons())?;
+            stored.installations
+        }
+        INSTALLED_ADDONS_VERSION_V1 => {
+            let stored: StoredInstalledAddonsV1 =
+                serde_json::from_str(&text).map_err(|_| damaged_installed_addons())?;
+            migrate_v1(stored)
+        }
+        other => {
+            return Err(format!(
+                "{INSTALLED_ADDONS_FILE} has an unsupported version ({other}): update the app or move the file away, then restart.",
+            ));
+        }
+    };
+    // Un record CurseForge con id non numerici renderebbe illeggibile la vista di
+    // `records_for`: meglio bloccare subito, come per un file danneggiato.
+    for sources in records.values() {
+        if let Some(projects) = sources.get(&SourceKind::Curseforge) {
+            for (id, record) in projects {
+                curseforge_record(id, record)?;
+            }
+        }
     }
-    Ok(stored.installations)
+    Ok(records)
+}
+
+/// Versione 1 → 2: ogni progetto era CurseForge, con id e file numerici.
+fn migrate_v1(stored: StoredInstalledAddonsV1) -> RecordsByInstallation {
+    stored
+        .installations
+        .into_iter()
+        .map(|(installation_id, projects)| {
+            let curseforge = projects
+                .into_iter()
+                .map(|(mod_id, record)| {
+                    (
+                        mod_id.to_string(),
+                        SourceRecord {
+                            file: record.file_id.to_string(),
+                            folders: record.folders,
+                        },
+                    )
+                })
+                .collect();
+            (
+                installation_id,
+                SourceRecords::from([(SourceKind::Curseforge, curseforge)]),
+            )
+        })
+        .collect()
 }
 
 // ── Impostazioni dell'app ───────────────────────────────────────────────────
@@ -949,10 +1084,10 @@ mod tests {
         assert!(!file.with_extension("json.tmp").exists());
 
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
-        assert_eq!(saved["version"], 1);
+        assert_eq!(saved["version"], 2);
         assert_eq!(
-            saved["installations"]["a"]["7"],
-            serde_json::json!({"fileId": 72, "folders": ["Details"]})
+            saved["installations"]["a"]["curseforge"]["7"],
+            serde_json::json!({"file": "72", "folders": ["Details"]})
         );
     }
 
@@ -999,9 +1134,108 @@ mod tests {
         assert!(store.remove_installation("a").is_err());
         assert_eq!(fs::read(&file).unwrap(), b"{ not json");
 
-        fs::write(&file, br#"{"version": 2, "installations": {}}"#).unwrap();
+        fs::write(&file, br#"{"version": 3, "installations": {}}"#).unwrap();
         let store = InstalledAddonsStore::load(file);
         assert!(store.records_for("a").unwrap_err().contains("unsupported"));
+    }
+
+    #[test]
+    fn a_version_1_file_is_migrated_on_the_first_change() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLED_ADDONS_FILE);
+        let v1 = br#"{"version": 1, "installations": {"a": {"61284": {"fileId": 5000, "folders": ["Details", "Details_Compare2"]}}, "b": {}}}"#;
+        fs::write(&file, v1).unwrap();
+
+        let mut store = InstalledAddonsStore::load(file.clone());
+        assert_eq!(
+            store.records_for("a").unwrap(),
+            InstalledRecords::from([(61284, record(5000, &["Details", "Details_Compare2"]))])
+        );
+        // Leggere non riscrive il file.
+        assert_eq!(fs::read(&file).unwrap(), v1);
+
+        store.record("b", 7, record(70, &["Alpha"])).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            serde_json::json!({
+                "version": 2,
+                "installations": {
+                    "a": {"curseforge": {"61284": {"file": "5000", "folders": ["Details", "Details_Compare2"]}}},
+                    "b": {"curseforge": {"7": {"file": "70", "folders": ["Alpha"]}}},
+                }
+            })
+        );
+        assert_eq!(
+            InstalledAddonsStore::load(file)
+                .records_for("a")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn records_of_other_sources_are_kept_but_not_listed() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLED_ADDONS_FILE);
+        let mut store = InstalledAddonsStore::load(file.clone());
+        store.record("a", 7, record(70, &["Alpha"])).unwrap();
+        for (source, id, version) in [
+            (SourceKind::Github, "owner/repo", "v1.2"),
+            (SourceKind::Wowinterface, "5108", "v5.0.15"),
+            (SourceKind::Tukui, "-2", "16.00"),
+        ] {
+            store
+                .record_source(
+                    "a",
+                    source,
+                    id,
+                    SourceRecord {
+                        file: version.to_owned(),
+                        folders: vec!["Other".to_owned()],
+                    },
+                )
+                .unwrap();
+        }
+        // Un record CurseForge scritto dopo non cancella quelli delle altre fonti.
+        store.record("a", 8, record(80, &["Beta"])).unwrap();
+
+        let reloaded = InstalledAddonsStore::load(file.clone());
+        assert_eq!(
+            reloaded.records_for("a").unwrap(),
+            InstalledRecords::from([(7, record(70, &["Alpha"])), (8, record(80, &["Beta"]))])
+        );
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        let a = &saved["installations"]["a"];
+        assert_eq!(a["github"]["owner/repo"]["file"], "v1.2");
+        assert_eq!(a["wowinterface"]["5108"]["file"], "v5.0.15");
+        assert_eq!(a["tukui"]["-2"]["file"], "16.00");
+    }
+
+    #[test]
+    fn unreadable_version_2_records_block_changes() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLED_ADDONS_FILE);
+        for body in [
+            // Fonte sconosciuta.
+            r#"{"version": 2, "installations": {"a": {"wago": {"x": {"file": "1", "folders": []}}}}}"#,
+            // Id CurseForge non numerico.
+            r#"{"version": 2, "installations": {"a": {"curseforge": {"abc": {"file": "1", "folders": []}}}}}"#,
+            // File CurseForge non numerico.
+            r#"{"version": 2, "installations": {"a": {"curseforge": {"7": {"file": "v1", "folders": []}}}}}"#,
+            // Versione illeggibile.
+            r#"{"installations": {}}"#,
+        ] {
+            fs::write(&file, body).unwrap();
+            let mut store = InstalledAddonsStore::load(file.clone());
+            assert!(
+                store.records_for("a").unwrap_err().contains("damaged"),
+                "{body}"
+            );
+            assert!(store.record("a", 7, record(70, &["Alpha"])).is_err());
+            assert_eq!(fs::read_to_string(&file).unwrap(), body);
+        }
     }
 
     // ── AppSettingsStore ────────────────────────────────────────────────────
