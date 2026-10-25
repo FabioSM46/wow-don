@@ -4,7 +4,8 @@
 //! Solo funzioni su percorsi: niente rete, niente Tauri. Il flusso è quello degli altri
 //! chiamanti di [`install`]: `WorkDir::staging` → `extract` → controllo dei `.toc` → `replace`.
 //! Non scrive record in `installed-addons.json`: l'addon si riconosce poi dal fingerprint, come
-//! uno installato a mano.
+//! uno installato a mano. Il comando `install_zip` toglie poi i record dei progetti di cui ha
+//! sostituito le cartelle (`InstalledAddonsStore::forget_folders`, issue #117).
 
 use std::collections::HashSet;
 use std::fs;
@@ -28,6 +29,10 @@ pub struct LocalInstall {
     /// Le cartelle che esistevano già con lo stesso nome (senza distinguere maiuscole e
     /// minuscole) e sono state sostituite, con il nome che avevano sul disco.
     pub replaced: Vec<String>,
+    /// Un avviso su un'installazione riuscita: per esempio i record dell'app che non si sono
+    /// potuti aggiornare.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 /// Installa in `addons_dir` lo zip in `zip_path`. Lo zip intero si rifiuta, senza toccare
@@ -50,6 +55,7 @@ pub fn install_zip(addons_dir: &Path, zip_path: &Path) -> Result<LocalInstall, S
     Ok(LocalInstall {
         installed: folders,
         replaced,
+        warning: None,
     })
 }
 
@@ -242,6 +248,7 @@ mod tests {
             LocalInstall {
                 installed: vec!["Details".to_string()],
                 replaced: vec![],
+                warning: None,
             }
         );
         assert_eq!(
