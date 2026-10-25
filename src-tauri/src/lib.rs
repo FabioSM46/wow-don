@@ -8,6 +8,7 @@ mod install;
 mod install_local;
 mod install_new;
 mod installations;
+mod progress;
 mod sources;
 mod store;
 #[cfg(test)]

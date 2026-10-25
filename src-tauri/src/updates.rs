@@ -14,6 +14,7 @@ use serde::Serialize;
 use crate::addons::scan::{self, InstalledAddon};
 use crate::install;
 use crate::installations::Installation;
+use crate::progress::{Phase, ProgressSink, Reporter};
 use crate::sources::curseforge::{
     CurseForgeClient, CurseForgeError, File, FileModule, FingerprintMatch, FingerprintMatches, Mod,
     RELEASE_TYPE_RELEASE, Transport,
@@ -444,6 +445,16 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
     }
 
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome {
+        // Senza chiave il controllo è fallito e il progetto non è tra quelli riconosciuti: il
+        // motivo vero è la chiave, non "non trovato".
+        if !self.client.has_key() {
+            return UpdateOutcome::error(
+                SourceKind::Curseforge,
+                target.key,
+                "",
+                CurseForgeError::MissingKey.to_string(),
+            );
+        }
         let Ok(mod_id) = target.key.parse::<u32>() else {
             return UpdateOutcome::skipped(
                 SourceKind::Curseforge,
@@ -544,7 +555,15 @@ pub fn update_addons(
     records: &SourceRecords,
     projects: &[ProjectKey],
     record: &mut RecordWriter<'_>,
+    progress: &ProgressSink<'_>,
 ) -> Result<Vec<UpdateOutcome>, String> {
+    // Il controllo vale per tutti i progetti richiesti: ognuno è in `checking` finché non tocca
+    // a lui. Un progetto saltato o fallito prima del download non riceve altre fasi: l'esito
+    // restituito resta la risposta definitiva, e chi ascolta l'evento chiude lì l'avanzamento.
+    let mut announced = HashSet::new();
+    for project in projects.iter().filter(|p| announced.insert(*p)) {
+        Reporter::new(progress, Some(project.source), &project.key, "").phase(Phase::Checking);
+    }
     let (addons, updates) = scan_and_check(installation, sources, records)?;
     let addons_dir = installation.path.join("Interface").join("AddOns");
     let mut seen = HashSet::new();
@@ -565,6 +584,7 @@ pub fn update_addons(
                 addons_dir: &addons_dir,
                 addons: &addons,
                 updates: &updates,
+                progress,
             };
             source.update(&target, record)
         })
@@ -621,7 +641,15 @@ fn update_project<T: Transport>(
         );
     }
     let old_modules = removable_modules(target.addons, target.updates, installed);
-    let folders = match install_file(client, &file, target.addons_dir, &old_modules, &|_| Ok(())) {
+    let reporter = Reporter::new(target.progress, Some(CF), key, name);
+    let folders = match install_file(
+        client,
+        &file,
+        target.addons_dir,
+        &old_modules,
+        &|_| Ok(()),
+        &reporter,
+    ) {
         Ok(folders) => folders,
         Err(message) => return UpdateOutcome::error(CF, key, name, message),
     };
@@ -700,9 +728,16 @@ pub(crate) fn install_file<T: Transport>(
     addons_dir: &Path,
     old_modules: &[String],
     check: &dyn Fn(&[String]) -> Result<(), String>,
+    reporter: &Reporter<'_>,
 ) -> Result<Vec<String>, String> {
-    let bytes = client.download(file).map_err(|e| e.to_string())?;
-    install_bytes(&bytes, addons_dir, old_modules, check)
+    reporter.download(0, None);
+    let bytes = client
+        .download_with_progress(file, &mut |received, total| {
+            reporter.download(received, total)
+        })
+        .map_err(|e| e.to_string())?;
+    reporter.downloaded(bytes.len() as u64);
+    install_bytes(&bytes, addons_dir, old_modules, check, reporter)
 }
 
 /// Estrae lo zip `bytes` in staging e sostituisce le cartelle, come [`install_file`] dopo il
@@ -712,10 +747,13 @@ pub(crate) fn install_bytes(
     addons_dir: &Path,
     old_modules: &[String],
     check: &dyn Fn(&[String]) -> Result<(), String>,
+    reporter: &Reporter<'_>,
 ) -> Result<Vec<String>, String> {
+    reporter.phase(Phase::Extracting);
     let staging = install::WorkDir::staging(addons_dir)?;
     let folders = install::extract(bytes, staging.path())?;
     check(&folders)?;
+    reporter.phase(Phase::Installing);
     let new: HashSet<String> = folders.iter().map(|f| f.to_lowercase()).collect();
     let obsolete: Vec<String> = old_modules
         .iter()
@@ -729,6 +767,7 @@ pub(crate) fn install_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress;
     use crate::store::InstalledRecord;
 
     /// `check_updates` con la sola fonte CurseForge e senza record, come prima di D12.
@@ -773,6 +812,7 @@ mod tests {
                     },
                 )
             },
+            &progress::ignore,
         )
     }
     use crate::addons::toc::TocInfo;
@@ -2149,6 +2189,127 @@ mod tests {
             );
         }
 
+        /// CurseForge senza chiave, come nell'app senza `CURSEFORGE_API_KEY` (#123).
+        fn keyless() -> CurseForgeClient<Routes> {
+            CurseForgeClient::new(Routes::default(), None)
+        }
+
+        fn missing_key() -> String {
+            CurseForgeError::MissingKey.to_string()
+        }
+
+        #[test]
+        fn without_a_key_the_free_sources_still_check() {
+            let fx = fixture(&[("Alpha", "a"), ("ElvUI", "e")]);
+            let client = keyless();
+            let overrides = no_overrides();
+            let curseforge = CurseForgeSource {
+                client: &client,
+                overrides: &overrides,
+            };
+            let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
+            let updates = check_updates(
+                &fx.installation,
+                &[&curseforge, &tukui],
+                &SourceRecords::new(),
+            )
+            .unwrap();
+            assert_eq!(updates[1].source, Some(SourceKind::Tukui));
+            assert_eq!(updates[1].status, UpdateStatus::UpToDate);
+            // La cartella che nessuna fonte libera riconosce dice perché.
+            assert_eq!(updates[0].source, None);
+            assert_eq!(
+                updates[0].status,
+                UpdateStatus::Error {
+                    message: format!("CurseForge check failed: {}", missing_key())
+                }
+            );
+        }
+
+        #[test]
+        fn without_a_key_free_projects_update_and_curseforge_ones_say_why() {
+            let fx = fixture(&[("Alpha", "a"), ("ElvUI", "e")]);
+            let client = keyless();
+            let overrides = no_overrides();
+            let curseforge = CurseForgeSource {
+                client: &client,
+                overrides: &overrides,
+            };
+            let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
+            let mut written = Vec::new();
+            let outcomes = update_addons(
+                &fx.installation,
+                &[&curseforge, &tukui],
+                &SourceRecords::new(),
+                &[
+                    ProjectKey {
+                        source: SourceKind::Curseforge,
+                        key: "1".to_owned(),
+                    },
+                    ProjectKey {
+                        source: SourceKind::Tukui,
+                        key: "ElvUI-key".to_owned(),
+                    },
+                ],
+                &mut |source, key, _| {
+                    written.push((source, key.to_owned()));
+                    Ok(())
+                },
+                &crate::progress::ignore,
+            )
+            .unwrap();
+            assert_eq!(written, [(SourceKind::Tukui, "ElvUI-key".to_owned())]);
+            assert_eq!(outcomes[0].status, OutcomeStatus::Error);
+            assert_eq!(outcomes[0].message, Some(missing_key()));
+            assert_eq!(outcomes[1].message.as_deref(), Some("fake"));
+        }
+
+        #[test]
+        fn without_a_key_a_folder_recorded_for_curseforge_stays_with_curseforge() {
+            // D33: il record dice da dove l'app ha installato la cartella, e vince anche
+            // quando quella fonte non può controllare. Darla a Tukui farebbe aggiornare da
+            // un'altra fonte un progetto installato da CurseForge.
+            let fx = fixture(&[("ElvUI", "e")]);
+            let client = keyless();
+            let overrides = no_overrides();
+            let curseforge = CurseForgeSource {
+                client: &client,
+                overrides: &overrides,
+            };
+            let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
+            let records = record_of(SourceKind::Curseforge, "1", &["ElvUI"]);
+            let updates =
+                check_updates(&fx.installation, &[&curseforge, &tukui], &records).unwrap();
+            assert!(tukui.offered().is_empty());
+            assert_eq!(updates[0].source, None);
+            assert_eq!(
+                updates[0].status,
+                UpdateStatus::Error {
+                    message: format!("CurseForge check failed: {}", missing_key())
+                }
+            );
+        }
+
+        #[test]
+        fn without_a_key_and_with_tukui_down_the_check_fails() {
+            let fx = fixture(&[("Alpha", "a")]);
+            let client = keyless();
+            let overrides = no_overrides();
+            let curseforge = CurseForgeSource {
+                client: &client,
+                overrides: &overrides,
+            };
+            let tukui = FakeSource::failing(SourceKind::Tukui, "network down");
+            assert_eq!(
+                check_updates(
+                    &fx.installation,
+                    &[&curseforge, &tukui],
+                    &SourceRecords::new()
+                ),
+                Err(missing_key())
+            );
+        }
+
         #[test]
         fn updates_go_to_the_project_source() {
             let fx = fixture(&[("Alpha", "a")]);
@@ -2176,6 +2337,7 @@ mod tests {
                     written.push((source, key.to_owned()));
                     Ok(())
                 },
+                &crate::progress::ignore,
             )
             .unwrap();
             // Il progetto ripetuto si aggiorna una volta; la fonte assente salta.

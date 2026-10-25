@@ -15,6 +15,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::install;
+use crate::progress::{Phase, ProgressSink, Reporter};
 use crate::sources::curseforge::MAX_DOWNLOAD_BYTES;
 
 /// Dimensione massima dello zip scelto dall'utente: la stessa di uno zip scaricato.
@@ -39,7 +40,16 @@ pub struct LocalInstall {
 /// `AddOns`, se non è un file `.zip`, supera [`MAX_ZIP_BYTES`], non supera i controlli di
 /// [`install::extract`] o ha una cartella di primo livello senza un `.toc` con il suo nome.
 /// Le cartelle con lo stesso nome già presenti si sostituiscono senza conferma (D32).
-pub fn install_zip(addons_dir: &Path, zip_path: &Path) -> Result<LocalInstall, String> {
+///
+/// `progress` riceve le fasi `extracting` e `installing`, senza fonte e senza progetto: uno zip
+/// scelto dall'utente non ne ha.
+pub fn install_zip(
+    addons_dir: &Path,
+    zip_path: &Path,
+    progress: &ProgressSink<'_>,
+) -> Result<LocalInstall, String> {
+    let reporter = Reporter::new(progress, None, "", "");
+    reporter.phase(Phase::Extracting);
     let bytes = read_zip(zip_path)?;
     let staging = install::WorkDir::staging(addons_dir)?;
     let folders = install::extract(&bytes, staging.path())?;
@@ -51,6 +61,7 @@ pub fn install_zip(addons_dir: &Path, zip_path: &Path) -> Result<LocalInstall, S
         }
     }
     let replaced = existing_folders(addons_dir, &folders)?;
+    reporter.phase(Phase::Installing);
     install::replace(addons_dir, staging.path(), &[])?;
     Ok(LocalInstall {
         installed: folders,
@@ -166,6 +177,7 @@ fn existing_folders(addons_dir: &Path, folders: &[String]) -> Result<Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress;
     use crate::test_support::TempDir;
     use std::io::{Cursor, Write};
     use std::path::PathBuf;
@@ -242,7 +254,17 @@ mod tests {
                 ("Details/core.lua", "-- code\n"),
             ],
         );
-        let result = install_zip(&fx.addons, &zip).unwrap();
+        let collected = progress::tests::Collected::default();
+        let result = install_zip(&fx.addons, &zip, &collected.sink()).unwrap();
+        // Uno zip scelto dall'utente non ha fonte né download.
+        assert_eq!(
+            collected.phases(),
+            [
+                (String::new(), progress::Phase::Extracting),
+                (String::new(), progress::Phase::Installing)
+            ]
+        );
+        assert!(collected.0.borrow().iter().all(|p| p.source.is_none()));
         assert_eq!(
             result,
             LocalInstall {
@@ -269,7 +291,7 @@ mod tests {
                 ("Pack_Config/pack_config.TOC", ""),
             ],
         );
-        let result = install_zip(&fx.addons, &zip).unwrap();
+        let result = install_zip(&fx.addons, &zip, &progress::ignore).unwrap();
         assert_eq!(result.installed, ["Pack", "Pack_Options", "Pack_Config"]);
         assert_eq!(listing(&fx.addons), ["Pack", "Pack_Config", "Pack_Options"]);
     }
@@ -284,7 +306,7 @@ mod tests {
             "Details.zip",
             &[("Details/Details.toc", ""), ("Details/new.lua", "new")],
         );
-        let result = install_zip(&fx.addons, &zip).unwrap();
+        let result = install_zip(&fx.addons, &zip, &progress::ignore).unwrap();
         assert_eq!(result.replaced, ["details"]);
         assert_eq!(listing(&fx.addons), ["Details", "Other"]);
         assert_eq!(
@@ -314,7 +336,7 @@ mod tests {
         ];
         for files in cases {
             let zip = fx.zip("bad.zip", files);
-            let error = install_zip(&fx.addons, &zip).unwrap_err();
+            let error = install_zip(&fx.addons, &zip, &progress::ignore).unwrap_err();
             assert!(error.contains("not a valid addon"), "{files:?}: {error}");
             assert_eq!(listing(&fx.addons), ["Good"], "{files:?}");
             assert!(listing(&fx.addons.join("Good")).is_empty(), "{files:?}");
@@ -326,7 +348,7 @@ mod tests {
     fn rejects_what_extract_rejects() {
         let fx = fixture();
         let zip = fx.zip("loose.zip", &[("readme.txt", "hi")]);
-        let error = install_zip(&fx.addons, &zip).unwrap_err();
+        let error = install_zip(&fx.addons, &zip, &progress::ignore).unwrap_err();
         assert!(error.contains("outside a folder"), "{error}");
         assert!(listing(&fx.addons).is_empty());
         assert_no_leftovers(&fx);
@@ -335,7 +357,7 @@ mod tests {
         // dei `.toc` non può passare a vuoto.
         let empty = fx.zip("empty.zip", &[]);
         assert_eq!(
-            install_zip(&fx.addons, &empty).unwrap_err(),
+            install_zip(&fx.addons, &empty, &progress::ignore).unwrap_err(),
             "The zip is empty."
         );
         assert!(listing(&fx.addons).is_empty());
@@ -348,14 +370,14 @@ mod tests {
         let rar = fx.downloads.join("Details.rar");
         fs::write(&rar, zip_of(&[("Details/Details.toc", "")])).unwrap();
         assert_eq!(
-            install_zip(&fx.addons, &rar).unwrap_err(),
+            install_zip(&fx.addons, &rar, &progress::ignore).unwrap_err(),
             "Only .zip files can be installed."
         );
 
         let fake = fx.downloads.join("fake.zip");
         fs::write(&fake, "not a zip").unwrap();
         assert!(
-            install_zip(&fx.addons, &fake)
+            install_zip(&fx.addons, &fake, &progress::ignore)
                 .unwrap_err()
                 .contains("not a valid zip")
         );
@@ -363,12 +385,17 @@ mod tests {
         let dir = fx.downloads.join("folder.zip");
         fs::create_dir_all(&dir).unwrap();
         assert_eq!(
-            install_zip(&fx.addons, &dir).unwrap_err(),
+            install_zip(&fx.addons, &dir, &progress::ignore).unwrap_err(),
             "The chosen item is not a file."
         );
 
         assert_eq!(
-            install_zip(&fx.addons, &fx.downloads.join("missing.zip")).unwrap_err(),
+            install_zip(
+                &fx.addons,
+                &fx.downloads.join("missing.zip"),
+                &progress::ignore
+            )
+            .unwrap_err(),
             "The zip file was not found."
         );
         assert!(listing(&fx.addons).is_empty());
@@ -382,7 +409,7 @@ mod tests {
         let file = fs::File::create(&big).unwrap();
         // Un file sparso: nessun byte scritto davvero.
         file.set_len(MAX_ZIP_BYTES + 1).unwrap();
-        let error = install_zip(&fx.addons, &big).unwrap_err();
+        let error = install_zip(&fx.addons, &big, &progress::ignore).unwrap_err();
         assert!(error.contains("larger than"), "{error}");
         assert!(listing(&fx.addons).is_empty());
     }

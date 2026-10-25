@@ -15,7 +15,7 @@ use std::fmt;
 use std::time::Duration;
 
 pub use super::http::{BytesResponse, HttpResponse, TransportError};
-use super::http::{read_limited, transport_error};
+use super::http::{DownloadProgress, transport_error};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +74,19 @@ pub trait Transport: Send + Sync {
     /// [`CurseForgeClient::download`]. Il trasporto reale applica la stessa regola solo ai
     /// redirect.
     fn get_bytes(&self, url: &str, max_len: u64) -> Result<BytesResponse, TransportError>;
+    /// Come [`get_bytes`](Self::get_bytes), riportando a `progress` i byte scaricati. Senza una
+    /// versione propria il trasporto riporta solo la fine.
+    fn get_bytes_with_progress(
+        &self,
+        url: &str,
+        max_len: u64,
+        progress: &mut DownloadProgress<'_>,
+    ) -> Result<BytesResponse, TransportError> {
+        let response = self.get_bytes(url, max_len)?;
+        let len = response.body.len() as u64;
+        progress(len, Some(len));
+        Ok(response)
+    }
 }
 
 /// Il trasporto reale: `reqwest` bloccante con TLS `rustls`. Va usato fuori dal thread
@@ -149,14 +162,16 @@ impl Transport for ReqwestTransport {
     }
 
     fn get_bytes(&self, url: &str, max_len: u64) -> Result<BytesResponse, TransportError> {
-        let mut response = self.downloads.get(url).send().map_err(transport_error)?;
-        let status = response.status().as_u16();
-        let declared = response.content_length();
-        if declared.is_some_and(|len| len > max_len) {
-            return Err(TransportError::TooLarge);
-        }
-        let body = read_limited(&mut response, max_len, declared)?;
-        Ok(BytesResponse { status, body })
+        self.get_bytes_with_progress(url, max_len, &mut |_, _| {})
+    }
+
+    fn get_bytes_with_progress(
+        &self,
+        url: &str,
+        max_len: u64,
+        progress: &mut DownloadProgress<'_>,
+    ) -> Result<BytesResponse, TransportError> {
+        super::http::download(self.downloads.get(url), max_len, progress)
     }
 }
 
@@ -584,6 +599,12 @@ impl<T: Transport> CurseForgeClient<T> {
         &self.transport
     }
 
+    /// Se il client ha una chiave: senza, ogni chiamata all'API dà
+    /// [`CurseForgeError::MissingKey`].
+    pub fn has_key(&self) -> bool {
+        self.key.is_some()
+    }
+
     fn key(&self) -> Result<&ApiKey, CurseForgeError> {
         self.key.as_ref().ok_or(CurseForgeError::MissingKey)
     }
@@ -682,6 +703,16 @@ impl<T: Transport> CurseForgeClient<T> {
     /// Senza `downloadUrl`, o con un indirizzo che non è `https` verso un host di CurseForge,
     /// fallisce senza nessuna richiesta. Gli errori non riportano l'indirizzo.
     pub fn download(&self, file: &File) -> Result<Vec<u8>, CurseForgeError> {
+        self.download_with_progress(file, &mut |_, _| {})
+    }
+
+    /// Come [`download`](Self::download), riportando a `progress` i byte ricevuti e quelli
+    /// dichiarati dal server (issue #127).
+    pub fn download_with_progress(
+        &self,
+        file: &File,
+        progress: &mut DownloadProgress<'_>,
+    ) -> Result<Vec<u8>, CurseForgeError> {
         let raw = file
             .download_url
             .as_deref()
@@ -692,7 +723,7 @@ impl<T: Transport> CurseForgeClient<T> {
             .ok_or(CurseForgeError::DownloadUrlRejected)?;
         let response = self
             .transport
-            .get_bytes(url.as_str(), MAX_DOWNLOAD_BYTES)
+            .get_bytes_with_progress(url.as_str(), MAX_DOWNLOAD_BYTES, progress)
             .map_err(|error| match error {
                 TransportError::TooLarge => CurseForgeError::DownloadTooLarge,
                 error => CurseForgeError::Network(error),
@@ -730,6 +761,7 @@ fn decode_body<D: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::http::read_limited;
     use std::io::Read;
     use std::sync::Mutex;
 
