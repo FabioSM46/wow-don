@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod discovery;
 mod install;
+mod install_local;
 mod install_new;
 mod installations;
 mod sources;
@@ -68,6 +69,7 @@ pub fn run() {
             commands::check_updates,
             commands::update_addons,
             commands::install_addon,
+            commands::install_zip,
             commands::search_catalog,
             commands::list_categories,
             commands::addon_detail,
