@@ -11,6 +11,7 @@ use crate::backup::{self, BackupInfo};
 use crate::catalog::{self, AddonDetail, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
 use crate::config::Config;
 use crate::discovery::{self, DiscoveredInstallation};
+use crate::install_local::{self, LocalInstall};
 use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
@@ -326,6 +327,28 @@ pub async fn install_addon(
                 locked_installed(&installed)?.record(&installation.id, mod_id, record)
             },
         ))
+    })
+    .await
+    .map_err(|error| format!("The installation was interrupted ({error})."))?
+}
+
+/// Installa nell'installazione lo zip che l'utente ha scaricato a mano e trascinato nella
+/// finestra o scelto con il selettore (D32). Il frontend passa solo il percorso: il file si legge
+/// qui. Tiene `InstallLock` come gli altri comandi che scrivono in `AddOns`; il disco si tocca
+/// fuori dal thread principale.
+#[tauri::command]
+pub async fn install_zip(
+    installation_id: String,
+    path: String,
+    app: AppHandle,
+    store: Store<'_>,
+) -> Result<LocalInstall, String> {
+    let installation = find_installation(&store, &installation_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = app.state::<InstallLock>();
+        let _held = lock.hold();
+        let addons_dir = installation.path.join("Interface").join("AddOns");
+        install_local::install_zip(&addons_dir, Path::new(&path))
     })
     .await
     .map_err(|error| format!("The installation was interrupted ({error})."))?
