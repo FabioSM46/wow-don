@@ -440,8 +440,12 @@ impl InstalledAddonsStore {
 
     /// Toglie i record (di qualsiasi fonte) dell'installazione che nominano almeno una delle
     /// cartelle `folders`, senza distinguere maiuscole e minuscole: servono quando uno zip
-    /// installato a mano sostituisce quelle cartelle (D32), così il record non descrive più un
-    /// file che non c'è. Restituisce quanti record ha tolto; senza record da togliere non scrive.
+    /// installato a mano scrive quelle cartelle (D32), così il record non descrive più un file
+    /// che non c'è. Si toglie il record intero, anche se solo una delle sue cartelle è cambiata:
+    /// un record dice "questo file è installato in queste cartelle", e dopo una sovrascrittura
+    /// parziale non è più vero per nessuna. Le cartelle rimaste si riconoscono di nuovo come
+    /// quelle installate a mano (per CurseForge dal fingerprint, che non usa i record).
+    /// Restituisce quanti record ha tolto; senza record da togliere non scrive.
     pub fn forget_folders(
         &mut self,
         installation_id: &str,

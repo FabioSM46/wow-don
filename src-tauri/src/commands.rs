@@ -350,13 +350,14 @@ pub async fn install_zip(
         let _held = lock.hold();
         let addons_dir = installation.path.join("Interface").join("AddOns");
         let mut result = install_local::install_zip(&addons_dir, Path::new(&path))?;
-        // Un record che nomina una cartella appena sostituita descriverebbe un file che non c'è
-        // più (D32, D33): si toglie. L'installazione è già fatta, quindi un errore qui diventa un
-        // avviso e non un fallimento.
-        if !result.replaced.is_empty() {
+        // Un record che nomina una cartella appena scritta descriverebbe un file che non c'è più
+        // (D32, D33): si toglie. Valgono tutte le cartelle dello zip, non solo quelle sostituite:
+        // un record può nominare una cartella cancellata a mano e ora ricreata dallo zip.
+        // L'installazione è già fatta, quindi un errore qui diventa un avviso e non un fallimento.
+        {
             let installed = app.state::<Mutex<InstalledAddonsStore>>();
             if let Err(error) = locked_installed(&installed)
-                .and_then(|mut store| store.forget_folders(&installation.id, &result.replaced))
+                .and_then(|mut store| store.forget_folders(&installation.id, &result.installed))
             {
                 result.warning = Some(format!(
                     "Installed, but the app could not update its records: {error}"
