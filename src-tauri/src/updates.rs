@@ -2234,6 +2234,32 @@ mod tests {
         }
 
         #[test]
+        fn without_a_key_a_folder_recorded_for_curseforge_stays_with_curseforge() {
+            // D33: il record dice da dove l'app ha installato la cartella, e vince anche
+            // quando quella fonte non può controllare. Darla a Tukui farebbe aggiornare da
+            // un'altra fonte un progetto installato da CurseForge.
+            let fx = fixture(&[("ElvUI", "e")]);
+            let client = keyless();
+            let overrides = no_overrides();
+            let curseforge = CurseForgeSource {
+                client: &client,
+                overrides: &overrides,
+            };
+            let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
+            let records = record_of(SourceKind::Curseforge, "1", &["ElvUI"]);
+            let updates =
+                check_updates(&fx.installation, &[&curseforge, &tukui], &records).unwrap();
+            assert!(tukui.offered().is_empty());
+            assert_eq!(updates[0].source, None);
+            assert_eq!(
+                updates[0].status,
+                UpdateStatus::Error {
+                    message: format!("CurseForge check failed: {}", missing_key())
+                }
+            );
+        }
+
+        #[test]
         fn without_a_key_and_with_tukui_down_the_check_fails() {
             let fx = fixture(&[("Alpha", "a")]);
             let client = keyless();
