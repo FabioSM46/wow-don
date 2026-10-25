@@ -10,6 +10,7 @@ import {
   categoryOptions,
   defaultSearch,
   firstPage,
+  hiddenOnlyMessage,
   formatAuthors,
   formatDate,
   formatDownloads,
@@ -152,6 +153,18 @@ describe("pages", () => {
     assert.equal(results.nextIndex, 100);
     assert.equal(results.hidden, 50);
     assert.equal(hasMore(results), true);
+  });
+
+  it("explains a list emptied by the filter, with or without more to load", () => {
+    const more = appendPage(firstPage(page(0, [], 500, 50)), page(50, [], 500, 50));
+    assert.equal(hasMore(more), true);
+    assert.equal((hiddenOnlyMessage(more) ?? "").includes("Load more"), true);
+    const done = firstPage(page(0, [], 3, 3));
+    assert.equal(hasMore(done), false);
+    assert.equal(hiddenOnlyMessage(done), "No add-on with a release for this game version.");
+    // Una lista vuota senza nascosti, o una lista con risultati, ha le sue frasi.
+    assert.equal(hiddenOnlyMessage(firstPage(page(0, [], 0))), null);
+    assert.equal(hiddenOnlyMessage(firstPage(page(0, [1], 10, 2))), null);
   });
 
   it("stops at the API result limit", () => {

@@ -34,6 +34,7 @@ import {
   firstPage,
   hasMore,
   normalizeQuery,
+  hiddenOnlyMessage,
   resultCount,
   withSort,
   type Results,
@@ -451,13 +452,7 @@ export function Search({ installation, active, keyConfigured, onInstalled }: Pro
             )}
             {results.addons.length === 0 ? (
               <p className="empty">
-                {results.hidden > 0 ? (
-                  hasMore(results) ? (
-                    "No add-on with a release for this game version among the first results. Load more to keep looking."
-                  ) : (
-                    "No add-on with a release for this game version."
-                  )
-                ) : filtered ? (
+                {hiddenOnlyMessage(results) ?? (filtered ? (
                   <>
                     No add-ons match this search. Try another name or{" "}
                     <button className="link inline" onClick={clearFilters}>
@@ -467,7 +462,7 @@ export function Search({ installation, active, keyConfigured, onInstalled }: Pro
                   </>
                 ) : (
                   "No add-ons for this game version. Try another version in the menu above."
-                )}
+                ))}
               </p>
             ) : (
               <CatalogTable

@@ -191,3 +191,15 @@ export function resultCount(results: Results): string {
   if (shown >= total) return `${formatCount(total)} ${total === 1 ? "result" : "results"}`;
   return `${formatCount(shown)} of ${formatCount(total)} results`;
 }
+
+/**
+ * La frase dello stato vuoto quando i risultati letti sono tutti nascosti perché senza un file
+ * Release (issue #140), oppure `null` se non è questo il motivo della lista vuota. "Load more"
+ * resta sotto la lista, anche vuota, finché `hasMore` lo permette.
+ */
+export function hiddenOnlyMessage(results: Results): string | null {
+  if (results.addons.length > 0 || results.hidden === 0) return null;
+  return hasMore(results)
+    ? "No add-on with a release for this game version among the first results. Load more to keep looking."
+    : "No add-on with a release for this game version.";
+}
