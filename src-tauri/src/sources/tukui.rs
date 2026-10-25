@@ -17,10 +17,11 @@ use std::sync::Mutex;
 use serde::Deserialize;
 
 use super::curseforge::{MAX_DOWNLOAD_BYTES, TransportError};
-use super::http::{PublicTransport, is_allowed_url};
+use super::http::{DownloadProgress, PublicTransport, is_allowed_url};
 use super::{RecordWriter, Source, SourceKind, UpdateTarget};
 use crate::addons::scan::InstalledAddon;
 use crate::installations::Installation;
+use crate::progress::Reporter;
 use crate::store::{ProjectRecords, SourceRecord};
 use crate::updates::{self, AddonUpdate, FileSummary, Project, UpdateOutcome, UpdateStatus};
 
@@ -102,7 +103,11 @@ impl<T: PublicTransport> TukuiSource<T> {
         }
     }
 
-    fn download(&self, addon: &TukuiAddon) -> Result<Vec<u8>, String> {
+    fn download(
+        &self,
+        addon: &TukuiAddon,
+        progress: &mut DownloadProgress<'_>,
+    ) -> Result<Vec<u8>, String> {
         let allowed =
             reqwest::Url::parse(&addon.url).is_ok_and(|url| is_allowed_url(&url, &DOMAINS));
         if !allowed {
@@ -110,7 +115,7 @@ impl<T: PublicTransport> TukuiSource<T> {
         }
         let response = self
             .transport
-            .get_bytes(&addon.url, MAX_DOWNLOAD_BYTES)
+            .get_bytes_with_progress(&addon.url, MAX_DOWNLOAD_BYTES, progress)
             .map_err(|error| match error {
                 TransportError::TooLarge => format!(
                     "The file to download exceeds the {} MiB limit: download cancelled.",
@@ -307,18 +312,28 @@ impl<T: PublicTransport> Source for TukuiSource<T> {
         let Some(addon) = addon else {
             return UpdateOutcome::skipped(TUKUI, key, name, "Tukui no longer lists this addon.");
         };
-        let bytes = match self.download(&addon) {
+        let reporter = Reporter::new(target.progress, Some(TUKUI), key, name);
+        reporter.download(0, None);
+        let bytes = match self.download(&addon, &mut |received, total| {
+            reporter.download(received, total)
+        }) {
             Ok(bytes) => bytes,
             Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
         };
         // Le cartelle del progetto sul disco: quelle che il nuovo zip non ha più si tolgono, come
         // per CurseForge, invece di restare come addon sconosciuti.
         let old_folders: Vec<String> = folders.iter().map(|u| u.folder.clone()).collect();
-        let installed =
-            match updates::install_bytes(&bytes, target.addons_dir, &old_folders, &|_| Ok(())) {
-                Ok(folders) => folders,
-                Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
-            };
+        reporter.downloaded(bytes.len() as u64);
+        let installed = match updates::install_bytes(
+            &bytes,
+            target.addons_dir,
+            &old_folders,
+            &|_| Ok(()),
+            &reporter,
+        ) {
+            Ok(folders) => folders,
+            Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
+        };
         // Le cartelle sono già sostituite: se il registro non si salva l'aggiornamento resta
         // riuscito, e il messaggio lo dice.
         let message = record(
@@ -354,6 +369,7 @@ fn summary(version: &str, date: Option<&str>) -> FileSummary {
 mod tests {
     use super::*;
     use crate::addons::toc::TocInfo;
+    use crate::progress;
     use crate::sources::curseforge::{BytesResponse, HttpResponse};
     use crate::store::SourceRecords;
     use crate::test_support::TempDir;
@@ -693,6 +709,7 @@ mod tests {
             calls: Arc::clone(&calls),
         });
         let mut written = Vec::new();
+        let collected = progress::tests::Collected::default();
         let outcomes = updates::update_addons(
             &installation,
             &[&tukui],
@@ -705,8 +722,23 @@ mod tests {
                 written.push((source, key.to_owned(), record));
                 Ok(())
             },
+            &collected.sink(),
         )
         .unwrap();
+        use progress::Phase::*;
+        let key = || "-2".to_owned();
+        assert_eq!(
+            collected.phases(),
+            [
+                (key(), Checking),
+                (key(), Downloading),
+                (key(), Extracting),
+                (key(), Installing)
+            ]
+        );
+        let (received, total) = collected.last_download("-2").unwrap();
+        assert!(received.is_some() && received == total);
+        assert!(collected.0.borrow()[1..].iter().all(|p| p.name == "ElvUI"));
         assert_eq!(outcomes.len(), 1);
         assert_eq!(
             outcomes[0].status,
@@ -749,7 +781,7 @@ mod tests {
             last_update: None,
             directories: vec!["ElvUI".to_owned()],
         };
-        let error = source("1").download(&addon).unwrap_err();
+        let error = source("1").download(&addon, &mut |_, _| {}).unwrap_err();
         assert!(error.contains("unrecognized download address"), "{error}");
     }
 
@@ -809,6 +841,7 @@ mod tests {
                 key: "-1".to_owned(),
             }],
             &mut |_, _, _| Ok(()),
+            &progress::ignore,
         )
         .unwrap();
         assert_eq!(
@@ -856,6 +889,7 @@ mod tests {
                 key: "-2".to_owned(),
             }],
             &mut |_, _, _| Ok(()),
+            &progress::ignore,
         )
         .unwrap();
         let mut names: Vec<String> = fs::read_dir(&addons)

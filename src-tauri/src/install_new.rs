@@ -24,6 +24,8 @@ use serde::Serialize;
 
 use crate::catalog;
 use crate::installations::Installation;
+use crate::progress::{Phase, ProgressSink, Reporter};
+use crate::sources::SourceKind;
 use crate::sources::curseforge::{
     CurseForgeClient, File, Mod, RELATION_REQUIRED_DEPENDENCY, RELEASE_TYPE_RELEASE, Transport,
 };
@@ -104,6 +106,7 @@ impl InstallOutcome {
 ///
 /// Restituisce l'esito del progetto scelto seguito da uno per ogni dipendenza visitata, mai
 /// `Err`: un errore su una dipendenza non tocca il progetto scelto né le altre dipendenze.
+#[allow(clippy::too_many_arguments)]
 pub fn install_addon<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
@@ -112,6 +115,7 @@ pub fn install_addon<T: Transport>(
     mod_id: u32,
     file_id: Option<u32>,
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
+    progress: &ProgressSink<'_>,
 ) -> Vec<InstallOutcome> {
     // Un'installazione aggiunge progetti e non ne toglie: la cartella di un altro progetto non
     // si sostituisce, quindi basta leggere il disco una volta e aggiungere quelli installati.
@@ -131,8 +135,11 @@ pub fn install_addon<T: Transport>(
         records: records.clone(),
         installed,
         record,
+        progress,
     };
 
+    let key = mod_id.to_string();
+    Reporter::new(progress, Some(SourceKind::Curseforge), &key, "").phase(Phase::Checking);
     let project = match client.get_mods(&[mod_id]) {
         Ok(mods) => mods.into_iter().find(|m| m.id == mod_id),
         Err(error) => return vec![InstallOutcome::error(mod_id, "", error.to_string())],
@@ -227,12 +234,22 @@ struct Installer<'a, T: Transport> {
     /// I progetti installati, aggiornato dopo ogni installazione riuscita.
     installed: HashSet<u32>,
     record: &'a mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
+    /// Dove riportare l'avanzamento di ogni progetto installato (issue #127).
+    progress: &'a ProgressSink<'a>,
 }
 
 impl<T: Transport> Installer<'_, T> {
     /// Installa un progetto letto da CurseForge e non ancora installato. Restituisce l'esito
     /// e, se è stato installato, le dipendenze obbligatorie del file.
     fn install(&mut self, project: &Mod, file_id: Option<u32>) -> (InstallOutcome, Vec<u32>) {
+        let key = project.id.to_string();
+        let reporter = Reporter::new(
+            self.progress,
+            Some(SourceKind::Curseforge),
+            &key,
+            &project.name,
+        );
+        reporter.phase(Phase::Checking);
         let file = match find_file(
             self.installation,
             self.client,
@@ -250,6 +267,7 @@ impl<T: Transport> Installer<'_, T> {
             &file,
             &project.name,
             self.record,
+            &reporter,
         );
         if result.0.status == InstallStatus::Installed {
             self.installed.insert(project.id);
@@ -345,13 +363,14 @@ fn install_checked<T: Transport>(
     file: &File,
     name: &str,
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
+    reporter: &Reporter<'_>,
 ) -> (InstallOutcome, Vec<u32>) {
     let mod_id = file.mod_id;
     let addons_dir = installation.path.join("Interface").join("AddOns");
     let flavor = installation.flavor.as_str();
     let check =
         |folders: &[String]| check_foreign_folders(&addons_dir, flavor, records, mod_id, folders);
-    let folders = match updates::install_file(client, file, &addons_dir, &[], &check) {
+    let folders = match updates::install_file(client, file, &addons_dir, &[], &check, reporter) {
         Ok(folders) => folders,
         Err(message) => return (InstallOutcome::error(mod_id, name, message), Vec::new()),
     };
@@ -461,6 +480,7 @@ mod tests {
     use zip::write::SimpleFileOptions;
 
     use super::*;
+    use crate::progress;
     use crate::sources::curseforge::{ApiKey, BytesResponse, HttpResponse, TransportError};
     use crate::test_support::TempDir;
     use crate::updates::{CLASSIC_ERA, RETAIL};
@@ -725,6 +745,7 @@ mod tests {
                 written.push((id, r));
                 Ok(())
             },
+            &progress::ignore,
         );
         (outcomes, written)
     }
@@ -767,6 +788,7 @@ mod tests {
             1,
             None,
             &mut |_, _| Ok(()),
+            &progress::ignore,
         )
         .remove(0);
         assert_eq!(outcome.status, InstallStatus::Installed, "{outcome:?}");
@@ -989,6 +1011,7 @@ mod tests {
             1,
             None,
             &mut |_, _| Err("disk full".to_owned()),
+            &progress::ignore,
         )
         .remove(0);
         assert_eq!(outcome.status, InstallStatus::Installed);
@@ -1251,6 +1274,7 @@ mod tests {
         let fx = fixture();
         let routes = graph(&[(1, &[(2, REQUIRED)]), (2, &[])]);
         let mut written = Vec::new();
+        let collected = progress::tests::Collected::default();
 
         // La versione forzata del progetto scelto vale per la dipendenza, non la sua.
         let outcomes = install_addon(
@@ -1264,6 +1288,7 @@ mod tests {
                 written.push((id, r.file_id));
                 Ok(())
             },
+            &collected.sink(),
         );
 
         assert_eq!(
@@ -1271,6 +1296,19 @@ mod tests {
             [(1, Installed, None), (2, Installed, Some(1))]
         );
         assert_eq!(written, [(1, 11), (2, 21)]);
+        // Ogni progetto, dipendenza compresa, riporta le sue fasi con il suo id.
+        use progress::Phase::*;
+        let steps = |key: &str| {
+            [Checking, Downloading, Extracting, Installing].map(|phase| (key.to_owned(), phase))
+        };
+        assert_eq!(collected.phases(), [steps("1"), steps("2")].concat());
+        assert!(
+            collected
+                .0
+                .borrow()
+                .iter()
+                .all(|p| p.source == Some(SourceKind::Curseforge))
+        );
     }
 
     #[test]
