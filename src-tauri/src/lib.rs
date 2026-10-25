@@ -1,3 +1,4 @@
+mod addon_list;
 mod addons;
 mod backup;
 mod catalog;
@@ -65,6 +66,7 @@ pub fn run() {
             commands::remove_installation,
             commands::discover_installations,
             commands::refresh_addons,
+            commands::export_addons,
             commands::list_addons,
             commands::list_version_types,
             commands::set_version_override,

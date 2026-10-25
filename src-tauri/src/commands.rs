@@ -6,6 +6,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::addon_list;
 use crate::addons::cache::FingerprintCache;
 use crate::addons::scan::{self, ListedAddon};
 use crate::backup::{self, BackupInfo};
@@ -22,7 +23,7 @@ use crate::sources::tukui::{self, TukuiSource};
 use crate::sources::{ProjectKey, SourceKind};
 use crate::store::{
     AddonSettingsStore, AppSettings, AppSettingsStore, InstallationStore, InstalledAddonsStore,
-    SourceRecords, Theme,
+    InstalledRecords, SourceRecords, Theme,
 };
 use crate::updates::{
     self, AddonUpdate, CurseForgeSource, UpdateOutcome, VersionOverrides, VersionType,
@@ -275,39 +276,104 @@ pub async fn refresh_addons(
         if force == Some(true) {
             cache.forget_all(&installation.path.join("Interface").join("AddOns"));
         }
-        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono. Se
-        // le connessioni non si preparano, la lista arriva lo stesso, con il motivo.
-        let prepared = ReqwestTransport::new()
-            .map_err(|e| e.to_string())
-            .and_then(|transport| Ok((transport, tukui_source()?)));
-        let (transport, tukui) = match prepared {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                let addons =
-                    scan::scan_addons_with(&installation.path, &installation.flavor, Some(&cache))?;
-                return Ok(updates::Refresh {
-                    addons: scan::with_installed_projects(addons, &listed_records),
-                    updates: Vec::new(),
-                    check_error: Some(error),
-                });
-            }
-        };
-        let client = CurseForgeClient::new(transport, key);
-        let curseforge = CurseForgeSource {
-            client: &client,
-            overrides: &overrides,
-            allow_beta,
-        };
-        updates::refresh_addons(
+        refresh_blocking(
             &installation,
-            Some(&cache),
-            &[&curseforge, &tukui],
+            &cache,
+            key,
+            &overrides,
+            allow_beta,
             &records,
             &listed_records,
         )
     })
     .await
     .map_err(|error| format!("Reading the addons was interrupted ({error})."))?
+}
+
+/// Il corpo di [`refresh_addons`], fuori dal runtime asincrono: lo usa anche l'export.
+fn refresh_blocking(
+    installation: &Installation,
+    cache: &FingerprintCache,
+    key: Option<String>,
+    overrides: &VersionOverrides,
+    allow_beta: bool,
+    records: &SourceRecords,
+    listed_records: &InstalledRecords,
+) -> Result<updates::Refresh, String> {
+    // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono. Se le
+    // connessioni non si preparano, la lista arriva lo stesso, con il motivo.
+    let prepared = ReqwestTransport::new()
+        .map_err(|e| e.to_string())
+        .and_then(|transport| Ok((transport, tukui_source()?)));
+    let (transport, tukui) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let addons =
+                scan::scan_addons_with(&installation.path, &installation.flavor, Some(cache))?;
+            return Ok(updates::Refresh {
+                addons: scan::with_installed_projects(addons, listed_records),
+                updates: Vec::new(),
+                check_error: Some(error),
+            });
+        }
+    };
+    let client = CurseForgeClient::new(transport, key);
+    let curseforge = CurseForgeSource {
+        client: &client,
+        overrides,
+        allow_beta,
+    };
+    updates::refresh_addons(
+        installation,
+        Some(cache),
+        &[&curseforge, &tukui],
+        records,
+        listed_records,
+    )
+}
+
+/// La stringa con gli addon dell'installazione (issue #133): i progetti riconosciuti dal
+/// controllo e quelli registrati dall'app, con la versione del gioco forzata. Le cartelle che
+/// nessun progetto copre (per esempio addon installati da zip) restano fuori, per nome. Senza
+/// chiave CurseForge esce almeno quello che le fonti libere e i record conoscono.
+#[tauri::command]
+pub async fn export_addons(
+    installation_id: String,
+    app: AppHandle,
+    store: Store<'_>,
+    settings: Settings<'_>,
+    installed: Installed<'_>,
+    config: State<'_, Config>,
+) -> Result<addon_list::Export, String> {
+    let key = config.curseforge_api_key.clone();
+    let installation = find_installation(&store, &installation_id)?;
+    let overrides = overrides_for(&settings, &installation.id)?;
+    let records = records_for_matching(&installed, &installation.id);
+    let listed_records = locked_installed(&installed)?
+        .records_for(&installation.id)
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = app.state::<FingerprintCache>();
+        // L'opzione della Beta cambia solo gli stati, non quali progetti si riconoscono.
+        let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
+        let refresh = refresh_blocking(
+            &installation,
+            &cache,
+            key,
+            &overrides,
+            allow_beta,
+            &records,
+            &listed_records,
+        )?;
+        Ok(addon_list::export_list(
+            &installation.flavor,
+            &refresh,
+            &records,
+            &overrides,
+        ))
+    })
+    .await
+    .map_err(|error| format!("The export was interrupted ({error})."))?
 }
 
 /// Riconosce gli addon con le fonti (D33) e indica quali hanno un aggiornamento. Scansione e rete
