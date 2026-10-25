@@ -91,7 +91,8 @@ function App() {
       const result = await api.installZip(target.id, picked.path);
       setZipMessage({
         text: describeZipInstall(result, fileName(picked.path), target.name),
-        error: false,
+        // Un avviso del backend (per esempio record non aggiornati) si mostra come errore.
+        error: Boolean(result.warning),
       });
       // Gli addon sul disco sono cambiati: la tab Installed si rilegge.
       setInstalledStale(true);

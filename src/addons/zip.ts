@@ -43,5 +43,6 @@ export function describeZipInstall(result: LocalInstall, zipName: string, target
   const what = count === 1 ? "1 folder" : `${count} folders`;
   let text = `Installed ${zipName} into ${target}: ${what} (${folderList(result.installed)}).`;
   if (result.replaced.length > 0) text += ` Replaced: ${folderList(result.replaced)}.`;
+  if (result.warning) text += ` ${result.warning}`;
   return text;
 }

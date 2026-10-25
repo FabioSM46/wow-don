@@ -63,4 +63,15 @@ describe("describeZipInstall", () => {
       "Installed Pack.zip into Classic: 2 folders (Pack, Pack_Options). Replaced: pack.",
     );
   });
+
+  it("appends the backend warning", () => {
+    assert.equal(
+      describeZipInstall(
+        { installed: ["A"], replaced: ["A"], warning: "Installed, but the app could not update its records: x" },
+        "A.zip",
+        "Retail",
+      ),
+      "Installed A.zip into Retail: 1 folder (A). Replaced: A. Installed, but the app could not update its records: x",
+    );
+  });
 });

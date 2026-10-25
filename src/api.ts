@@ -64,7 +64,12 @@ export type InstalledProject = { id: number; folders: string[] };
  * Esito di `install_zip` (D32): le cartelle dello zip ora in `AddOns` e quelle che esistevano
  * già con lo stesso nome e sono state sostituite, con il nome che avevano sul disco.
  */
-export type LocalInstall = { installed: string[]; replaced: string[] };
+export type LocalInstall = {
+  installed: string[];
+  replaced: string[];
+  /** Un avviso su un'installazione riuscita (per esempio record dell'app non aggiornati). */
+  warning?: string;
+};
 
 export type FileSummary = { id: number; name: string; date: string };
 
