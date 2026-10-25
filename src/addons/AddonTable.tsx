@@ -23,6 +23,14 @@ import {
   type SortKey,
 } from "./filter";
 import { SOURCE_LABELS, projectId, sourcesIn, updateRequest, type ProjectRef } from "./sources";
+import { ProgressBar, useInstallProgress } from "./ProgressBar";
+import {
+  progressLabel,
+  progressPercent,
+  progressPosition,
+  withProgress,
+  type InstallProgress,
+} from "./progress";
 
 type Props = {
   installation: Installation;
@@ -185,9 +193,16 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
     void rescan();
   }, [reload]);
 
-  // Progetti (`mod_id`) in aggiornamento: le loro righe mostrano "Updating…" e tutti i pulsanti
-  // di aggiornamento restano disabilitati finché la lista e gli stati non sono riletti.
+  // Progetti (`mod_id`) in aggiornamento: le loro righe mostrano la barra di avanzamento e tutti
+  // i pulsanti di aggiornamento restano disabilitati finché la lista e gli stati non sono riletti.
   const [updating, setUpdating] = useState<Set<string>>(new Set());
+  // L'ultimo avanzamento di ogni progetto in aggiornamento (issue #128), per `projectId`.
+  const [progress, setProgress] = useState<Map<string, InstallProgress>>(new Map());
+  useInstallProgress(installation.id, (event) => {
+    if (updateRuns.has(installation.id)) {
+      setProgress((previous) => withProgress(previous, event, installation.id));
+    }
+  });
   const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
   // `currentId` sopravvive allo smontaggio: serve un segnale a parte per non rileggere la lista
   // di un componente che non c'è più.
@@ -206,6 +221,7 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
     updateRuns.set(id, ids);
     updateResults.delete(id);
     setUpdating(ids);
+    setProgress(new Map());
     setUpdateResult(null);
     const request = updateRequest(projects);
     api
@@ -228,7 +244,11 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
       })
       .finally(() => {
         updateRuns.delete(id);
-        if (mounted.current && currentId.current === id) setUpdating(new Set());
+        // Non c'è una fase finale: la barra si chiude quando il comando restituisce gli esiti.
+        if (mounted.current && currentId.current === id) {
+          setUpdating(new Set());
+          setProgress(new Map());
+        }
       });
   }
 
@@ -288,6 +308,7 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
     setRescanning(false);
     setRescanError(null);
     setUpdating(updateRuns.get(installation.id) ?? new Set());
+    setProgress(new Map());
     setUpdateResult(updateResults.get(installation.id) ?? null);
     setLoad({ state: "loading" });
     setFilters(defaultFilters);
@@ -329,6 +350,7 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
     }
   }, [sources, filters.source]);
   const busy = updating.size > 0;
+  const position = progressPosition(progress, updating);
 
   function update(patch: Partial<Filters>) {
     setFilters((previous) => ({ ...previous, ...patch }));
@@ -367,7 +389,7 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
               disabled={zipBusy || busy}
               title="Install an addon zip downloaded from a website; you can also drop it into the window"
             >
-              {zipBusy ? "Installing…" : "Install from zip…"}
+              Install from zip…
             </button>
           )}
           <button
@@ -391,7 +413,11 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
               onClick={() => updateProjects(updatableIds)}
               disabled={busy || checking || versionSaving !== null}
             >
-              {busy ? "Updating…" : `Update all (${updatableIds.length})`}
+              {busy
+                ? position > 0
+                  ? `Updating ${position} of ${updating.size}`
+                  : "Updating…"
+                : `Update all (${updatableIds.length})`}
             </button>
           )}
         </div>
@@ -595,6 +621,9 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
                             updating={Boolean(
                               update?.project && updating.has(projectId(update.project)),
                             )}
+                            progress={
+                              update?.project ? progress.get(projectId(update.project)) : undefined
+                            }
                             disabled={busy || checking || versionSaving !== null}
                             onUpdate={updateProjects}
                           />
@@ -776,12 +805,24 @@ type UpdateCellProps = {
   checking: boolean;
   /** Il progetto di questa riga è nell'aggiornamento in corso. */
   updating: boolean;
+  /** L'ultimo avanzamento del progetto in aggiornamento, se è arrivato. */
+  progress?: InstallProgress;
   disabled: boolean;
   onUpdate: (projects: ProjectRef[]) => void;
 };
 
-function UpdateCell({ update, checking, updating, disabled, onUpdate }: UpdateCellProps) {
-  if (updating) return <td className="muted nowrap">Updating…</td>;
+function UpdateCell({ update, checking, updating, progress, disabled, onUpdate }: UpdateCellProps) {
+  if (updating) {
+    return (
+      <td className="nowrap">
+        <ProgressBar
+          value={progressPercent(progress)}
+          label={progressLabel(progress, "Updating…")}
+          name={update?.project?.name ?? "Addon"}
+        />
+      </td>
+    );
+  }
   if (!update) return <td className="muted">{checking ? "…" : ""}</td>;
   switch (update.status) {
     case "updateAvailable":

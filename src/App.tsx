@@ -3,6 +3,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage, type AppStatus, type Installation, type Theme } from "./api";
 import { AddonTable } from "./addons/AddonTable";
 import { ZipDrop } from "./addons/ZipDrop";
+import { ProgressBar, useInstallProgress } from "./addons/ProgressBar";
+import { progressLabel, type InstallProgress } from "./addons/progress";
 import { describeZipInstall, fileName, pickZip } from "./addons/zip";
 import { Discovered } from "./installations/Discovered";
 import { Installations } from "./installations/Installations";
@@ -38,6 +40,10 @@ function App() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
   // Installazione di uno zip trascinato o scelto (D32): una alla volta, con il suo esito.
   const [zipBusy, setZipBusy] = useState(false);
+  // La fase dell'installazione da zip (issue #128). Il ref è aggiornato subito: il primo evento
+  // può arrivare prima che `zipBusy` sia riletto.
+  const [zipProgress, setZipProgress] = useState<InstallProgress | undefined>(undefined);
+  const zipRunning = useRef(false);
   const [zipMessage, setZipMessage] = useState<{ text: string; error: boolean } | null>(null);
 
   useEffect(() => {
@@ -72,6 +78,10 @@ function App() {
   }, [tab, installedStale]);
 
   const active = installations?.find((installation) => installation.id === activeId) ?? null;
+  // Solo gli eventi di uno zip locale (senza fonte), mentre se ne installa uno.
+  useInstallProgress(active?.id ?? null, (event) => {
+    if (zipRunning.current && event.source === null) setZipProgress(event);
+  });
 
   async function installZip(paths: string[]) {
     if (zipBusy) {
@@ -86,6 +96,8 @@ function App() {
     if (active === null) return;
     const target = active;
     setZipBusy(true);
+    zipRunning.current = true;
+    setZipProgress(undefined);
     setZipMessage(null);
     try {
       const result = await api.installZip(target.id, picked.path);
@@ -103,6 +115,9 @@ function App() {
       });
     } finally {
       setZipBusy(false);
+      // Non c'è una fase finale: la barra si chiude quando il comando restituisce l'esito.
+      zipRunning.current = false;
+      setZipProgress(undefined);
     }
   }
 
@@ -207,7 +222,11 @@ function App() {
           </p>
         )}
         {installations === null && !error && <p className="muted">Loading…</p>}
-        {zipBusy && <p className="message muted">Installing the zip…</p>}
+        {zipBusy && (
+          <p className="message">
+            <ProgressBar value={null} label={progressLabel(zipProgress, "Starting…")} name="Zip" />
+          </p>
+        )}
         {zipMessage && (
           <p
             className={zipMessage.error ? "message error" : "message"}
