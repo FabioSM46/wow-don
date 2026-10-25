@@ -27,6 +27,10 @@ type Props = {
   installation: Installation;
   /** Cambia quando gli addon sono stati installati altrove nell'app: la lista si rilegge. */
   reload?: number;
+  /** Apre il selettore di uno zip da installare (D32); senza, il pulsante non compare. */
+  onInstallZip?: () => void;
+  /** Un'installazione da zip è in corso. */
+  zipBusy?: boolean;
 };
 
 /**
@@ -82,7 +86,7 @@ function formatModified(ms: number | null): string {
   return Number.isNaN(date.getTime()) ? "—" : dateFormat.format(date);
 }
 
-export function AddonTable({ installation, reload = 0 }: Props) {
+export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = false }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<Sort>(defaultSort);
@@ -347,6 +351,16 @@ export function AddonTable({ installation, reload = 0 }: Props) {
               {visible.length} of {groups.length} {groups.length === 1 ? "addon" : "addons"}
               {updateCount > 0 && ` · ${updateCount} to update`}
             </span>
+          )}
+          {onInstallZip && (
+            <button
+              className="button secondary"
+              onClick={onInstallZip}
+              disabled={zipBusy || busy}
+              title="Install an addon zip downloaded from a website; you can also drop it into the window"
+            >
+              {zipBusy ? "Installing…" : "Install from zip…"}
+            </button>
           )}
           <button
             className="button secondary"
@@ -696,7 +710,7 @@ function ProjectCell({
       {!project.allowModDistribution && (
         <span
           className="hint"
-          title="The author does not allow downloads from third-party apps: update it from the website."
+          title="The author does not allow downloads from third-party apps: download it from the website, then drop the zip into this window."
         >
           website only
         </span>
