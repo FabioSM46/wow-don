@@ -1,11 +1,13 @@
 //! Comandi Tauri invocabili dal frontend.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::addon_import;
 use crate::addon_list;
 use crate::addons::cache::FingerprintCache;
 use crate::addons::scan::{self, ListedAddon};
@@ -350,6 +352,386 @@ pub async fn export_addons(
     })
     .await
     .map_err(|error| format!("The export was interrupted ({error})."))?
+}
+
+/// L'anteprima dell'import di una stringa (issue #134): per ogni progetto se è nuovo, già
+/// installato o non scaricabile, le voci non valide e le cartelle che *Replace all* toglierebbe.
+/// Non scrive niente.
+#[tauri::command]
+pub async fn preview_import(
+    installation_id: String,
+    text: String,
+    app: AppHandle,
+    store: Store<'_>,
+    settings: Settings<'_>,
+    installed: Installed<'_>,
+    config: State<'_, Config>,
+) -> Result<addon_import::Preview, String> {
+    let decoded = addon_list::decode(&text)?;
+    let key = config.curseforge_api_key.clone();
+    let installation = find_installation(&store, &installation_id)?;
+    let overrides = overrides_for(&settings, &installation.id)?;
+    let records = records_for_matching(&installed, &installation.id);
+    let listed_records = locked_installed(&installed)?
+        .records_for(&installation.id)
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = app.state::<FingerprintCache>();
+        let refresh = refresh_blocking(
+            &installation,
+            &cache,
+            key.clone(),
+            &overrides,
+            &records,
+            &listed_records,
+        )?;
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        let has_key = key.is_some();
+        let client = CurseForgeClient::new(transport, key);
+        let tukui = tukui_source()?;
+        let (availability, lookup_error) =
+            import_availability(&decoded.list.addons, &client, has_key, &tukui);
+        Ok(addon_import::preview(
+            &decoded,
+            &refresh,
+            &records,
+            &|entry| availability_of(&availability, entry),
+            lookup_error,
+        ))
+    })
+    .await
+    .map_err(|error| format!("The preview was interrupted ({error})."))?
+}
+
+/// Importa una stringa di addon (issue #134): installa i progetti che mancano e, con `replace`,
+/// toglie da `Interface/AddOns` le cartelle che nessun progetto importato reclama, ma solo quelle
+/// in `confirmedRemovals` (l'elenco che l'utente ha visto nell'anteprima). Niente backup, per
+/// scelta dell'utente. Tiene [`InstallLock`] per tutto il lavoro.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn import_addons(
+    installation_id: String,
+    text: String,
+    mode: addon_import::ImportMode,
+    confirmed_removals: Option<Vec<String>>,
+    app: AppHandle,
+    store: Store<'_>,
+    settings: Settings<'_>,
+    config: State<'_, Config>,
+) -> Result<addon_import::ImportResult, String> {
+    let decoded = addon_list::decode(&text)?;
+    let key = config.curseforge_api_key.clone();
+    let installation = find_installation(&store, &installation_id)?;
+    // Le versioni forzate si rileggono dopo averle scritte: qui serve solo che si leggano.
+    overrides_for(&settings, &installation.id)?;
+    let confirmed = confirmed_removals.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = app.state::<InstallLock>();
+        let _held = lock.hold();
+        let cache = app.state::<FingerprintCache>();
+        let installed = app.state::<Mutex<InstalledAddonsStore>>();
+        let settings = app.state::<Mutex<AddonSettingsStore>>();
+        let addons_dir = installation.path.join("Interface").join("AddOns");
+        // Lo stato prima e dopo le installazioni, con le versioni forzate di quel momento.
+        let read_state = || -> Result<(updates::Refresh, SourceRecords), String> {
+            let overrides = settings
+                .lock()
+                .map_err(|_| "Addon settings are not available: restart the app.".to_owned())?
+                .overrides_for(&installation.id)?;
+            let (records, listed) = {
+                let store = locked_installed(&installed)?;
+                (
+                    store
+                        .source_records_for(&installation.id)
+                        .unwrap_or_default(),
+                    store.records_for(&installation.id).unwrap_or_default(),
+                )
+            };
+            let refresh = refresh_blocking(
+                &installation,
+                &cache,
+                key.clone(),
+                &overrides,
+                &records,
+                &listed,
+            )?;
+            Ok((refresh, records))
+        };
+        let (before, records) = read_state()?;
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        let has_key = key.is_some();
+        let client = CurseForgeClient::new(transport, key.clone());
+        let tukui = tukui_source()?;
+        let (availability, _) = import_availability(&decoded.list.addons, &client, has_key, &tukui);
+        let mut installer = CommandInstaller {
+            app: &app,
+            installation: &installation,
+            client: &client,
+            tukui: &tukui,
+            availability: &availability,
+        };
+        let result = addon_import::run_import(
+            &addons_dir,
+            &decoded,
+            mode,
+            &confirmed,
+            &before,
+            &records,
+            &mut installer,
+            &mut || read_state(),
+        );
+        if !result.removed.is_empty() {
+            cache.forget(&addons_dir, &result.removed);
+            // Le cartelle sono già tolte: un registro che non si aggiorna non annulla niente.
+            let _ = locked_installed(&installed)
+                .and_then(|mut store| store.forget_folders(&installation.id, &result.removed));
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|error| format!("The import was interrupted ({error})."))?
+}
+
+type Availabilities = HashMap<(SourceKind, String), addon_import::Availability>;
+
+/// Se i progetti della stringa si possono scaricare: per CurseForge da `allowModDistribution`
+/// (una sola richiesta per tutti), per Tukui dal suo elenco. Se una fonte non risponde, i suoi
+/// progetti valgono come scaricabili (l'installazione dirà il motivo) e il secondo valore
+/// riporta l'errore.
+fn import_availability(
+    entries: &[addon_list::ListEntry],
+    client: &CurseForgeClient<ReqwestTransport>,
+    has_key: bool,
+    tukui: &TukuiSource<PublicReqwestTransport>,
+) -> (Availabilities, Option<String>) {
+    use addon_import::Availability;
+    let mut availability = Availabilities::new();
+    let mut errors = Vec::new();
+    let not_downloadable = |message: &str, url: Option<String>| Availability::NotDownloadable {
+        message: message.to_owned(),
+        url,
+    };
+
+    let mod_ids: Vec<u32> = entries
+        .iter()
+        .filter(|e| e.source == SourceKind::Curseforge)
+        .filter_map(|e| e.key.parse().ok())
+        .collect();
+    if !mod_ids.is_empty() {
+        if !has_key {
+            for id in &mod_ids {
+                availability.insert(
+                    (SourceKind::Curseforge, id.to_string()),
+                    not_downloadable(&CurseForgeError::MissingKey.to_string(), None),
+                );
+            }
+        } else {
+            match client.get_mods(&mod_ids) {
+                Ok(mods) => {
+                    let by_id: HashMap<u32, _> = mods.into_iter().map(|m| (m.id, m)).collect();
+                    for id in &mod_ids {
+                        let state = match by_id.get(id) {
+                            Some(found) if found.allow_mod_distribution == Some(true) => {
+                                Availability::Available
+                            }
+                            Some(found) => not_downloadable(
+                                "The author does not allow downloads from third-party apps: install it from the CurseForge website.",
+                                found.links.website_url.clone(),
+                            ),
+                            None => not_downloadable("Addon not found on CurseForge.", None),
+                        };
+                        availability.insert((SourceKind::Curseforge, id.to_string()), state);
+                    }
+                }
+                Err(error) => errors.push(error.to_string()),
+            }
+        }
+    }
+
+    if entries.iter().any(|e| e.source == SourceKind::Tukui) {
+        match tukui.listed() {
+            Ok(listed) => {
+                for entry in entries.iter().filter(|e| e.source == SourceKind::Tukui) {
+                    let found = listed.iter().find(|a| a.id.to_string() == entry.key);
+                    let state = match found {
+                        Some(_) => Availability::Available,
+                        None => not_downloadable("Tukui does not list this addon.", None),
+                    };
+                    availability.insert((SourceKind::Tukui, entry.key.clone()), state);
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    for entry in entries
+        .iter()
+        .filter(|e| !matches!(e.source, SourceKind::Curseforge | SourceKind::Tukui))
+    {
+        availability.insert(
+            (entry.source, entry.key.clone()),
+            not_downloadable(
+                &format!("WoW-don cannot install from {} yet.", entry.source.label()),
+                None,
+            ),
+        );
+    }
+    let error = (!errors.is_empty()).then(|| errors.join(" "));
+    (availability, error)
+}
+
+fn availability_of(
+    availability: &Availabilities,
+    entry: &addon_list::ListEntry,
+) -> addon_import::Availability {
+    availability
+        .get(&(entry.source, entry.key.clone()))
+        .cloned()
+        .unwrap_or(addon_import::Availability::Available)
+}
+
+/// Installa i progetti di un import con le fonti vere.
+struct CommandInstaller<'a> {
+    app: &'a AppHandle,
+    installation: &'a Installation,
+    client: &'a CurseForgeClient<ReqwestTransport>,
+    tukui: &'a TukuiSource<PublicReqwestTransport>,
+    availability: &'a Availabilities,
+}
+
+impl addon_import::Installer for CommandInstaller<'_> {
+    fn install(&mut self, entry: &addon_list::ListEntry) -> addon_import::EntryOutcome {
+        use addon_import::{EntryOutcome, EntryStatus};
+        if let addon_import::Availability::NotDownloadable { message, .. } =
+            availability_of(self.availability, entry)
+        {
+            return EntryOutcome::new(entry, EntryStatus::Skipped, Some(message));
+        }
+        let installation = self.installation;
+        let addons_dir = installation.path.join("Interface").join("AddOns");
+        let installed = self.app.state::<Mutex<InstalledAddonsStore>>();
+        let cache = self.app.state::<FingerprintCache>();
+        let progress = emit_progress(self.app, &installation.id);
+        match entry.source {
+            SourceKind::Curseforge => {
+                let Ok(mod_id) = entry.key.parse::<u32>() else {
+                    return EntryOutcome::new(
+                        entry,
+                        EntryStatus::Error,
+                        Some("Invalid CurseForge project id.".to_owned()),
+                    );
+                };
+                let settings = self.app.state::<Mutex<AddonSettingsStore>>();
+                let mut note = None;
+                let overrides = match settings.lock() {
+                    Ok(mut store) => {
+                        if let Some(version_type) = entry.version_type
+                            && let Err(error) =
+                                store.set_override(&installation.id, mod_id, version_type)
+                        {
+                            note = Some(format!("The game version could not be kept: {error}"));
+                        }
+                        store.overrides_for(&installation.id).unwrap_or_default()
+                    }
+                    Err(_) => VersionOverrides::new(),
+                };
+                let records = match locked_installed(&installed)
+                    .and_then(|store| store.records_for(&installation.id))
+                {
+                    Ok(records) => records,
+                    Err(error) => return EntryOutcome::new(entry, EntryStatus::Error, Some(error)),
+                };
+                let outcomes = install_new::install_addon(
+                    installation,
+                    self.client,
+                    &overrides,
+                    &records,
+                    mod_id,
+                    None,
+                    &mut |mod_id, record| {
+                        cache.forget(&addons_dir, &record.folders);
+                        locked_installed(&installed)?.record(&installation.id, mod_id, record)
+                    },
+                    &progress,
+                );
+                import_outcome_from_install(entry, &outcomes, note)
+            }
+            SourceKind::Tukui => {
+                let outcome = self.tukui.install_new(
+                    installation,
+                    &entry.key,
+                    &mut |source, key, record| {
+                        cache.forget(&addons_dir, &record.folders);
+                        locked_installed(&installed)?.record_source(
+                            &installation.id,
+                            source,
+                            key,
+                            record,
+                        )
+                    },
+                    &progress,
+                );
+                let status = match outcome.status {
+                    updates::OutcomeStatus::Updated => EntryStatus::Installed,
+                    updates::OutcomeStatus::Skipped => EntryStatus::Skipped,
+                    updates::OutcomeStatus::Error => EntryStatus::Error,
+                };
+                EntryOutcome::new(entry, status, outcome.message)
+            }
+            _ => EntryOutcome::new(
+                entry,
+                EntryStatus::Skipped,
+                Some(format!(
+                    "WoW-don cannot install from {} yet.",
+                    entry.source.label()
+                )),
+            ),
+        }
+    }
+}
+
+/// L'esito di un progetto CurseForge importato dagli esiti di `install_addon`: il primo è il
+/// progetto, gli altri le sue dipendenze.
+fn import_outcome_from_install(
+    entry: &addon_list::ListEntry,
+    outcomes: &[InstallOutcome],
+    note: Option<String>,
+) -> addon_import::EntryOutcome {
+    use addon_import::{EntryOutcome, EntryStatus};
+    let Some(first) = outcomes.first() else {
+        return EntryOutcome::new(
+            entry,
+            EntryStatus::Error,
+            Some("Nothing happened.".to_owned()),
+        );
+    };
+    let status = match first.status {
+        install_new::InstallStatus::Installed => EntryStatus::Installed,
+        install_new::InstallStatus::Skipped => EntryStatus::Skipped,
+        install_new::InstallStatus::Error => EntryStatus::Error,
+    };
+    let dependencies = outcomes[1..]
+        .iter()
+        .filter(|o| o.status == install_new::InstallStatus::Installed)
+        .count();
+    let mut parts: Vec<String> = first.message.iter().cloned().collect();
+    if dependencies > 0 {
+        parts.push(format!(
+            "Also installed {dependencies} {}.",
+            if dependencies == 1 {
+                "dependency"
+            } else {
+                "dependencies"
+            }
+        ));
+    }
+    parts.extend(note);
+    let mut outcome =
+        EntryOutcome::new(entry, status, (!parts.is_empty()).then(|| parts.join(" ")));
+    if !first.name.is_empty() {
+        outcome.name = first.name.clone();
+    }
+    outcome
 }
 
 /// Riconosce gli addon con le fonti (D33) e indica quali hanno un aggiornamento. Scansione e rete

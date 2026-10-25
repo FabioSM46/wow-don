@@ -338,6 +338,35 @@ fn replace_with(
     Ok(())
 }
 
+/// Cancella la cartella `name` di `addons_dir` (l'import con "Replace all", issue #134). `name`
+/// deve essere un solo componente valido, con gli stessi controlli di [`replace`]: niente
+/// separatori, `..`, nomi vuoti o riservati. Un link simbolico si toglie senza seguirlo, quindi
+/// niente fuori da `AddOns` viene toccato; un file che non è una cartella resta dov'è.
+pub fn remove_folder(addons_dir: &Path, name: &str) -> Result<(), String> {
+    if entry_components(name).map(|parts| parts.len()) != Ok(1) || name.contains(['/', '\\']) {
+        return Err(format!("Invalid name for a folder to remove ({name})."));
+    }
+    let path = addons_dir.join(name);
+    let error = |error: io::Error| format!("Could not remove {name} ({}).", error.kind());
+    let meta = fs::symlink_metadata(&path).map_err(error)?;
+    if meta.file_type().is_symlink() {
+        // Su Windows un link a una cartella si toglie come cartella, altrove come file.
+        return fs::remove_file(&path)
+            .or_else(|_| fs::remove_dir(&path))
+            .map_err(error);
+    }
+    if !meta.is_dir() {
+        return Err(format!("{name} is not a folder: it was left in place."));
+    }
+    fs::remove_dir_all(&path).map_err(|e| {
+        if is_locked(&e) {
+            format!("Could not remove {name}: close the game and try again.")
+        } else {
+            error(e)
+        }
+    })
+}
+
 /// Nomi delle voci di una cartella (cartelle e file), in ordine alfabetico.
 fn folder_names(dir: &Path) -> Result<Vec<String>, String> {
     let read_error =
@@ -801,6 +830,36 @@ mod tests {
         let staging = WorkDir::staging(&addons).unwrap();
         let error = replace(&addons, staging.path(), &[]).unwrap_err();
         assert!(error.contains("nothing to install"), "{error}");
+    }
+
+    #[test]
+    fn remove_folder_deletes_only_a_valid_folder_inside_addons() {
+        let tmp = TempDir::new();
+        let addons = addons_dir(&tmp);
+        write(&addons.join("Foo").join("sub").join("a.lua"), "x");
+        write(&addons.join("loose.txt"), "x");
+        remove_folder(&addons, "Foo").unwrap();
+        assert!(!addons.join("Foo").exists());
+        for name in ["", ".", "..", "../Foo", "a/b", "a\\b", "C:"] {
+            assert!(remove_folder(&addons, name).is_err(), "{name:?}");
+        }
+        assert!(remove_folder(&addons, "loose.txt").is_err());
+        assert!(addons.join("loose.txt").exists());
+        assert!(remove_folder(&addons, "Missing").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_folder_drops_a_link_without_following_it() {
+        let tmp = TempDir::new();
+        let addons = addons_dir(&tmp);
+        let outside = tmp.path().join("outside");
+        write(&outside.join("keep.lua"), "x");
+        fs::create_dir_all(&addons).unwrap();
+        std::os::unix::fs::symlink(&outside, addons.join("Linked")).unwrap();
+        remove_folder(&addons, "Linked").unwrap();
+        assert!(!addons.join("Linked").exists());
+        assert!(outside.join("keep.lua").exists());
     }
 
     #[test]

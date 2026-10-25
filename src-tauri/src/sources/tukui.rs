@@ -12,6 +12,7 @@
 //! è diversa da `version`, senza contare una `v` iniziale.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Mutex;
 
 use serde::Deserialize;
@@ -20,8 +21,10 @@ use super::curseforge::{MAX_DOWNLOAD_BYTES, TransportError};
 use super::http::{DownloadProgress, PublicTransport, is_allowed_url};
 use super::{RecordWriter, Source, SourceKind, UpdateTarget};
 use crate::addons::scan::InstalledAddon;
+use crate::addons::toc;
+use crate::install;
 use crate::installations::Installation;
-use crate::progress::Reporter;
+use crate::progress::{Phase, ProgressSink, Reporter};
 use crate::store::{ProjectRecords, SourceRecord};
 use crate::updates::{self, AddonUpdate, FileSummary, Project, UpdateOutcome, UpdateStatus};
 
@@ -131,6 +134,114 @@ impl<T: PublicTransport> TukuiSource<T> {
         }
         Ok(response.body)
     }
+}
+
+impl<T: PublicTransport> TukuiSource<T> {
+    /// Gli addon che Tukui elenca: l'anteprima di un import li usa per sapere se un progetto si
+    /// può installare.
+    pub fn listed(&self) -> Result<Vec<TukuiAddon>, String> {
+        self.cached()
+    }
+
+    /// Installa un progetto Tukui che non c'è ancora (l'import, issue #134). Vale se `patch`
+    /// elenca il gioco dell'installazione oppure se un `.toc` dello zip lo dichiara, come per
+    /// il controllo (`patch` non elenca WoW Forever). L'esito usa la forma di un aggiornamento:
+    /// `updated` vuol dire installato.
+    pub fn install_new(
+        &self,
+        installation: &Installation,
+        key: &str,
+        record: &mut RecordWriter<'_>,
+        progress: &ProgressSink<'_>,
+    ) -> UpdateOutcome {
+        let addon = match self.cached() {
+            Ok(addons) => addons.into_iter().find(|a| a.id.to_string() == key),
+            Err(error) => return UpdateOutcome::error(TUKUI, key, "", error),
+        };
+        let Some(addon) = addon else {
+            return UpdateOutcome::skipped(TUKUI, key, "", "Tukui does not list this addon.");
+        };
+        let name = addon.name.as_str();
+        let reporter = Reporter::new(progress, Some(TUKUI), key, name);
+        reporter.download(0, None);
+        let bytes = match self.download(&addon, &mut |received, total| {
+            reporter.download(received, total)
+        }) {
+            Ok(bytes) => bytes,
+            Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
+        };
+        reporter.downloaded(bytes.len() as u64);
+        reporter.phase(Phase::Extracting);
+        let addons_dir = installation.path.join("Interface").join("AddOns");
+        let installed = (|| {
+            let staging = install::WorkDir::staging(&addons_dir)?;
+            let folders = install::extract(&bytes, staging.path())?;
+            let listed = addon
+                .patch
+                .iter()
+                .filter_map(|patch| patch_interface(patch))
+                .any(|interface| fits(&installation.flavor, interface));
+            if !listed && !declares_game(staging.path(), &folders, &installation.flavor) {
+                return Ok(None);
+            }
+            reporter.phase(Phase::Installing);
+            install::replace(&addons_dir, staging.path(), &[])?;
+            Ok::<_, String>(Some(folders))
+        })();
+        let folders = match installed {
+            Ok(Some(folders)) => folders,
+            Ok(None) => {
+                return UpdateOutcome::skipped(
+                    TUKUI,
+                    key,
+                    name,
+                    "Tukui does not offer this addon for this game version.",
+                );
+            }
+            Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
+        };
+        let message = record(
+            TUKUI,
+            key,
+            SourceRecord {
+                file: addon.version.clone(),
+                folders,
+            },
+        )
+        .err()
+        .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
+        UpdateOutcome::updated(
+            TUKUI,
+            key,
+            name,
+            summary(&addon.version, addon.last_update.as_deref()),
+            message,
+        )
+    }
+}
+
+/// Se un `.toc` delle cartelle estratte in `staging` dichiara un `## Interface` del gioco
+/// `flavor`.
+fn declares_game(staging: &Path, folders: &[String], flavor: &str) -> bool {
+    folders.iter().any(|folder| {
+        let dir = staging.join(folder);
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter_map(|entry| entry.file_name().into_string().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        toc::select_toc(folder, &names, flavor)
+            .and_then(|toc_file| std::fs::read(dir.join(toc_file)).ok())
+            .is_some_and(|bytes| {
+                toc::parse_toc(&String::from_utf8_lossy(&bytes))
+                    .interface
+                    .iter()
+                    .any(|&interface| fits(flavor, interface))
+            })
+    })
 }
 
 fn network_error(error: TransportError) -> String {
@@ -898,5 +1009,102 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["ElvUI", "ElvUI_Libraries", "Other"]);
+    }
+
+    // ── Installazione di un progetto nuovo (import, issue #134) ──
+
+    fn new_install(
+        flavor: &str,
+        toc: &str,
+        key: &str,
+    ) -> (TempDir, PathBuf, UpdateOutcome, Vec<String>) {
+        let tmp = TempDir::new();
+        let path = tmp.path().join("World of Warcraft").join(flavor);
+        let addons = path.join("Interface").join("AddOns");
+        fs::create_dir_all(&addons).unwrap();
+        let tukui = TukuiSource::new(Fake {
+            json: Some(Ok(HttpResponse {
+                status: 200,
+                body: body("16.00"),
+            })),
+            zip: Some(zip_of(&[
+                ("ElvUI/ElvUI.toc", toc),
+                ("ElvUI_Options/ElvUI_Options.toc", toc),
+            ])),
+            ..Fake::default()
+        });
+        let mut written = Vec::new();
+        let outcome = tukui.install_new(
+            &Installation {
+                id: "test".to_owned(),
+                path,
+                flavor: flavor.trim_matches('_').to_owned(),
+                name: "Test".to_owned(),
+            },
+            key,
+            &mut |source, key, record| {
+                assert_eq!(source, TUKUI);
+                written.push(format!(
+                    "{key}={}:{}",
+                    record.file,
+                    record.folders.join(",")
+                ));
+                Ok(())
+            },
+            &progress::ignore,
+        );
+        (tmp, addons, outcome, written)
+    }
+
+    #[test]
+    fn a_new_project_listed_for_the_game_is_installed_and_recorded() {
+        let (_tmp, addons, outcome, written) =
+            new_install("_retail_", "## Interface: 120100\n", "-2");
+        assert_eq!(
+            outcome.status,
+            updates::OutcomeStatus::Updated,
+            "{outcome:?}"
+        );
+        assert_eq!(outcome.name, "ElvUI");
+        assert!(addons.join("ElvUI").join("ElvUI.toc").is_file());
+        assert_eq!(written, ["-2=16.00:ElvUI,ElvUI_Options"]);
+    }
+
+    #[test]
+    fn a_new_project_counts_for_forever_when_its_toc_declares_it() {
+        // `patch` non elenca WoW Forever: decide il `.toc` dello zip.
+        let (_tmp, addons, outcome, _) =
+            new_install("_classic_beta_", "## Interface: 11508, 16001\n", "-2");
+        assert_eq!(
+            outcome.status,
+            updates::OutcomeStatus::Updated,
+            "{outcome:?}"
+        );
+        assert!(addons.join("ElvUI_Options").is_dir());
+    }
+
+    #[test]
+    fn a_new_project_for_another_game_is_skipped_and_writes_nothing() {
+        let (_tmp, addons, outcome, written) =
+            new_install("_classic_beta_", "## Interface: 120100\n", "-2");
+        assert_eq!(outcome.status, updates::OutcomeStatus::Skipped);
+        assert_eq!(
+            outcome.message.as_deref(),
+            Some("Tukui does not offer this addon for this game version.")
+        );
+        assert!(!addons.join("ElvUI").exists());
+        assert!(written.is_empty());
+        // Nemmeno la cartella di appoggio resta.
+        assert_eq!(fs::read_dir(addons.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn an_unlisted_project_is_skipped() {
+        let (_tmp, _addons, outcome, _) = new_install("_retail_", "## Interface: 120100\n", "-9");
+        assert_eq!(outcome.status, updates::OutcomeStatus::Skipped);
+        assert_eq!(
+            outcome.message.as_deref(),
+            Some("Tukui does not list this addon.")
+        );
     }
 }
