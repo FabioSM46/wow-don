@@ -33,6 +33,15 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2
 winreg = "0.56"
 
 
+# `tauri dev` usa questo profilo: senza ottimizzazioni la scansione degli addon (fingerprint di
+# centinaia di MB di file), l'estrazione degli zip e TLS sono un ordine di grandezza più lenti.
+# Il codice del progetto resta a `opt-level = 1` per non allungare troppo la compilazione.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
