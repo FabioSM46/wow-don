@@ -1,6 +1,7 @@
 // Ricerca, filtri e ordinamento degli addon: funzioni pure, senza React né I/O.
 
-import type { AddonUpdate, InstalledAddon } from "../api";
+import type { AddonUpdate, InstalledAddon, SourceKind } from "../api";
+import { projectId } from "./sources.ts";
 
 export type Filters = {
   query: string;
@@ -10,6 +11,8 @@ export type Filters = {
   onlyErrors: boolean;
   /** Solo gli addon con un aggiornamento disponibile (serve il risultato del controllo). */
   onlyUpdates: boolean;
+  /** Solo gli addon riconosciuti da questa fonte (serve il risultato del controllo); `null` = tutti. */
+  source: SourceKind | null;
 };
 
 export type SortKey = "title" | "author" | "modified";
@@ -21,6 +24,7 @@ export const defaultFilters: Filters = {
   hideLoadOnDemand: false,
   onlyErrors: false,
   onlyUpdates: false,
+  source: null,
 };
 
 export const defaultSort: Sort = { key: "title", direction: "asc" };
@@ -112,12 +116,17 @@ export function groupAddons(
 
   // Il progetto riconosciuto e le cartelle del suo file, per cartella: dal controllo, oppure
   // dal registro dell'app per le cartelle che il controllo non riconosce (o prima del controllo).
-  const recognised = new Map<string, { id: number; folders: Set<string>; checked: boolean }>();
+  // L'identità è la fonte più l'id nella fonte (`projectId`): due fonti non si uniscono mai.
+  const recognised = new Map<string, { id: string; folders: Set<string>; checked: boolean }>();
   for (const addon of addons) {
     const update = updates?.get(addon.folder);
+    // Il registro letto da `list_addons` (`installedProject`) è solo CurseForge.
     const project = update?.project
-      ? { id: update.project.id, folders: update.projectFolders ?? [] }
-      : addon.installedProject;
+      ? { id: projectId(update.project), folders: update.projectFolders ?? [] }
+      : addon.installedProject && {
+          id: projectId({ source: "curseforge", key: String(addon.installedProject.id) }),
+          folders: addon.installedProject.folders,
+        };
     if (!project) continue;
     recognised.set(addon.folder, {
       id: project.id,
@@ -146,7 +155,7 @@ export function groupAddons(
   // Archi per forza: 0 file pubblicato o registro, 1 `## Group`, 2 la principale richiede la
   // cartella che ne estende il nome, 3 la cartella richiede la principale di cui estende il nome.
   const edges: [number, InstalledAddon, InstalledAddon][] = [];
-  const firstOfProject = new Map<number, InstalledAddon>();
+  const firstOfProject = new Map<string, InstalledAddon>();
   for (const addon of addons) {
     const project = recognised.get(addon.folder);
     if (!project) continue;
@@ -253,12 +262,22 @@ export function authorsOf(addons: InstalledAddon[]): string[] {
   return [...authors].sort((a, b) => a.localeCompare(b, "it", { sensitivity: "base" }));
 }
 
+/**
+ * La fonte di un addon con la stessa regola di `groupAddons`: quella del progetto del controllo,
+ * altrimenti CurseForge se il registro dell'app (`installedProject`, solo CurseForge) lo conosce.
+ */
+export function sourceOf(addon: InstalledAddon, update?: AddonUpdate): SourceKind | null {
+  if (update?.project) return update.project.source;
+  return addon.installedProject ? "curseforge" : null;
+}
+
 export function matchesFilters(
   addon: InstalledAddon,
   filters: Filters,
   update?: AddonUpdate,
 ): boolean {
   if (filters.onlyUpdates && update?.status !== "updateAvailable") return false;
+  if (filters.source !== null && sourceOf(addon, update) !== filters.source) return false;
   if (filters.author !== null && addon.author !== filters.author) return false;
   if (filters.hideLoadOnDemand && addon.loadOnDemand) return false;
   if (filters.onlyErrors && addon.error === null) return false;

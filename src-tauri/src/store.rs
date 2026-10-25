@@ -13,7 +13,7 @@
 //! davvero simultanee da due istanze possono ancora perdersene una: non c'è un lock sul file,
 //! e l'app non impedisce di aprire due istanze.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -462,6 +462,45 @@ impl InstalledAddonsStore {
             .or_default()
             .insert(project_id.to_owned(), record);
         self.save(next)
+    }
+
+    /// Toglie i record (di qualsiasi fonte) dell'installazione che nominano almeno una delle
+    /// cartelle `folders`, senza distinguere maiuscole e minuscole: servono quando uno zip
+    /// installato a mano scrive quelle cartelle (D32), così il record non descrive più un file
+    /// che non c'è. Si toglie il record intero, anche se solo una delle sue cartelle è cambiata:
+    /// un record dice "questo file è installato in queste cartelle", e dopo una sovrascrittura
+    /// parziale non è più vero per nessuna. Le cartelle rimaste si riconoscono di nuovo come
+    /// quelle installate a mano (per CurseForge dal fingerprint, che non usa i record).
+    /// Restituisce quanti record ha tolto; senza record da togliere non scrive.
+    pub fn forget_folders(
+        &mut self,
+        installation_id: &str,
+        folders: &[String],
+    ) -> Result<usize, String> {
+        self.reload()?;
+        let replaced: HashSet<String> = folders.iter().map(|f| f.to_lowercase()).collect();
+        let mut next = self.records.clone();
+        let mut removed = 0;
+        if let Some(sources) = next.get_mut(installation_id) {
+            for projects in sources.values_mut() {
+                let before = projects.len();
+                projects.retain(|_, record| {
+                    !record
+                        .folders
+                        .iter()
+                        .any(|folder| replaced.contains(&folder.to_lowercase()))
+                });
+                removed += before - projects.len();
+            }
+            sources.retain(|_, projects| !projects.is_empty());
+            if sources.is_empty() {
+                next.remove(installation_id);
+            }
+        }
+        if removed > 0 {
+            self.save(next)?;
+        }
+        Ok(removed)
     }
 
     /// Toglie tutti i record di un'installazione rimossa.
@@ -1244,6 +1283,72 @@ mod tests {
         assert_eq!(a["github"]["owner/repo"]["file"], "v1.2");
         assert_eq!(a["wowinterface"]["5108"]["file"], "v5.0.15");
         assert_eq!(a["tukui"]["-2"]["file"], "16.00");
+    }
+
+    #[test]
+    fn forgetting_folders_drops_only_the_records_that_name_them() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLED_ADDONS_FILE);
+        let mut store = InstalledAddonsStore::load(file.clone());
+        store
+            .record("a", 7, record(70, &["Alpha", "Alpha_Options"]))
+            .unwrap();
+        store.record("a", 8, record(80, &["Beta"])).unwrap();
+        store
+            .record_source(
+                "a",
+                SourceKind::Tukui,
+                "-2",
+                SourceRecord {
+                    file: "16.00".to_owned(),
+                    folders: vec!["ElvUI".to_owned()],
+                },
+            )
+            .unwrap();
+        store.record("b", 7, record(70, &["Alpha"])).unwrap();
+
+        // Le maiuscole non contano; l'altra installazione resta com'è.
+        let removed = store
+            .forget_folders("a", &["alpha_options".to_owned(), "ELVUI".to_owned()])
+            .unwrap();
+        assert_eq!(removed, 2);
+        let reloaded = InstalledAddonsStore::load(file.clone());
+        assert_eq!(
+            reloaded.records_for("a").unwrap(),
+            InstalledRecords::from([(8, record(80, &["Beta"]))])
+        );
+        assert_eq!(
+            reloaded.records_for("b").unwrap(),
+            InstalledRecords::from([(7, record(70, &["Alpha"]))])
+        );
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert!(saved["installations"]["a"].get("tukui").is_none());
+
+        // Nessun record da togliere: il file non si riscrive.
+        let before = fs::read(&file).unwrap();
+        assert_eq!(store.forget_folders("a", &["Other".to_owned()]).unwrap(), 0);
+        assert_eq!(
+            store
+                .forget_folders("missing", &["Beta".to_owned()])
+                .unwrap(),
+            0
+        );
+        assert_eq!(fs::read(&file).unwrap(), before);
+    }
+
+    #[test]
+    fn forgetting_folders_in_a_damaged_file_fails_without_writing() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLED_ADDONS_FILE);
+        fs::write(&file, b"{ not json").unwrap();
+        let mut store = InstalledAddonsStore::load(file.clone());
+        assert!(
+            store
+                .forget_folders("a", &["Alpha".to_owned()])
+                .unwrap_err()
+                .contains("damaged")
+        );
+        assert_eq!(fs::read(&file).unwrap(), b"{ not json");
     }
 
     #[test]

@@ -60,6 +60,17 @@ export type InstalledAddon = {
  */
 export type InstalledProject = { id: number; folders: string[] };
 
+/**
+ * Esito di `install_zip` (D32): le cartelle dello zip ora in `AddOns` e quelle che esistevano
+ * già con lo stesso nome e sono state sostituite, con il nome che avevano sul disco.
+ */
+export type LocalInstall = {
+  installed: string[];
+  replaced: string[];
+  /** Un avviso su un'installazione riuscita (per esempio record dell'app non aggiornati). */
+  warning?: string;
+};
+
 export type FileSummary = { id: number; name: string; date: string };
 
 /** Le fonti degli addon (D12, D31); su disco e nei tipi del backend sono in minuscolo. */
@@ -210,8 +221,12 @@ export const api = {
     invoke<InstalledAddon[]>("list_addons", { installationId }),
   checkUpdates: (installationId: string) =>
     invoke<AddonUpdate[]>("check_updates", { installationId }),
-  updateAddons: (installationId: string, modIds: number[]) =>
-    invoke<UpdateOutcome[]>("update_addons", { installationId, modIds }),
+  /** `modIds` sono progetti CurseForge, `projects` quelli delle altre fonti. */
+  updateAddons: (
+    installationId: string,
+    modIds: number[],
+    projects: { source: SourceKind; key: string }[] = [],
+  ) => invoke<UpdateOutcome[]>("update_addons", { installationId, modIds, projects }),
   listVersionTypes: () => invoke<VersionType[]>("list_version_types"),
   setVersionOverride: (installationId: string, modId: number, versionType: number) =>
     invoke<void>("set_version_override", { installationId, modId, versionType }),
@@ -238,6 +253,9 @@ export const api = {
   /** `fileId` assente: l'ultimo Release per la versione del gioco del progetto. */
   installAddon: (installationId: string, modId: number, fileId?: number) =>
     invoke<InstallOutcome[]>("install_addon", { installationId, modId, fileId: fileId ?? null }),
+  /** `path` è il percorso dello zip trascinato o scelto: il file lo legge il backend. */
+  installZip: (installationId: string, path: string) =>
+    invoke<LocalInstall>("install_zip", { installationId, path }),
   listCategories: () => invoke<CatalogCategory[]>("list_categories"),
   getSettings: () => invoke<AppSettings>("get_settings"),
   /** Un valore sconosciuto è rifiutato dal backend. */

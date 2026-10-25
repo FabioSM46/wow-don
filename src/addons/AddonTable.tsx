@@ -22,11 +22,16 @@ import {
   type Sort,
   type SortKey,
 } from "./filter";
+import { SOURCE_LABELS, projectId, sourcesIn, updateRequest, type ProjectRef } from "./sources";
 
 type Props = {
   installation: Installation;
   /** Cambia quando gli addon sono stati installati altrove nell'app: la lista si rilegge. */
   reload?: number;
+  /** Apre il selettore di uno zip da installare (D32); senza, il pulsante non compare. */
+  onInstallZip?: () => void;
+  /** Un'installazione da zip è in corso. */
+  zipBusy?: boolean;
 };
 
 /**
@@ -44,7 +49,7 @@ const errorCache = new Map<string, string>();
  * tornando su un'installazione con un aggiornamento ancora in corso, le righe restano bloccate
  * e non parte un secondo aggiornamento dello stesso progetto.
  */
-const updateRuns = new Map<string, Set<number>>();
+const updateRuns = new Map<string, Set<string>>();
 /** L'esito dell'ultimo aggiornamento per installazione, mostrato sopra la tabella. */
 const updateResults = new Map<string, UpdateResult>();
 
@@ -82,7 +87,7 @@ function formatModified(ms: number | null): string {
   return Number.isNaN(date.getTime()) ? "—" : dateFormat.format(date);
 }
 
-export function AddonTable({ installation, reload = 0 }: Props) {
+export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = false }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<Sort>(defaultSort);
@@ -182,7 +187,7 @@ export function AddonTable({ installation, reload = 0 }: Props) {
 
   // Progetti (`mod_id`) in aggiornamento: le loro righe mostrano "Updating…" e tutti i pulsanti
   // di aggiornamento restano disabilitati finché la lista e gli stati non sono riletti.
-  const [updating, setUpdating] = useState<Set<number>>(new Set());
+  const [updating, setUpdating] = useState<Set<string>>(new Set());
   const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
   // `currentId` sopravvive allo smontaggio: serve un segnale a parte per non rileggere la lista
   // di un componente che non c'è più.
@@ -194,16 +199,17 @@ export function AddonTable({ installation, reload = 0 }: Props) {
     };
   }, []);
 
-  function updateProjects(modIds: number[]) {
+  function updateProjects(projects: ProjectRef[]) {
     const id = installation.id;
-    const ids = new Set(modIds);
+    const ids = new Set(projects.map(projectId));
     if (ids.size === 0 || updateRuns.has(id)) return;
     updateRuns.set(id, ids);
     updateResults.delete(id);
     setUpdating(ids);
     setUpdateResult(null);
+    const request = updateRequest(projects);
     api
-      .updateAddons(id, [...ids])
+      .updateAddons(id, request.modIds, request.projects)
       .then(
         (outcomes): UpdateResult => ({ outcomes }),
         (err): UpdateResult => ({ error: errorMessage(err) }),
@@ -306,16 +312,22 @@ export function AddonTable({ installation, reload = 0 }: Props) {
   const updateCount = groups.filter(
     (g) => groupUpdate(g, updates)?.status === "updateAvailable",
   ).length;
-  // "Update all" conta i progetti che l'app può aggiornare da sola: un `mod_id` per gruppo,
-  // senza ripetizioni, così il numero sul pulsante è quello degli id inviati.
-  const updatableIds = [
-    ...new Set(
-      groups.flatMap((g) => {
-        const update = groupUpdate(g, updates);
-        return update && isUpdatable(update) ? [update.project!.id] : [];
-      }),
-    ),
-  ];
+  // "Update all" conta i progetti che l'app può aggiornare da sola: uno per gruppo, senza
+  // ripetizioni (fonte più id), così il numero sul pulsante è quello dei progetti inviati.
+  const updatable = new Map<string, ProjectRef>();
+  for (const g of groups) {
+    const update = groupUpdate(g, updates);
+    if (update && isUpdatable(update)) updatable.set(projectId(update.project!), update.project!);
+  }
+  const updatableIds = [...updatable.values()];
+  const sources = useMemo(() => sourcesIn(updates), [updates]);
+  // Una fonte scelta che non compare più nel controllo (addon tolto, nuovo controllo) nasconderebbe
+  // tutto senza un menu per toglierla. Un controllo ancora vuoto non cancella la scelta.
+  useEffect(() => {
+    if (sources.length > 0 && filters.source !== null && !sources.includes(filters.source)) {
+      setFilters((previous) => ({ ...previous, source: null }));
+    }
+  }, [sources, filters.source]);
   const busy = updating.size > 0;
 
   function update(patch: Partial<Filters>) {
@@ -347,6 +359,16 @@ export function AddonTable({ installation, reload = 0 }: Props) {
               {visible.length} of {groups.length} {groups.length === 1 ? "addon" : "addons"}
               {updateCount > 0 && ` · ${updateCount} to update`}
             </span>
+          )}
+          {onInstallZip && (
+            <button
+              className="button secondary"
+              onClick={onInstallZip}
+              disabled={zipBusy || busy}
+              title="Install an addon zip downloaded from a website; you can also drop it into the window"
+            >
+              {zipBusy ? "Installing…" : "Install from zip…"}
+            </button>
           )}
           <button
             className="button secondary"
@@ -437,6 +459,23 @@ export function AddonTable({ installation, reload = 0 }: Props) {
               />
               Hide LoadOnDemand modules
             </label>
+            {sources.length > 1 && (
+              <select
+                className="select"
+                aria-label="Filter by source"
+                value={filters.source ?? ""}
+                onChange={(event) =>
+                  update({ source: (event.target.value || null) as Filters["source"] })
+                }
+              >
+                <option value="">All sources</option>
+                {sources.map((source) => (
+                  <option key={source} value={source}>
+                    {SOURCE_LABELS[source]}
+                  </option>
+                ))}
+              </select>
+            )}
             <label className="toggle">
               <input
                 type="checkbox"
@@ -457,7 +496,7 @@ export function AddonTable({ installation, reload = 0 }: Props) {
           </div>
 
           {visible.length === 0 ? (
-            <p className="empty">No addons match the search or filters.</p>
+            <p className="empty">No addons match the search or filters: clear them to see every addon.</p>
           ) : (
             <div className="table-wrap">
               <table className="addon-table">
@@ -536,12 +575,16 @@ export function AddonTable({ installation, reload = 0 }: Props) {
                             update={update}
                             versionTypes={versionTypes}
                             saving={
-                              versionSaving !== null && versionSaving.modId === update?.project?.id
+                              versionSaving !== null &&
+                              update?.project?.source === "curseforge" &&
+                              versionSaving.modId === update.project.id
                                 ? versionSaving
                                 : null
                             }
                             versionError={
-                              update?.project ? versionErrors.get(update.project.id) : undefined
+                              update?.project?.source === "curseforge"
+                                ? versionErrors.get(update.project.id)
+                                : undefined
                             }
                             locked={versionSaving !== null || busy || checking}
                             onVersionChange={changeVersion}
@@ -549,7 +592,9 @@ export function AddonTable({ installation, reload = 0 }: Props) {
                           <UpdateCell
                             update={update}
                             checking={checking}
-                            updating={Boolean(update?.project && updating.has(update.project.id))}
+                            updating={Boolean(
+                              update?.project && updating.has(projectId(update.project)),
+                            )}
                             disabled={busy || checking || versionSaving !== null}
                             onUpdate={updateProjects}
                           />
@@ -662,15 +707,21 @@ function ProjectCell({
             void openUrl(project.url!);
           }}
         >
-          {project.name || `#${project.id}`}
+          {project.name || `#${project.key}`}
         </button>
       ) : (
-        project.name || `#${project.id}`
+        project.name || `#${project.key}`
       )}
-      {versionTypes.length > 0 && (
+      {project.source !== "curseforge" && (
+        <span className="hint" title="The source that updates this addon">
+          {SOURCE_LABELS[project.source]}
+        </span>
+      )}
+      {/* Le versioni forzate sono per progetto CurseForge (`mod_id`, D6). */}
+      {versionTypes.length > 0 && project.source === "curseforge" && (
         <select
           className={`select compact version-select${saving || versionError ? " shown" : ""}`}
-          aria-label={`Game version for ${project.name || `#${project.id}`}`}
+          aria-label={`Game version for ${project.name || `#${project.key}`}`}
           value={selected ?? ""}
           aria-disabled={locked}
           // Il menu non apre e chiude la riga del gruppo.
@@ -696,7 +747,7 @@ function ProjectCell({
       {!project.allowModDistribution && (
         <span
           className="hint"
-          title="The author does not allow downloads from third-party apps: update it from the website."
+          title="The author does not allow downloads from third-party apps: download it from the website, then drop the zip into this window."
         >
           website only
         </span>
@@ -726,7 +777,7 @@ type UpdateCellProps = {
   /** Il progetto di questa riga è nell'aggiornamento in corso. */
   updating: boolean;
   disabled: boolean;
-  onUpdate: (modIds: number[]) => void;
+  onUpdate: (projects: ProjectRef[]) => void;
 };
 
 function UpdateCell({ update, checking, updating, disabled, onUpdate }: UpdateCellProps) {
@@ -744,7 +795,7 @@ function UpdateCell({ update, checking, updating, disabled, onUpdate }: UpdateCe
               onClick={(event) => {
                 // Il pulsante non apre e chiude la riga del gruppo.
                 event.stopPropagation();
-                onUpdate([update.project!.id]);
+                onUpdate([update.project!]);
               }}
             >
               Update
@@ -798,8 +849,11 @@ function UpdateSummary({ result }: { result: UpdateResult }) {
       {details.length > 0 && (
         <ul>
           {details.map((outcome) => (
-            <li key={outcome.modId} className={outcome.status === "error" ? "error" : "muted"}>
-              {outcome.name || `#${outcome.modId}`}
+            <li
+              key={projectId(outcome)}
+              className={outcome.status === "error" ? "error" : "muted"}
+            >
+              {outcome.name || `#${outcome.key}`}
               {outcome.message && `: ${outcome.message}`}
             </li>
           ))}

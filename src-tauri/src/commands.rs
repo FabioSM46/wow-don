@@ -377,8 +377,9 @@ pub async fn install_addon(
 
 /// Installa nell'installazione lo zip che l'utente ha scaricato a mano e trascinato nella
 /// finestra o scelto con il selettore (D32). Il frontend passa solo il percorso: il file si legge
-/// qui. Tiene `InstallLock` come gli altri comandi che scrivono in `AddOns`; il disco si tocca
-/// fuori dal thread principale.
+/// qui. Toglie i record dei progetti di cui ha sostituito le cartelle. Tiene `InstallLock` come
+/// gli altri comandi che scrivono in `AddOns`, sia per la sostituzione sia per i record; il disco
+/// si tocca fuori dal thread principale.
 #[tauri::command]
 pub async fn install_zip(
     installation_id: String,
@@ -391,7 +392,22 @@ pub async fn install_zip(
         let lock = app.state::<InstallLock>();
         let _held = lock.hold();
         let addons_dir = installation.path.join("Interface").join("AddOns");
-        install_local::install_zip(&addons_dir, Path::new(&path))
+        let mut result = install_local::install_zip(&addons_dir, Path::new(&path))?;
+        // Un record che nomina una cartella appena scritta descriverebbe un file che non c'è più
+        // (D32, D33): si toglie. Valgono tutte le cartelle dello zip, non solo quelle sostituite:
+        // un record può nominare una cartella cancellata a mano e ora ricreata dallo zip.
+        // L'installazione è già fatta, quindi un errore qui diventa un avviso e non un fallimento.
+        {
+            let installed = app.state::<Mutex<InstalledAddonsStore>>();
+            if let Err(error) = locked_installed(&installed)
+                .and_then(|mut store| store.forget_folders(&installation.id, &result.installed))
+            {
+                result.warning = Some(format!(
+                    "Installed, but the app could not update its records: {error}"
+                ));
+            }
+        }
+        Ok(result)
     })
     .await
     .map_err(|error| format!("The installation was interrupted ({error})."))?
