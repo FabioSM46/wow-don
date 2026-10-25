@@ -12,9 +12,10 @@
 #![allow(dead_code)]
 
 use std::fmt;
-use std::io::Read;
 use std::time::Duration;
 
+pub use super::http::{BytesResponse, HttpResponse, TransportError};
+use super::http::{read_limited, transport_error};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -55,27 +56,6 @@ impl fmt::Debug for ApiKey {
 }
 
 // ── Trasporto ───────────────────────────────────────────────────────────────
-
-pub struct HttpResponse {
-    pub status: u16,
-    pub body: String,
-}
-
-pub struct BytesResponse {
-    pub status: u16,
-    pub body: Vec<u8>,
-}
-
-/// Perché una richiesta non ha avuto risposta. Non contiene testo del trasporto, che
-/// potrebbe riportare dettagli della richiesta.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransportError {
-    Timeout,
-    Connect,
-    /// Il corpo supera il limite chiesto da [`Transport::get_bytes`].
-    TooLarge,
-    Other,
-}
 
 pub trait Transport: Send + Sync {
     /// Richiesta all'API, con la chiave.
@@ -142,52 +122,6 @@ impl ReqwestTransport {
     }
 }
 
-fn transport_error(error: reqwest::Error) -> TransportError {
-    if error.is_timeout() {
-        TransportError::Timeout
-    } else if error.is_connect() {
-        TransportError::Connect
-    } else {
-        TransportError::Other
-    }
-}
-
-/// Legge al massimo `max_len` byte: appena il corpo li supererebbe si ferma con
-/// [`TransportError::TooLarge`], senza aggiungere il blocco di troppo. Anche la capacità del
-/// buffer resta entro `max_len`: la crescita raddoppia come quella di `Vec`, ma senza superare
-/// il limite. `declared` è il `Content-Length` già confrontato con il limite, usato per
-/// allocare una volta sola.
-fn read_limited(
-    reader: &mut impl Read,
-    max_len: u64,
-    declared: Option<u64>,
-) -> Result<Vec<u8>, TransportError> {
-    let limit = usize::try_from(max_len).unwrap_or(usize::MAX);
-    let initial = declared.map_or(0, |len| usize::try_from(len).unwrap_or(limit).min(limit));
-    let mut body = Vec::with_capacity(initial);
-    let mut chunk = vec![0u8; 64 * 1024];
-    loop {
-        let read = match reader.read(&mut chunk) {
-            Ok(0) => return Ok(body),
-            Ok(read) => read,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-                return Err(TransportError::Timeout);
-            }
-            Err(_) => return Err(TransportError::Other),
-        };
-        if body.len() as u64 + read as u64 > max_len {
-            return Err(TransportError::TooLarge);
-        }
-        let needed = body.len() + read;
-        if needed > body.capacity() {
-            let target = body.capacity().saturating_mul(2).max(needed).min(limit);
-            body.reserve_exact(target - body.len());
-        }
-        body.extend_from_slice(&chunk[..read]);
-    }
-}
-
 impl Transport for ReqwestTransport {
     fn get(&self, url: &str, api_key: &ApiKey) -> Result<HttpResponse, TransportError> {
         self.send(
@@ -229,19 +163,7 @@ impl Transport for ReqwestTransport {
 /// Un URL da cui si può scaricare: `https`, senza credenziali né porta esplicita, verso un
 /// dominio di [`DOWNLOAD_DOMAINS`] o un suo sottodominio.
 fn is_download_url(url: &reqwest::Url) -> bool {
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    url.scheme() == "https"
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.port().is_none()
-        && DOWNLOAD_DOMAINS.iter().any(|domain| {
-            host == *domain
-                || host
-                    .strip_suffix(domain)
-                    .is_some_and(|rest| rest.ends_with('.'))
-        })
+    super::http::is_allowed_url(url, &DOWNLOAD_DOMAINS)
 }
 
 // ── Errori ──────────────────────────────────────────────────────────────────
@@ -808,6 +730,7 @@ fn decode_body<D: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::sync::Mutex;
 
     const KEY: &str = "test-key-7f3a9c";

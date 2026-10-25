@@ -15,6 +15,8 @@ use crate::install_local::{self, LocalInstall};
 use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
+use crate::sources::http::PublicReqwestTransport;
+use crate::sources::tukui::{self, TukuiSource};
 use crate::sources::{ProjectKey, SourceKind};
 use crate::store::{
     AddonSettingsStore, AppSettings, AppSettingsStore, InstallationStore, InstalledAddonsStore,
@@ -242,7 +244,8 @@ pub async fn check_updates(
             client: &client,
             overrides: &overrides,
         };
-        updates::check_updates(&installation, &[&curseforge], &records)
+        let tukui = tukui_source()?;
+        updates::check_updates(&installation, &[&curseforge, &tukui], &records)
     })
     .await
     .map_err(|error| format!("The update check was interrupted ({error})."))?
@@ -290,10 +293,11 @@ pub async fn update_addons(
             client: &client,
             overrides: &overrides,
         };
+        let tukui = tukui_source()?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         updates::update_addons(
             &installation,
-            &[&curseforge],
+            &[&curseforge, &tukui],
             &records,
             &projects,
             &mut |source, key, record| {
@@ -303,6 +307,14 @@ pub async fn update_addons(
     })
     .await
     .map_err(|error| format!("The update was interrupted ({error})."))?
+}
+
+/// La fonte Tukui (D31), senza chiave. Va creata fuori dal runtime asincrono, come il client
+/// di CurseForge.
+fn tukui_source() -> Result<TukuiSource<PublicReqwestTransport>, String> {
+    let transport = PublicReqwestTransport::new(&tukui::DOMAINS)
+        .map_err(|_| "Could not prepare the connection to Tukui.".to_owned())?;
+    Ok(TukuiSource::new(transport))
 }
 
 /// I record dell'installazione per l'ordine di abbinamento (D33). Un `installed-addons.json`
