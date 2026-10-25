@@ -2255,6 +2255,7 @@ mod tests {
                     written.push((source, key.to_owned()));
                     Ok(())
                 },
+                &crate::progress::ignore,
             )
             .unwrap();
             assert_eq!(written, [(SourceKind::Tukui, "ElvUI-key".to_owned())]);
