@@ -210,8 +210,12 @@ export const api = {
     invoke<InstalledAddon[]>("list_addons", { installationId }),
   checkUpdates: (installationId: string) =>
     invoke<AddonUpdate[]>("check_updates", { installationId }),
-  updateAddons: (installationId: string, modIds: number[]) =>
-    invoke<UpdateOutcome[]>("update_addons", { installationId, modIds }),
+  /** `modIds` sono progetti CurseForge, `projects` quelli delle altre fonti. */
+  updateAddons: (
+    installationId: string,
+    modIds: number[],
+    projects: { source: SourceKind; key: string }[] = [],
+  ) => invoke<UpdateOutcome[]>("update_addons", { installationId, modIds, projects }),
   listVersionTypes: () => invoke<VersionType[]>("list_version_types"),
   setVersionOverride: (installationId: string, modId: number, versionType: number) =>
     invoke<void>("set_version_override", { installationId, modId, versionType }),

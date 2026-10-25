@@ -3,8 +3,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { AddonUpdate, InstalledAddon } from "../api";
-import { groupAddons } from "./filter.ts";
+import type { AddonUpdate, InstalledAddon, SourceKind } from "../api";
+import { defaultFilters, groupAddons, matchesGroup } from "./filter.ts";
 
 function addon(folder: string, fields: Partial<InstalledAddon> = {}): InstalledAddon {
   return {
@@ -355,5 +355,69 @@ describe("groupAddons with the app's record of installed folders", () => {
     // A different project in the check wins over the record too.
     const moved = checked(addons, { Alpha: [9, ["Alpha", "Alpha_Old"]] });
     assert.deepEqual(layout(addons, moved), ["Alpha", "Alpha_Old"]);
+  });
+});
+
+/** A check result where each folder is a project of `source` with key `key`. */
+function fromSources(entries: [InstalledAddon, SourceKind, string, string[]][]): Map<string, AddonUpdate> {
+  return new Map(
+    entries.map(([a, source, key, folders]): [string, AddonUpdate] => [
+      a.folder,
+      {
+        folder: a.folder,
+        source,
+        project: { id: 0, source, key, name: key, url: null, allowModDistribution: true },
+        installedFile: null,
+        versionOverride: null,
+        projectFolders: folders,
+        status: "upToDate",
+      },
+    ]),
+  );
+}
+
+describe("groupAddons with several sources", () => {
+  it("never joins projects of different sources with the same key", () => {
+    // `5108` is a CurseForge id for one folder and a WoWInterface id for the other.
+    const a = addon("Alpha");
+    const b = addon("AlphaPlus", { dependencies: ["Alpha"] });
+    const updates = fromSources([
+      [a, "curseforge", "5108", ["Alpha"]],
+      [b, "wowinterface", "5108", ["AlphaPlus"]],
+    ]);
+    assert.deepEqual(layout([a, b], updates), ["Alpha", "AlphaPlus"]);
+  });
+
+  it("joins the folders of one project of a free source", () => {
+    const elv = addon("ElvUI");
+    const options = addon("ElvUI_Options");
+    const libs = addon("ElvUI_Libraries");
+    const updates = fromSources([
+      [elv, "tukui", "-2", ["ElvUI", "ElvUI_Libraries", "ElvUI_Options"]],
+      [options, "tukui", "-2", ["ElvUI", "ElvUI_Libraries", "ElvUI_Options"]],
+      [libs, "tukui", "-2", ["ElvUI", "ElvUI_Libraries", "ElvUI_Options"]],
+    ]);
+    assert.deepEqual(layout([elv, options, libs], updates), ["ElvUI ElvUI_Libraries ElvUI_Options"]);
+  });
+});
+
+describe("matchesGroup with the source filter", () => {
+  it("keeps only the groups recognised by the chosen source", () => {
+    const a = addon("Alpha");
+    const b = addon("Beta");
+    const c = addon("Gamma");
+    const updates = fromSources([
+      [a, "curseforge", "1", ["Alpha"]],
+      [b, "github", "owner/beta", ["Beta"]],
+    ]);
+    const groups = groupAddons([a, b, c], updates);
+    const shown = (source: SourceKind | null) =>
+      groups
+        .filter((g) => matchesGroup(g, { ...defaultFilters, source }, updates))
+        .map((g) => g.main.folder)
+        .sort();
+    assert.deepEqual(shown(null), ["Alpha", "Beta", "Gamma"]);
+    assert.deepEqual(shown("github"), ["Beta"]);
+    assert.deepEqual(shown("tukui"), []);
   });
 });
