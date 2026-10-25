@@ -444,14 +444,20 @@ export function Search({ installation, active, keyConfigured, onInstalled }: Pro
 
         {results && (
           <div className={load.loading ? "results busy" : "results"} aria-busy={load.loading}>
-            {(load.loading || results.addons.length > 0) && (
+            {(load.loading || results.addons.length > 0 || results.hidden > 0) && (
               <p className="count muted" role="status">
                 {load.loading ? "Searching…" : resultCount(results)}
               </p>
             )}
             {results.addons.length === 0 ? (
               <p className="empty">
-                {filtered ? (
+                {results.hidden > 0 ? (
+                  hasMore(results) ? (
+                    "No add-on with a release for this game version among the first results. Load more to keep looking."
+                  ) : (
+                    "No add-on with a release for this game version."
+                  )
+                ) : filtered ? (
                   <>
                     No add-ons match this search. Try another name or{" "}
                     <button className="link inline" onClick={clearFilters}>
