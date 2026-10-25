@@ -548,7 +548,8 @@ pub fn update_addons(
     progress: &ProgressSink<'_>,
 ) -> Result<Vec<UpdateOutcome>, String> {
     // Il controllo vale per tutti i progetti richiesti: ognuno è in `checking` finché non tocca
-    // a lui.
+    // a lui. Un progetto saltato o fallito prima del download non riceve altre fasi: l'esito
+    // restituito resta la risposta definitiva, e chi ascolta l'evento chiude lì l'avanzamento.
     let mut announced = HashSet::new();
     for project in projects.iter().filter(|p| announced.insert(*p)) {
         Reporter::new(progress, Some(project.source), &project.key, "").phase(Phase::Checking);

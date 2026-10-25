@@ -74,6 +74,8 @@ pub struct Reporter<'a> {
     key: &'a str,
     name: &'a str,
     throttle: Throttle,
+    /// L'ultimo `total` ricevuto dal download: quello che il server ha dichiarato, se l'ha fatto.
+    declared_total: Cell<Option<u64>>,
 }
 
 impl<'a> Reporter<'a> {
@@ -89,6 +91,7 @@ impl<'a> Reporter<'a> {
             key,
             name,
             throttle: Throttle::new(MIN_INTERVAL),
+            declared_total: Cell::new(None),
         }
     }
 
@@ -99,14 +102,21 @@ impl<'a> Reporter<'a> {
 
     /// Byte ricevuti finora, se è passato abbastanza tempo dall'ultimo avanzamento.
     pub fn download(&self, received: u64, total: Option<u64>) {
-        if self.throttle.ready(Instant::now()) {
+        self.download_at(Instant::now(), received, total);
+    }
+
+    /// Come [`download`](Self::download), con l'orologio passato dal chiamante.
+    pub fn download_at(&self, now: Instant, received: u64, total: Option<u64>) {
+        self.declared_total.set(total);
+        if self.throttle.ready(now) {
             self.send(Phase::Downloading, Some(received), total);
         }
     }
 
-    /// Download finito: sempre consegnato, con `received` uguale a `total`.
+    /// Download finito: sempre consegnato, con il `total` dichiarato dal server se c'era. Senza
+    /// `Content-Length` resta assente anche qui: la lunghezza non era nota.
     pub fn downloaded(&self, len: u64) {
-        self.send(Phase::Downloading, Some(len), Some(len));
+        self.send(Phase::Downloading, Some(len), self.declared_total.get());
     }
 
     fn send(&self, phase: Phase, received: Option<u64>, total: Option<u64>) {
@@ -204,8 +214,9 @@ pub(crate) mod tests {
         let collected = Collected::default();
         let sink = collected.sink();
         let reporter = Reporter::new(&sink, Some(SourceKind::Curseforge), "61284", "Bagnon");
-        for received in [10, 20, 30] {
-            reporter.download(received, Some(100));
+        let start = Instant::now();
+        for (ms, received) in [(0, 10), (40, 20), (80, 30)] {
+            reporter.download_at(start + Duration::from_millis(ms), received, Some(100));
         }
         reporter.downloaded(100);
         let steps = collected.0.borrow();
@@ -213,6 +224,17 @@ pub(crate) mod tests {
         assert_eq!(steps.len(), 2);
         assert_eq!((steps[0].received, steps[0].total), (Some(10), Some(100)));
         assert_eq!((steps[1].received, steps[1].total), (Some(100), Some(100)));
+    }
+
+    #[test]
+    fn without_a_declared_length_the_last_step_has_no_total() {
+        let collected = Collected::default();
+        let sink = collected.sink();
+        let reporter = Reporter::new(&sink, Some(SourceKind::Tukui), "-2", "ElvUI");
+        reporter.download_at(Instant::now(), 0, None);
+        reporter.downloaded(4096);
+        let last = collected.0.borrow().last().cloned().unwrap();
+        assert_eq!((last.received, last.total), (Some(4096), None));
     }
 
     #[test]
