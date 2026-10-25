@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::SystemTime;
 
 /// Byte che il calcolo salta: tab, a capo, ritorno carrello, spazio.
 fn is_skipped(byte: u8) -> bool {
@@ -308,8 +309,21 @@ fn resolve(dir: &str, name: &str, files: &FileIndex) -> Option<String> {
 /// la scansione e un link verso l'esterno farebbe leggere file fuori dall'addon. La cartella
 /// dell'addon stessa può essere un link (addon in sviluppo collegati in `AddOns`): si parte
 /// da lì. Un link a un file conta come il file.
+#[cfg(test)]
 fn index_files(addon_dir: &Path, folder: &str) -> FileIndex {
+    index_files_stamped(addon_dir, folder).0
+}
+
+/// Un file dell'addon com'è sul disco: percorso reale (come nell'indice), dimensione e data di
+/// modifica. Due elenchi uguali dicono che il fingerprint non può essere cambiato, senza
+/// rileggere i file (vedi `addons::cache`).
+pub type FileStamp = (String, u64, Option<SystemTime>);
+
+/// Come [`index_files`], con la dimensione e la data di modifica di ogni file, ordinate per
+/// percorso. Per un link a un file valgono quelle del file a cui punta.
+fn index_files_stamped(addon_dir: &Path, folder: &str) -> (FileIndex, Vec<FileStamp>) {
     let mut index = FileIndex::new();
+    let mut stamps = Vec::new();
     let mut stack = vec![(addon_dir.to_path_buf(), folder.to_owned())];
     while let Some((dir, relative)) = stack.pop() {
         let Ok(entries) = fs::read_dir(&dir) else {
@@ -323,18 +337,43 @@ fn index_files(addon_dir: &Path, folder: &str) -> FileIndex {
             let Ok(link_meta) = fs::symlink_metadata(entry.path()) else {
                 continue;
             };
-            if link_meta.is_dir() {
+            let file_meta = if link_meta.is_dir() {
                 stack.push((entry.path(), child));
+                continue;
             } else if link_meta.file_type().is_symlink() {
-                if fs::metadata(entry.path()).is_ok_and(|target| target.is_file()) {
-                    index.insert(child.to_lowercase(), child);
+                match fs::metadata(entry.path()) {
+                    Ok(target) if target.is_file() => target,
+                    _ => continue,
                 }
             } else {
-                index.insert(child.to_lowercase(), child);
-            }
+                link_meta
+            };
+            stamps.push((child.clone(), file_meta.len(), file_meta.modified().ok()));
+            index.insert(child.to_lowercase(), child);
         }
     }
-    index
+    stamps.sort();
+    (index, stamps)
+}
+
+/// I file della cartella di un addon, letti una volta: servono sia a decidere se un fingerprint
+/// già calcolato vale ancora, sia a calcolarlo.
+pub struct FolderFiles {
+    folder: String,
+    index: FileIndex,
+    pub stamps: Vec<FileStamp>,
+}
+
+/// I file della cartella `addon_dir` in `AddOns`; `None` se il nome non è un percorso valido
+/// (come per [`folder_fingerprint`]).
+pub fn folder_files(addon_dir: &Path) -> Option<FolderFiles> {
+    let folder = addon_dir.file_name()?.to_str()?.to_owned();
+    let (index, stamps) = index_files_stamped(addon_dir, &folder);
+    Some(FolderFiles {
+        folder,
+        index,
+        stamps,
+    })
 }
 
 /// Il fingerprint della cartella di un addon. `addon_dir` è la cartella in `AddOns`; il suo
@@ -344,13 +383,17 @@ fn index_files(addon_dir: &Path, folder: &str) -> FileIndex {
 /// conosce): l'hash di un insieme vuoto sarebbe la stessa costante per tutte queste cartelle e
 /// potrebbe corrispondere per sbaglio a qualcosa su CurseForge.
 ///
-/// Costo: legge per intero ogni file che entra nel calcolo, una volta sola. Va bene alla
-/// cadenza attuale (una scansione quando si apre o si aggiorna un'installazione); se un
-/// giorno la scansione diventasse frequente, conviene una cache per cartella.
+/// Costo: legge per intero ogni file che entra nel calcolo, una volta sola. La scansione
+/// dell'app passa da `addons::cache`, che lo evita quando la cartella non è cambiata.
 pub fn folder_fingerprint(addon_dir: &Path) -> Option<u32> {
-    let folder = addon_dir.file_name()?.to_str()?;
+    fingerprint_of(addon_dir, &folder_files(addon_dir)?)
+}
+
+/// Il fingerprint di `addon_dir` dai suoi file già elencati.
+pub fn fingerprint_of(addon_dir: &Path, folder_files: &FolderFiles) -> Option<u32> {
+    let folder = folder_files.folder.as_str();
+    let files = &folder_files.index;
     let addons_dir = addon_dir.parent()?;
-    let files = index_files(addon_dir, folder);
     // I `.toc` e gli `.xml` si leggono per trovare le inclusioni e di nuovo per l'hash: i byte
     // letti la prima volta si riusano, condivisi e non copiati (alcuni `.toc` superano i 50 MB).
     let cache: RefCell<HashMap<String, Option<Rc<[u8]>>>> = RefCell::new(HashMap::new());
@@ -361,7 +404,7 @@ pub fn folder_fingerprint(addon_dir: &Path) -> Option<u32> {
             .or_insert_with(|| fs::read(addons_dir.join(relative)).ok().map(Rc::from))
             .clone()
     };
-    let selected = select_files(folder, &files, bytes_of);
+    let selected = select_files(folder, files, bytes_of);
     // Ogni file si calcola e si lascia andare: i `.toc` e gli `.xml` letti per le inclusioni
     // escono dalla cache, i `.lua` si leggono qui e non ci entrano. In memoria resta un file
     // alla volta, non l'addon intero (la scansione calcola più cartelle in parallelo).

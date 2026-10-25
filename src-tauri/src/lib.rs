@@ -41,6 +41,7 @@ pub fn run() {
         )
         .manage(Config::load())
         .manage(commands::InstallLock::default())
+        .manage(addons::cache::FingerprintCache::default())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             app.manage(Mutex::new(InstallationStore::load(
