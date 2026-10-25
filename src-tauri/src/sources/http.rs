@@ -1,15 +1,85 @@
-//! Trasporto HTTP per le fonti libere (D31), che non hanno chiave: una richiesta `GET` per le
-//! risposte JSON e una per gli zip, con un limite di dimensione. Come per CurseForge, i test
-//! usano risposte scritte a mano dietro [`PublicTransport`], senza rete.
+//! Lo strato HTTP comune alle fonti: le risposte, gli errori di trasporto e la lettura con un
+//! limite di dimensione, usati anche dal client di CurseForge. Per le fonti libere (D31), che
+//! non hanno chiave, c'è [`PublicTransport`]: una richiesta `GET` per le risposte JSON e una per
+//! gli zip, entrambe con un limite. I test usano risposte scritte a mano dietro il trait, senza
+//! rete.
 
+use std::io::Read;
 use std::time::Duration;
 
-use super::curseforge::{
-    BytesResponse, HttpResponse, TransportError, read_limited, transport_error,
-};
+/// Dimensione massima di una risposta JSON di una fonte libera: l'elenco di Tukui pesa pochi
+/// KiB, il dettaglio di un file WoWInterface meno ancora.
+pub const MAX_JSON_BYTES: u64 = 4 * 1024 * 1024;
+
+pub struct HttpResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+pub struct BytesResponse {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
+/// Perché una richiesta non ha avuto risposta. Non contiene testo del trasporto, che
+/// potrebbe riportare dettagli della richiesta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportError {
+    Timeout,
+    Connect,
+    /// Il corpo supera il limite chiesto dal chiamante.
+    TooLarge,
+    Other,
+}
+
+pub fn transport_error(error: reqwest::Error) -> TransportError {
+    if error.is_timeout() {
+        TransportError::Timeout
+    } else if error.is_connect() {
+        TransportError::Connect
+    } else {
+        TransportError::Other
+    }
+}
+
+/// Legge al massimo `max_len` byte: appena il corpo li supererebbe si ferma con
+/// [`TransportError::TooLarge`], senza aggiungere il blocco di troppo. Anche la capacità del
+/// buffer resta entro `max_len`: la crescita raddoppia come quella di `Vec`, ma senza superare
+/// il limite. `declared` è il `Content-Length` già confrontato con il limite, usato per
+/// allocare una volta sola.
+pub fn read_limited(
+    reader: &mut impl Read,
+    max_len: u64,
+    declared: Option<u64>,
+) -> Result<Vec<u8>, TransportError> {
+    let limit = usize::try_from(max_len).unwrap_or(usize::MAX);
+    let initial = declared.map_or(0, |len| usize::try_from(len).unwrap_or(limit).min(limit));
+    let mut body = Vec::with_capacity(initial);
+    let mut chunk = vec![0u8; 64 * 1024];
+    loop {
+        let read = match reader.read(&mut chunk) {
+            Ok(0) => return Ok(body),
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                return Err(TransportError::Timeout);
+            }
+            Err(_) => return Err(TransportError::Other),
+        };
+        if body.len() as u64 + read as u64 > max_len {
+            return Err(TransportError::TooLarge);
+        }
+        let needed = body.len() + read;
+        if needed > body.capacity() {
+            let target = body.capacity().saturating_mul(2).max(needed).min(limit);
+            body.reserve_exact(target - body.len());
+        }
+        body.extend_from_slice(&chunk[..read]);
+    }
+}
 
 pub trait PublicTransport: Send + Sync {
-    /// Una risposta JSON.
+    /// Una risposta JSON, al massimo [`MAX_JSON_BYTES`]: oltre, [`TransportError::TooLarge`].
     fn get(&self, url: &str) -> Result<HttpResponse, TransportError>;
     /// Scarica un file. Un corpo più lungo di `max_len` byte dà [`TransportError::TooLarge`]
     /// senza tenerne in memoria più di `max_len`. Chi chiama valida l'URL con
@@ -44,14 +114,19 @@ impl PublicReqwestTransport {
 
 impl PublicTransport for PublicReqwestTransport {
     fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
-        let response = self
+        let mut response = self
             .client
             .get(url)
             .header("accept", "application/json")
             .send()
             .map_err(transport_error)?;
         let status = response.status().as_u16();
-        let body = response.text().map_err(|_| TransportError::Other)?;
+        let declared = response.content_length();
+        if declared.is_some_and(|len| len > MAX_JSON_BYTES) {
+            return Err(TransportError::TooLarge);
+        }
+        let body = read_limited(&mut response, MAX_JSON_BYTES, declared)?;
+        let body = String::from_utf8(body).map_err(|_| TransportError::Other)?;
         Ok(HttpResponse { status, body })
     }
 

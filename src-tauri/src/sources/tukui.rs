@@ -42,6 +42,8 @@ pub struct TukuiAddon {
     pub web_url: Option<String>,
     #[serde(default)]
     pub last_update: Option<String>,
+    /// Le cartelle dello zip; un addon senza cartelle non si abbina mai.
+    #[serde(default)]
     pub directories: Vec<String>,
 }
 
@@ -61,15 +63,29 @@ impl<T: PublicTransport> TukuiSource<T> {
     }
 
     fn fetch(&self) -> Result<Vec<TukuiAddon>, String> {
-        let response = self.transport.get(ADDONS_URL).map_err(network_error)?;
+        let response = self
+            .transport
+            .get(ADDONS_URL)
+            .map_err(|error| match error {
+                TransportError::TooLarge => {
+                    "Unrecognized response from Tukui: it is too large.".to_owned()
+                }
+                other => network_error(other),
+            })?;
         if response.status != 200 {
             return Err(format!(
                 "Tukui responded with an error (HTTP {}).",
                 response.status
             ));
         }
-        let addons: Vec<TukuiAddon> = serde_json::from_str(&response.body)
+        // Una voce che non si legge (un addon nuovo con un campo diverso) si salta: non deve
+        // togliere tutta la fonte. Una risposta che non è un elenco resta un errore.
+        let entries: Vec<serde_json::Value> = serde_json::from_str(&response.body)
             .map_err(|_| "Unrecognized response from Tukui.".to_owned())?;
+        let addons: Vec<TukuiAddon> = entries
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value(entry).ok())
+            .collect();
         *self.addons.lock().unwrap_or_else(|e| e.into_inner()) = Some(addons.clone());
         Ok(addons)
     }
@@ -134,7 +150,11 @@ fn patch_interface(patch: &str) -> Option<u32> {
     let major = parts.next()??;
     let minor = parts.next().unwrap_or(Some(0))?;
     let fix = parts.next().unwrap_or(Some(0))?;
-    Some(major * 10_000 + minor * 100 + fix)
+    // Il testo viene dalla rete: un numero enorme non deve traboccare.
+    major
+        .checked_mul(10_000)?
+        .checked_add(minor.checked_mul(100)?)?
+        .checked_add(fix)
 }
 
 /// Se un numero di `## Interface` appartiene al gioco della cartella `flavor`. La tabella:
@@ -268,7 +288,17 @@ impl<T: PublicTransport> Source for TukuiSource<T> {
             .iter()
             .any(|u| matches!(u.status, UpdateStatus::UpdateAvailable { .. }))
         {
-            return UpdateOutcome::skipped(TUKUI, key, name, "Already up to date.");
+            // Un addon non elencato per questo gioco riporta il motivo, non "aggiornato".
+            let reason = folders.iter().find_map(|u| match &u.status {
+                UpdateStatus::Error { message } => Some(message.as_str()),
+                _ => None,
+            });
+            return UpdateOutcome::skipped(
+                TUKUI,
+                key,
+                name,
+                reason.unwrap_or("Already up to date."),
+            );
         }
         let addon = match self.cached() {
             Ok(addons) => addons.into_iter().find(|a| a.id.to_string() == key),
@@ -281,10 +311,14 @@ impl<T: PublicTransport> Source for TukuiSource<T> {
             Ok(bytes) => bytes,
             Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
         };
-        let installed = match updates::install_bytes(&bytes, target.addons_dir, &[], &|_| Ok(())) {
-            Ok(folders) => folders,
-            Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
-        };
+        // Le cartelle del progetto sul disco: quelle che il nuovo zip non ha più si tolgono, come
+        // per CurseForge, invece di restare come addon sconosciuti.
+        let old_folders: Vec<String> = folders.iter().map(|u| u.folder.clone()).collect();
+        let installed =
+            match updates::install_bytes(&bytes, target.addons_dir, &old_folders, &|_| Ok(())) {
+                Ok(folders) => folders,
+                Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
+            };
         // Le cartelle sono già sostituite: se il registro non si salva l'aggiornamento resta
         // riuscito, e il messaggio lo dice.
         let message = record(
@@ -559,6 +593,8 @@ mod tests {
         assert_eq!(patch_interface("1.15.9"), Some(11_509));
         assert_eq!(patch_interface("5.5"), Some(50_500));
         assert_eq!(patch_interface("x"), None);
+        assert_eq!(patch_interface("500000.0.0"), None);
+        assert_eq!(patch_interface("1.99999999999.0"), None);
         assert!(fits("_retail_", 120_100));
         assert!(fits("_classic_era_", 11_509));
         assert!(!fits("_classic_era_", 16_001));
@@ -600,6 +636,10 @@ mod tests {
                 body: "{".to_owned()
             }))),
             Err("Unrecognized response from Tukui.".to_owned())
+        );
+        assert_eq!(
+            check(failing(Err(TransportError::TooLarge))),
+            Err("Unrecognized response from Tukui: it is too large.".to_owned())
         );
     }
 
@@ -723,5 +763,106 @@ mod tests {
         assert_eq!(elvui.name, "ElvUI");
         assert!(elvui.directories.iter().any(|d| d == "ElvUI"));
         assert!(reqwest::Url::parse(&elvui.url).is_ok_and(|url| is_allowed_url(&url, &DOMAINS)));
+    }
+
+    #[test]
+    fn a_malformed_entry_does_not_hide_the_others() {
+        let mut entries: Vec<serde_json::Value> = serde_json::from_str(&body("16.00")).unwrap();
+        // Una voce senza `name` e una senza `directories`.
+        entries.push(serde_json::json!({"id": -3, "url": "x", "version": "1"}));
+        entries.push(serde_json::json!({"id": -4, "name": "New", "url": "x", "version": "1"}));
+        let source = TukuiSource::new(Fake {
+            json: Some(Ok(HttpResponse {
+                status: 200,
+                body: serde_json::Value::Array(entries).to_string(),
+            })),
+            ..Fake::default()
+        });
+        let updates = source
+            .check(
+                &installation("_retail_"),
+                &elvui("v16.00"),
+                &ProjectRecords::new(),
+            )
+            .unwrap();
+        assert_eq!(updates.len(), 3);
+    }
+
+    #[test]
+    fn an_incompatible_addon_reports_why_it_is_not_updated() {
+        let tmp = TempDir::new();
+        let path = tmp.path().join("World of Warcraft").join("_anniversary_");
+        let addons = path.join("Interface").join("AddOns");
+        write_addon(&addons, "Tukui", "## Version: 20.000\n");
+        let installation = Installation {
+            id: "test".to_owned(),
+            path,
+            flavor: "anniversary".to_owned(),
+            name: "Anniversary".to_owned(),
+        };
+        let outcomes = updates::update_addons(
+            &installation,
+            &[&source("16.00")],
+            &SourceRecords::new(),
+            &[super::super::ProjectKey {
+                source: TUKUI,
+                key: "-1".to_owned(),
+            }],
+            &mut |_, _, _| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(
+            outcomes[0].message.as_deref(),
+            Some("Tukui does not list Tukui for this game version.")
+        );
+    }
+
+    #[test]
+    fn a_folder_the_new_zip_drops_is_removed() {
+        let tmp = TempDir::new();
+        let path = tmp.path().join("World of Warcraft").join("_retail_");
+        let addons = path.join("Interface").join("AddOns");
+        for folder in ["ElvUI", "ElvUI_Libraries", "ElvUI_Options"] {
+            write_addon(
+                &addons,
+                folder,
+                "## Interface: 120100\n## Version: v16.00\n",
+            );
+        }
+        write_addon(&addons, "Other", "## Interface: 120100\n");
+        let installation = Installation {
+            id: "test".to_owned(),
+            path,
+            flavor: "retail".to_owned(),
+            name: "Retail".to_owned(),
+        };
+        let tukui = TukuiSource::new(Fake {
+            json: Some(Ok(HttpResponse {
+                status: 200,
+                body: body("16.01"),
+            })),
+            zip: Some(zip_of(&[
+                ("ElvUI/ElvUI.toc", "## Version: v16.01\n"),
+                ("ElvUI_Libraries/ElvUI_Libraries.toc", ""),
+            ])),
+            ..Fake::default()
+        });
+        updates::update_addons(
+            &installation,
+            &[&tukui],
+            &SourceRecords::new(),
+            &[super::super::ProjectKey {
+                source: TUKUI,
+                key: "-2".to_owned(),
+            }],
+            &mut |_, _, _| Ok(()),
+        )
+        .unwrap();
+        let mut names: Vec<String> = fs::read_dir(&addons)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["ElvUI", "ElvUI_Libraries", "Other"]);
     }
 }
