@@ -94,6 +94,9 @@ pub fn version_type_for(flavor: &str) -> Option<u32> {
     }
 }
 
+/// Il file installato o disponibile di un progetto. `id` è l'id del file CurseForge, che serve a
+/// scaricarlo; le fonti senza id numerico (GitHub, WoWInterface, Tukui) mettono `0` e la
+/// versione o il tag in `name`, la stessa stringa che scrivono in `SourceRecord::file`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSummary {
@@ -270,10 +273,12 @@ fn is_newer(candidate: &File, installed: &File) -> bool {
 /// Scansiona l'installazione e offre le cartelle alle fonti di `sources`, nell'ordine (D33):
 /// una cartella registrata in `records` va solo alla fonte del record; le altre a ogni fonte
 /// che non le ha ancora reclamate. Una voce per cartella, nell'ordine della scansione; le
-/// cartelle che nessuna fonte riconosce restano `notMatched` senza fonte. Una fonte che fallisce
-/// non ferma le altre: le cartelle che le erano state offerte e che nessuno ha reclamato
-/// riportano il suo errore. Se falliscono tutte, l'errore è quello della prima. Bloccante: va
-/// chiamata fuori dal thread principale.
+/// cartelle che nessuna fonte riconosce restano `notMatched` senza fonte. Reclama una cartella
+/// solo la fonte che le dà un progetto: un errore su una cartella (per esempio CurseForge che non
+/// la legge) non la toglie alle fonti successive e si mostra solo se nessuna la riconosce. Una
+/// fonte che fallisce non ferma le altre: le cartelle che le erano state offerte e che nessuno
+/// ha reclamato riportano il suo errore. Se falliscono tutte, l'errore è quello della prima.
+/// Bloccante: va chiamata fuori dal thread principale.
 pub fn check_updates(
     installation: &Installation,
     sources: &[&dyn Source],
@@ -309,8 +314,9 @@ fn scan_and_check(
         |addon: &InstalledAddon| owners.get(&addon.folder.to_lowercase()).copied().flatten();
 
     let mut results: Vec<Option<AddonUpdate>> = vec![None; addons.len()];
-    // Per cartella, l'errore della prima fonte fallita a cui era stata offerta.
-    let mut failures: Vec<Option<String>> = vec![None; addons.len()];
+    // Per cartella, il primo errore di una fonte a cui era stata offerta: della fonte intera o
+    // della sola cartella. Vale solo se nessuna fonte la reclama.
+    let mut failures: Vec<Option<AddonUpdate>> = vec![None; addons.len()];
     let mut first_error: Option<String> = None;
     let mut succeeded = false;
     for source in sources {
@@ -329,8 +335,14 @@ fn scan_and_check(
             Ok(found) => found,
             Err(error) => {
                 for &i in &offered_indexes {
-                    failures[i]
-                        .get_or_insert_with(|| format!("{} check failed: {error}", kind.label()));
+                    failures[i].get_or_insert_with(|| {
+                        unclaimed(
+                            &addons[i],
+                            UpdateStatus::Error {
+                                message: format!("{} check failed: {error}", kind.label()),
+                            },
+                        )
+                    });
                 }
                 first_error.get_or_insert(error);
                 continue;
@@ -338,16 +350,18 @@ fn scan_and_check(
         };
         succeeded = true;
         for update in found {
-            let claims =
-                update.project.is_some() || matches!(update.status, UpdateStatus::Error { .. });
-            if !claims {
-                continue;
-            }
-            if let Some(&i) = offered_indexes
+            let Some(&i) = offered_indexes
                 .iter()
                 .find(|&&i| addons[i].folder == update.folder)
-            {
+            else {
+                continue;
+            };
+            // Solo un progetto reclama la cartella; un errore resta in serbo per il caso in cui
+            // nessuna fonte la riconosca.
+            if update.project.is_some() {
                 results[i].get_or_insert(update);
+            } else if matches!(update.status, UpdateStatus::Error { .. }) {
+                failures[i].get_or_insert(update);
             }
         }
     }
@@ -360,22 +374,26 @@ fn scan_and_check(
         .zip(results)
         .zip(failures)
         .map(|((addon, result), failure)| {
-            result.unwrap_or_else(|| AddonUpdate {
-                folder: addon.folder.clone(),
-                source: None,
-                project: None,
-                installed_file: None,
-                status: match failure {
-                    Some(message) => UpdateStatus::Error { message },
-                    None => UpdateStatus::NotMatched,
-                },
-                version_override: None,
-                project_folders: Vec::new(),
-                installed_modules: Vec::new(),
-            })
+            result
+                .or(failure)
+                .unwrap_or_else(|| unclaimed(addon, UpdateStatus::NotMatched))
         })
         .collect();
     Ok((addons, updates))
+}
+
+/// La voce di una cartella che nessuna fonte ha reclamato.
+fn unclaimed(addon: &InstalledAddon, status: UpdateStatus) -> AddonUpdate {
+    AddonUpdate {
+        folder: addon.folder.clone(),
+        source: None,
+        project: None,
+        installed_file: None,
+        status,
+        version_override: None,
+        project_folders: Vec::new(),
+        installed_modules: Vec::new(),
+    }
 }
 
 /// CurseForge come fonte: fingerprint delle cartelle, versioni del gioco forzate per progetto
@@ -2050,6 +2068,61 @@ mod tests {
                 updates[0].status,
                 UpdateStatus::Error {
                     message: "CurseForge check failed: network down".to_owned()
+                }
+            );
+        }
+
+        /// Una fonte che segna ogni cartella offerta come illeggibile, come fa CurseForge con una
+        /// cartella senza fingerprint.
+        struct ErrorPerFolder;
+
+        impl Source for ErrorPerFolder {
+            fn kind(&self) -> SourceKind {
+                SourceKind::Curseforge
+            }
+
+            fn check(
+                &self,
+                _installation: &Installation,
+                offered: &[InstalledAddon],
+                _records: &ProjectRecords,
+            ) -> Result<Vec<AddonUpdate>, String> {
+                Ok(offered
+                    .iter()
+                    .map(|a| {
+                        unclaimed(
+                            a,
+                            UpdateStatus::Error {
+                                message: "Unreadable folder".to_owned(),
+                            },
+                        )
+                    })
+                    .collect())
+            }
+
+            fn update(&self, target: &UpdateTarget<'_>, _: &mut RecordWriter<'_>) -> UpdateOutcome {
+                UpdateOutcome::skipped(SourceKind::Curseforge, target.key, "", "unused")
+            }
+        }
+
+        #[test]
+        fn a_folder_error_does_not_hide_the_folder_from_later_sources() {
+            let fx = fixture(&[("ElvUI", "e"), ("Other", "o")]);
+            let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
+            let updates = check_updates(
+                &fx.installation,
+                &[&ErrorPerFolder, &tukui],
+                &SourceRecords::new(),
+            )
+            .unwrap();
+            assert_eq!(tukui.offered(), ["ElvUI", "Other"]);
+            assert_eq!(updates[0].source, Some(SourceKind::Tukui));
+            // Nessuno riconosce `Other`: resta l'errore della prima fonte.
+            assert_eq!(updates[1].source, None);
+            assert_eq!(
+                updates[1].status,
+                UpdateStatus::Error {
+                    message: "Unreadable folder".to_owned()
                 }
             );
         }

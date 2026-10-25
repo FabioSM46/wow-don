@@ -46,9 +46,11 @@ pub type RecordWriter<'a> = dyn FnMut(SourceKind, &str, SourceRecord) -> Result<
 pub trait Source {
     fn kind(&self) -> SourceKind;
 
-    /// Abbina le cartelle `offered` ai progetti della fonte e valuta gli aggiornamenti. Una voce
-    /// con un progetto o con stato `error` reclama la cartella; le cartelle che la fonte non
-    /// riconosce si possono omettere o restituire come `notMatched`. `records` sono i record
+    /// Abbina le cartelle `offered` ai progetti della fonte e valuta gli aggiornamenti. Solo
+    /// una voce con un progetto reclama la cartella. Una voce con stato `error` e senza progetto
+    /// non la reclama: la cartella resta alle fonti successive e l'errore si mostra solo se
+    /// nessuna la riconosce. Le cartelle che la fonte non riconosce si possono omettere o
+    /// restituire come `notMatched`. `records` sono i record
     /// della fonte per l'installazione. Un `Err` vale per tutte le cartelle offerte.
     fn check(
         &self,
