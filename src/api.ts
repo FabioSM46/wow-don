@@ -217,8 +217,9 @@ export const api = {
   /** Le installazioni già aggiunte sono escluse dal backend; nessuna trovata è una lista vuota. */
   discoverInstallations: () => invoke<DiscoveredInstallation[]>("discover_installations"),
   removeInstallation: (id: string) => invoke<void>("remove_installation", { id }),
-  listAddons: (installationId: string) =>
-    invoke<InstalledAddon[]>("list_addons", { installationId }),
+  /** `force` ricalcola tutti i fingerprint invece di prenderli dalla cache del backend. */
+  listAddons: (installationId: string, force = false) =>
+    invoke<InstalledAddon[]>("list_addons", { installationId, force }),
   checkUpdates: (installationId: string) =>
     invoke<AddonUpdate[]>("check_updates", { installationId }),
   /** `modIds` sono progetti CurseForge, `projects` quelli delle altre fonti. */

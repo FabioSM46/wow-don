@@ -159,12 +159,14 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
   // serve dopo aver installato o tolto addon fuori dall'app.
   const [rescanning, setRescanning] = useState(false);
   const [rescanError, setRescanError] = useState<string | null>(null);
-  function rescan(): Promise<void> {
+  // `force` solo dal pulsante: ricalcola i fingerprint anche delle cartelle che sembrano uguali,
+  // per le modifiche fatte a mano fuori dall'app.
+  function rescan(force = false): Promise<void> {
     const id = installation.id;
     setRescanning(true);
     setRescanError(null);
     return api
-      .listAddons(id)
+      .listAddons(id, force)
       .then((addons) => {
         if (currentId.current !== id) return;
         setLoad({ state: "ready", addons });
@@ -394,7 +396,7 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
           )}
           <button
             className="button secondary"
-            onClick={rescan}
+            onClick={() => void rescan(true)}
             disabled={rescanning || busy || load.state === "loading"}
             title="Reads the Interface/AddOns folder again"
           >

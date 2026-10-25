@@ -6,6 +6,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::addons::cache::FingerprintCache;
 use crate::addons::scan::{self, ListedAddon};
 use crate::backup::{self, BackupInfo};
 use crate::catalog::{self, AddonDetail, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
@@ -197,9 +198,14 @@ pub fn clear_version_override(
 /// finestra con molti addon; il registro si legge prima, qui. Un registro illeggibile non
 /// nasconde gli addon: la lettura procede senza record, mentre le scritture restano bloccate e
 /// il prossimo aggiornamento riporta l'errore nel suo esito.
+///
+/// I fingerprint vengono da [`FingerprintCache`]; con `force` (il pulsante "Reload addons") si
+/// ricalcolano tutti, così una modifica fatta a mano fuori dall'app si vede sempre.
 #[tauri::command]
 pub async fn list_addons(
     installation_id: String,
+    force: Option<bool>,
+    app: AppHandle,
     store: Store<'_>,
     installed: Installed<'_>,
 ) -> Result<Vec<ListedAddon>, String> {
@@ -212,7 +218,11 @@ pub async fn list_addons(
         .records_for(&installation.id)
         .unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
-        scan::scan_addons(&installation.path, &installation.flavor)
+        let cache = app.state::<FingerprintCache>();
+        if force == Some(true) {
+            cache.forget_all(&installation.path.join("Interface").join("AddOns"));
+        }
+        scan::scan_addons_with(&installation.path, &installation.flavor, Some(&cache))
             .map(|addons| scan::with_installed_projects(addons, &records))
     })
     .await
@@ -225,6 +235,7 @@ pub async fn list_addons(
 #[tauri::command]
 pub async fn check_updates(
     installation_id: String,
+    app: AppHandle,
     store: Store<'_>,
     settings: Settings<'_>,
     installed: Installed<'_>,
@@ -245,7 +256,13 @@ pub async fn check_updates(
             overrides: &overrides,
         };
         let tukui = tukui_source()?;
-        updates::check_updates(&installation, &[&curseforge, &tukui], &records)
+        let cache = app.state::<FingerprintCache>();
+        updates::check_updates_with(
+            &installation,
+            Some(&cache),
+            &[&curseforge, &tukui],
+            &records,
+        )
     })
     .await
     .map_err(|error| format!("The update check was interrupted ({error})."))?
@@ -294,12 +311,17 @@ pub async fn update_addons(
         };
         let tukui = tukui_source()?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
-        updates::update_addons(
+        let cache = app.state::<FingerprintCache>();
+        let addons_dir = installation.path.join("Interface").join("AddOns");
+        updates::update_addons_with(
             &installation,
+            Some(&cache),
             &[&curseforge, &tukui],
             &records,
             &projects,
             &mut |source, key, record| {
+                // Le cartelle appena scritte si ricalcolano alla prossima scansione.
+                cache.forget(&addons_dir, &record.folders);
                 locked_installed(&installed)?.record_source(&installation.id, source, key, record)
             },
             &emit_progress(&app, &installation.id),
@@ -381,6 +403,11 @@ pub async fn install_addon(
             mod_id,
             file_id,
             &mut |mod_id, record| {
+                // Le cartelle appena scritte si ricalcolano alla prossima scansione.
+                app.state::<FingerprintCache>().forget(
+                    &installation.path.join("Interface").join("AddOns"),
+                    &record.folders,
+                );
                 locked_installed(&installed)?.record(&installation.id, mod_id, record)
             },
             &emit_progress(&app, &installation.id),
@@ -412,6 +439,8 @@ pub async fn install_zip(
             Path::new(&path),
             &emit_progress(&app, &installation.id),
         )?;
+        app.state::<FingerprintCache>()
+            .forget(&addons_dir, &result.installed);
         // Un record che nomina una cartella appena scritta descriverebbe un file che non c'è più
         // (D32, D33): si toglie. Valgono tutte le cartelle dello zip, non solo quelle sostituite:
         // un record può nominare una cartella cancellata a mano e ora ricreata dallo zip.

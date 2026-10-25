@@ -11,6 +11,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 
+use super::cache::FingerprintCache;
 use super::fingerprint;
 use super::toc::{self, TocInfo};
 use crate::store::InstalledRecords;
@@ -38,7 +39,18 @@ pub struct InstalledAddon {
 /// nasconderebbe un gioco spostato o un disco non montato. Una voce che non si legge resta in
 /// lista con un errore. L'ordine è stabile: per nome della cartella, senza distinguere
 /// maiuscole e minuscole.
+#[cfg(test)]
 pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<InstalledAddon>, String> {
+    scan_addons_with(installation_dir, flavor, None)
+}
+
+/// Come `scan_addons`, con i fingerprint presi da `cache` quando le cartelle non sono
+/// cambiate (issue #125). Le cartelle che non ci sono più escono dalla cache.
+pub fn scan_addons_with(
+    installation_dir: &Path,
+    flavor: &str,
+    cache: Option<&FingerprintCache>,
+) -> Result<Vec<InstalledAddon>, String> {
     if !installation_dir.is_dir() {
         return Err("The installation folder no longer exists or cannot be reached.".to_owned());
     }
@@ -94,7 +106,14 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
             .and_then(|duration| u64::try_from(duration.as_millis()).ok());
         folders.push((entry.path(), folder, modified_ms));
     }
-    addons.extend(read_addons(folders, flavor));
+    if let Some(cache) = cache {
+        let present: Vec<String> = folders
+            .iter()
+            .map(|(_, folder, _)| folder.clone())
+            .collect();
+        cache.retain(&addons_dir, &present);
+    }
+    addons.extend(read_addons(folders, flavor, cache));
     addons.sort_by(|a, b| {
         a.folder
             .to_lowercase()
@@ -108,7 +127,11 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
 /// intero i file dell'addon. Ogni thread prende la prossima cartella libera, così una cartella
 /// molto grande non blocca le altre dietro di sé; ogni risultato resta al posto della sua
 /// cartella, quindi l'ordine non dipende da quale thread finisce prima.
-fn read_addons(folders: Vec<Folder>, flavor: &str) -> Vec<InstalledAddon> {
+fn read_addons(
+    folders: Vec<Folder>,
+    flavor: &str,
+    cache: Option<&FingerprintCache>,
+) -> Vec<InstalledAddon> {
     let threads = thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)
         .min(MAX_SCAN_THREADS)
@@ -122,7 +145,7 @@ fn read_addons(folders: Vec<Folder>, flavor: &str) -> Vec<InstalledAddon> {
             let Some((dir, folder, modified_ms)) = folders.get(index) else {
                 return;
             };
-            let addon = read_addon(dir, folder.clone(), flavor, *modified_ms);
+            let addon = read_addon(dir, folder.clone(), flavor, *modified_ms, cache);
             *results[index]
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = Some(addon);
@@ -167,6 +190,7 @@ fn read_addon(
     folder: String,
     flavor: &str,
     modified_ms: Option<u64>,
+    cache: Option<&FingerprintCache>,
 ) -> InstalledAddon {
     let mut addon = InstalledAddon {
         folder,
@@ -188,7 +212,10 @@ fn read_addon(
     };
     // Il fingerprint serve anche quando il `.toc` per questo flavor manca: CurseForge
     // riconosce la cartella dai suoi file, non dal flavor.
-    addon.fingerprint = fingerprint::folder_fingerprint(dir);
+    addon.fingerprint = match cache {
+        Some(cache) => cache.fingerprint(dir),
+        None => fingerprint::folder_fingerprint(dir),
+    };
     let Some(toc_file) = toc::select_toc(&addon.folder, &file_names, flavor) else {
         addon.error = Some("No .toc file for this game version.".to_owned());
         return addon;

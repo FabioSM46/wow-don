@@ -1,8 +1,8 @@
 //! Controllo degli aggiornamenti: abbina gli addon installati ai progetti delle fonti (D12,
 //! D33) e sceglie, per ognuno, la versione più recente per il gioco dell'installazione.
 //!
-//! [`check_updates`] scansiona l'installazione e offre le cartelle alle fonti nell'ordine di D33;
-//! [`update_addons`] rifà il controllo e chiede a ogni fonte di aggiornare i suoi progetti.
+//! [`check_updates_with`] scansiona l'installazione e offre le cartelle alle fonti nell'ordine di D33;
+//! [`update_addons_with`] rifà il controllo e chiede a ogni fonte di aggiornare i suoi progetti.
 //! CurseForge è [`CurseForgeSource`]: [`evaluate`] è pura, riceve la scansione, la risposta dei
 //! fingerprint e i mod, e non usa né rete né disco.
 
@@ -11,6 +11,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::addons::cache::FingerprintCache;
 use crate::addons::scan::{self, InstalledAddon};
 use crate::install;
 use crate::installations::Installation;
@@ -280,21 +281,33 @@ fn is_newer(candidate: &File, installed: &File) -> bool {
 /// fonte che fallisce non ferma le altre: le cartelle che le erano state offerte e che nessuno
 /// ha reclamato riportano il suo errore. Se falliscono tutte, l'errore è quello della prima.
 /// Bloccante: va chiamata fuori dal thread principale.
+#[cfg(test)]
 pub fn check_updates(
     installation: &Installation,
     sources: &[&dyn Source],
     records: &SourceRecords,
 ) -> Result<Vec<AddonUpdate>, String> {
-    scan_and_check(installation, sources, records).map(|(_, updates)| updates)
+    check_updates_with(installation, None, sources, records)
 }
 
-/// Come [`check_updates`], ma restituisce anche la scansione.
+/// Come `check_updates`, con i fingerprint della scansione presi da `cache` (issue #125).
+pub fn check_updates_with(
+    installation: &Installation,
+    cache: Option<&FingerprintCache>,
+    sources: &[&dyn Source],
+    records: &SourceRecords,
+) -> Result<Vec<AddonUpdate>, String> {
+    scan_and_check(installation, cache, sources, records).map(|(_, updates)| updates)
+}
+
+/// Come `check_updates`, ma restituisce anche la scansione.
 fn scan_and_check(
     installation: &Installation,
+    cache: Option<&FingerprintCache>,
     sources: &[&dyn Source],
     records: &SourceRecords,
 ) -> Result<(Vec<InstalledAddon>, Vec<AddonUpdate>), String> {
-    let addons = scan::scan_addons(&installation.path, &installation.flavor)?;
+    let addons = scan::scan_addons_with(&installation.path, &installation.flavor, cache)?;
     let no_records = ProjectRecords::new();
     // Cartella (in minuscolo) → la fonte del record che la nomina. Una cartella nei record di
     // più fonti non appartiene a nessuna.
@@ -544,13 +557,35 @@ impl UpdateOutcome {
 }
 
 /// Aggiorna i progetti `projects` di un'installazione. Rifà il controllo con le stesse fonti di
-/// [`check_updates`] invece di fidarsi del frontend, poi passa ogni progetto alla sua fonte. Un
+/// `check_updates` invece di fidarsi del frontend, poi passa ogni progetto alla sua fonte. Un
 /// errore su un progetto non ferma gli altri; un progetto ripetuto si aggiorna una volta sola.
 /// Bloccante.
 ///
 /// Restituisce `Err` solo se il controllo iniziale fallisce: in quel caso non si tocca niente.
+#[cfg(test)]
 pub fn update_addons(
     installation: &Installation,
+    sources: &[&dyn Source],
+    records: &SourceRecords,
+    projects: &[ProjectKey],
+    record: &mut RecordWriter<'_>,
+    progress: &ProgressSink<'_>,
+) -> Result<Vec<UpdateOutcome>, String> {
+    update_addons_with(
+        installation,
+        None,
+        sources,
+        records,
+        projects,
+        record,
+        progress,
+    )
+}
+
+/// Come `update_addons`, con i fingerprint del controllo iniziale presi da `cache`.
+pub fn update_addons_with(
+    installation: &Installation,
+    cache: Option<&FingerprintCache>,
     sources: &[&dyn Source],
     records: &SourceRecords,
     projects: &[ProjectKey],
@@ -564,7 +599,7 @@ pub fn update_addons(
     for project in projects.iter().filter(|p| announced.insert(*p)) {
         Reporter::new(progress, Some(project.source), &project.key, "").phase(Phase::Checking);
     }
-    let (addons, updates) = scan_and_check(installation, sources, records)?;
+    let (addons, updates) = scan_and_check(installation, cache, sources, records)?;
     let addons_dir = installation.path.join("Interface").join("AddOns");
     let mut seen = HashSet::new();
     Ok(projects
