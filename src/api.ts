@@ -60,6 +60,12 @@ export type InstalledAddon = {
  */
 export type InstalledProject = { id: number; folders: string[] };
 
+/**
+ * Esito di `install_zip` (D32): le cartelle dello zip ora in `AddOns` e quelle che esistevano
+ * già con lo stesso nome e sono state sostituite, con il nome che avevano sul disco.
+ */
+export type LocalInstall = { installed: string[]; replaced: string[] };
+
 export type FileSummary = { id: number; name: string; date: string };
 
 export type Project = {
@@ -226,6 +232,9 @@ export const api = {
   /** `fileId` assente: l'ultimo Release per la versione del gioco del progetto. */
   installAddon: (installationId: string, modId: number, fileId?: number) =>
     invoke<InstallOutcome[]>("install_addon", { installationId, modId, fileId: fileId ?? null }),
+  /** `path` è il percorso dello zip trascinato o scelto: il file lo legge il backend. */
+  installZip: (installationId: string, path: string) =>
+    invoke<LocalInstall>("install_zip", { installationId, path }),
   listCategories: () => invoke<CatalogCategory[]>("list_categories"),
   getSettings: () => invoke<AppSettings>("get_settings"),
   /** Un valore sconosciuto è rifiutato dal backend. */
