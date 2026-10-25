@@ -444,6 +444,16 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
     }
 
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome {
+        // Senza chiave il controllo è fallito e il progetto non è tra quelli riconosciuti: il
+        // motivo vero è la chiave, non "non trovato".
+        if !self.client.has_key() {
+            return UpdateOutcome::error(
+                SourceKind::Curseforge,
+                target.key,
+                "",
+                CurseForgeError::MissingKey.to_string(),
+            );
+        }
         let Ok(mod_id) = target.key.parse::<u32>() else {
             return UpdateOutcome::skipped(
                 SourceKind::Curseforge,
@@ -2146,6 +2156,126 @@ mod tests {
             assert_eq!(
                 check_updates(&fx.installation, &[&first, &second], &SourceRecords::new()),
                 Err("first".to_owned())
+            );
+        }
+
+        /// CurseForge senza chiave, come nell'app senza `CURSEFORGE_API_KEY` (#123).
+        fn keyless() -> CurseForgeClient<Routes> {
+            CurseForgeClient::new(Routes::default(), None)
+        }
+
+        fn missing_key() -> String {
+            CurseForgeError::MissingKey.to_string()
+        }
+
+        #[test]
+        fn without_a_key_the_free_sources_still_check() {
+            let fx = fixture(&[("Alpha", "a"), ("ElvUI", "e")]);
+            let client = keyless();
+            let overrides = no_overrides();
+            let curseforge = CurseForgeSource {
+                client: &client,
+                overrides: &overrides,
+            };
+            let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
+            let updates = check_updates(
+                &fx.installation,
+                &[&curseforge, &tukui],
+                &SourceRecords::new(),
+            )
+            .unwrap();
+            assert_eq!(updates[1].source, Some(SourceKind::Tukui));
+            assert_eq!(updates[1].status, UpdateStatus::UpToDate);
+            // La cartella che nessuna fonte libera riconosce dice perché.
+            assert_eq!(updates[0].source, None);
+            assert_eq!(
+                updates[0].status,
+                UpdateStatus::Error {
+                    message: format!("CurseForge check failed: {}", missing_key())
+                }
+            );
+        }
+
+        #[test]
+        fn without_a_key_free_projects_update_and_curseforge_ones_say_why() {
+            let fx = fixture(&[("Alpha", "a"), ("ElvUI", "e")]);
+            let client = keyless();
+            let overrides = no_overrides();
+            let curseforge = CurseForgeSource {
+                client: &client,
+                overrides: &overrides,
+            };
+            let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
+            let mut written = Vec::new();
+            let outcomes = update_addons(
+                &fx.installation,
+                &[&curseforge, &tukui],
+                &SourceRecords::new(),
+                &[
+                    ProjectKey {
+                        source: SourceKind::Curseforge,
+                        key: "1".to_owned(),
+                    },
+                    ProjectKey {
+                        source: SourceKind::Tukui,
+                        key: "ElvUI-key".to_owned(),
+                    },
+                ],
+                &mut |source, key, _| {
+                    written.push((source, key.to_owned()));
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(written, [(SourceKind::Tukui, "ElvUI-key".to_owned())]);
+            assert_eq!(outcomes[0].status, OutcomeStatus::Error);
+            assert_eq!(outcomes[0].message, Some(missing_key()));
+            assert_eq!(outcomes[1].message.as_deref(), Some("fake"));
+        }
+
+        #[test]
+        fn without_a_key_a_folder_recorded_for_curseforge_stays_with_curseforge() {
+            // D33: il record dice da dove l'app ha installato la cartella, e vince anche
+            // quando quella fonte non può controllare. Darla a Tukui farebbe aggiornare da
+            // un'altra fonte un progetto installato da CurseForge.
+            let fx = fixture(&[("ElvUI", "e")]);
+            let client = keyless();
+            let overrides = no_overrides();
+            let curseforge = CurseForgeSource {
+                client: &client,
+                overrides: &overrides,
+            };
+            let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
+            let records = record_of(SourceKind::Curseforge, "1", &["ElvUI"]);
+            let updates =
+                check_updates(&fx.installation, &[&curseforge, &tukui], &records).unwrap();
+            assert!(tukui.offered().is_empty());
+            assert_eq!(updates[0].source, None);
+            assert_eq!(
+                updates[0].status,
+                UpdateStatus::Error {
+                    message: format!("CurseForge check failed: {}", missing_key())
+                }
+            );
+        }
+
+        #[test]
+        fn without_a_key_and_with_tukui_down_the_check_fails() {
+            let fx = fixture(&[("Alpha", "a")]);
+            let client = keyless();
+            let overrides = no_overrides();
+            let curseforge = CurseForgeSource {
+                client: &client,
+                overrides: &overrides,
+            };
+            let tukui = FakeSource::failing(SourceKind::Tukui, "network down");
+            assert_eq!(
+                check_updates(
+                    &fx.installation,
+                    &[&curseforge, &tukui],
+                    &SourceRecords::new()
+                ),
+                Err(missing_key())
             );
         }
 

@@ -219,7 +219,7 @@ pub async fn list_addons(
     .map_err(|error| format!("Reading the addons was interrupted ({error})."))?
 }
 
-/// Riconosce gli addon su CurseForge e indica quali hanno un aggiornamento. Scansione e rete
+/// Riconosce gli addon con le fonti (D33) e indica quali hanno un aggiornamento. Scansione e rete
 /// girano fuori dal thread principale.
 #[tauri::command]
 pub async fn check_updates(
@@ -229,17 +229,16 @@ pub async fn check_updates(
     installed: Installed<'_>,
     config: State<'_, Config>,
 ) -> Result<Vec<AddonUpdate>, String> {
-    let key = config
-        .curseforge_api_key
-        .clone()
-        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    // Senza chiave CurseForge non controlla niente, ma le fonti libere sì (D31): le cartelle
+    // che nessuna riconosce riportano il motivo.
+    let key = config.curseforge_api_key.clone();
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let records = records_for_matching(&installed, &installation.id);
     tauri::async_runtime::spawn_blocking(move || {
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let client = CurseForgeClient::new(transport, Some(key));
+        let client = CurseForgeClient::new(transport, key);
         let curseforge = CurseForgeSource {
             client: &client,
             overrides: &overrides,
@@ -268,10 +267,9 @@ pub async fn update_addons(
     installed: Installed<'_>,
     config: State<'_, Config>,
 ) -> Result<Vec<UpdateOutcome>, String> {
-    let key = config
-        .curseforge_api_key
-        .clone()
-        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    // Senza chiave CurseForge non controlla niente, ma le fonti libere sì (D31): le cartelle
+    // che nessuna riconosce riportano il motivo.
+    let key = config.curseforge_api_key.clone();
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let records = records_for_matching(&installed, &installation.id);
@@ -288,7 +286,7 @@ pub async fn update_addons(
         let _held = lock.hold();
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let client = CurseForgeClient::new(transport, Some(key));
+        let client = CurseForgeClient::new(transport, key);
         let curseforge = CurseForgeSource {
             client: &client,
             overrides: &overrides,
