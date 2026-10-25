@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::addons::scan::{self, ListedAddon};
 use crate::backup::{self, BackupInfo};
@@ -14,6 +14,7 @@ use crate::discovery::{self, DiscoveredInstallation};
 use crate::install_local::{self, LocalInstall};
 use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
+use crate::progress::{self, Progress, ProgressEvent};
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
 use crate::sources::http::PublicReqwestTransport;
 use crate::sources::tukui::{self, TukuiSource};
@@ -303,10 +304,25 @@ pub async fn update_addons(
             &mut |source, key, record| {
                 locked_installed(&installed)?.record_source(&installation.id, source, key, record)
             },
+            &emit_progress(&app, &installation.id),
         )
     })
     .await
     .map_err(|error| format!("The update was interrupted ({error})."))?
+}
+
+/// Consegna gli avanzamenti di un'installazione alla finestra come evento
+/// [`progress::EVENT`] (issue #127). Un evento che non parte non ferma l'installazione.
+fn emit_progress<'a>(app: &'a AppHandle, installation_id: &'a str) -> impl Fn(Progress) + 'a {
+    move |progress| {
+        let _ = app.emit(
+            progress::EVENT,
+            ProgressEvent {
+                installation_id,
+                progress,
+            },
+        );
+    }
 }
 
 /// La fonte Tukui (D31), senza chiave. Va creata fuori dal runtime asincrono, come il client
@@ -369,6 +385,7 @@ pub async fn install_addon(
             &mut |mod_id, record| {
                 locked_installed(&installed)?.record(&installation.id, mod_id, record)
             },
+            &emit_progress(&app, &installation.id),
         ))
     })
     .await
@@ -392,7 +409,11 @@ pub async fn install_zip(
         let lock = app.state::<InstallLock>();
         let _held = lock.hold();
         let addons_dir = installation.path.join("Interface").join("AddOns");
-        let mut result = install_local::install_zip(&addons_dir, Path::new(&path))?;
+        let mut result = install_local::install_zip(
+            &addons_dir,
+            Path::new(&path),
+            &emit_progress(&app, &installation.id),
+        )?;
         // Un record che nomina una cartella appena scritta descriverebbe un file che non c'è più
         // (D32, D33): si toglie. Valgono tutte le cartelle dello zip, non solo quelle sostituite:
         // un record può nominare una cartella cancellata a mano e ora ricreata dallo zip.

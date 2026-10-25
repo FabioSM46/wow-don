@@ -52,6 +52,17 @@ pub fn read_limited(
     max_len: u64,
     declared: Option<u64>,
 ) -> Result<Vec<u8>, TransportError> {
+    read_limited_with(reader, max_len, declared, &mut |_| {})
+}
+
+/// Come [`read_limited`], e dopo ogni blocco aggiunto chiama `on_read` con i byte letti finora
+/// (issue #127). Limiti ed errori sono gli stessi.
+pub fn read_limited_with(
+    reader: &mut impl Read,
+    max_len: u64,
+    declared: Option<u64>,
+    on_read: &mut ReadProgress<'_>,
+) -> Result<Vec<u8>, TransportError> {
     let limit = usize::try_from(max_len).unwrap_or(usize::MAX);
     let initial = declared.map_or(0, |len| usize::try_from(len).unwrap_or(limit).min(limit));
     let mut body = Vec::with_capacity(initial);
@@ -75,8 +86,15 @@ pub fn read_limited(
             body.reserve_exact(target - body.len());
         }
         body.extend_from_slice(&chunk[..read]);
+        on_read(body.len() as u64);
     }
 }
+
+/// Riceve i byte letti finora da [`read_limited_with`].
+pub type ReadProgress<'a> = dyn FnMut(u64) + 'a;
+
+/// Riceve i byte scaricati finora e quelli dichiarati dal server, se li dichiara.
+pub type DownloadProgress<'a> = dyn FnMut(u64, Option<u64>) + 'a;
 
 pub trait PublicTransport: Send + Sync {
     /// Una risposta JSON, al massimo [`MAX_JSON_BYTES`]: oltre, [`TransportError::TooLarge`].
@@ -85,6 +103,19 @@ pub trait PublicTransport: Send + Sync {
     /// senza tenerne in memoria più di `max_len`. Chi chiama valida l'URL con
     /// [`is_allowed_url`]; il trasporto reale applica la stessa regola ai redirect.
     fn get_bytes(&self, url: &str, max_len: u64) -> Result<BytesResponse, TransportError>;
+    /// Come [`get_bytes`](Self::get_bytes), riportando a `progress` i byte scaricati. Senza una
+    /// versione propria il trasporto riporta solo la fine.
+    fn get_bytes_with_progress(
+        &self,
+        url: &str,
+        max_len: u64,
+        progress: &mut DownloadProgress<'_>,
+    ) -> Result<BytesResponse, TransportError> {
+        let response = self.get_bytes(url, max_len)?;
+        let len = response.body.len() as u64;
+        progress(len, Some(len));
+        Ok(response)
+    }
 }
 
 /// Il trasporto reale: `reqwest` bloccante con TLS `rustls`, che segue i redirect solo verso i
@@ -131,15 +162,36 @@ impl PublicTransport for PublicReqwestTransport {
     }
 
     fn get_bytes(&self, url: &str, max_len: u64) -> Result<BytesResponse, TransportError> {
-        let mut response = self.client.get(url).send().map_err(transport_error)?;
-        let status = response.status().as_u16();
-        let declared = response.content_length();
-        if declared.is_some_and(|len| len > max_len) {
-            return Err(TransportError::TooLarge);
-        }
-        let body = read_limited(&mut response, max_len, declared)?;
-        Ok(BytesResponse { status, body })
+        self.get_bytes_with_progress(url, max_len, &mut |_, _| {})
     }
+
+    fn get_bytes_with_progress(
+        &self,
+        url: &str,
+        max_len: u64,
+        progress: &mut DownloadProgress<'_>,
+    ) -> Result<BytesResponse, TransportError> {
+        download(self.client.get(url), max_len, progress)
+    }
+}
+
+/// Invia la richiesta di un download e ne legge il corpo con [`read_limited_with`], riportando
+/// a `progress` i byte ricevuti e il `Content-Length`. Comune ai trasporti reali.
+pub fn download(
+    request: reqwest::blocking::RequestBuilder,
+    max_len: u64,
+    progress: &mut DownloadProgress<'_>,
+) -> Result<BytesResponse, TransportError> {
+    let mut response = request.send().map_err(transport_error)?;
+    let status = response.status().as_u16();
+    let declared = response.content_length();
+    if declared.is_some_and(|len| len > max_len) {
+        return Err(TransportError::TooLarge);
+    }
+    let body = read_limited_with(&mut response, max_len, declared, &mut |received| {
+        progress(received, declared)
+    })?;
+    Ok(BytesResponse { status, body })
 }
 
 /// Un URL ammesso: `https`, senza credenziali né porta esplicita, verso uno dei `domains` o un
@@ -166,6 +218,31 @@ mod tests {
 
     fn allowed(url: &str) -> bool {
         is_allowed_url(&reqwest::Url::parse(url).unwrap(), &["tukui.org"])
+    }
+
+    #[test]
+    fn reading_reports_the_bytes_read_after_each_chunk() {
+        // Un lettore che consegna 100 KiB a pezzi da 40 KiB.
+        struct Chunks(Vec<u8>, usize);
+        impl Read for Chunks {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let n = (self.0.len() - self.1).min(40 * 1024).min(buf.len());
+                buf[..n].copy_from_slice(&self.0[self.1..self.1 + n]);
+                self.1 += n;
+                Ok(n)
+            }
+        }
+        let mut reader = Chunks(vec![7; 100 * 1024], 0);
+        let mut seen = Vec::new();
+        let body = read_limited_with(&mut reader, 200 * 1024, None, &mut |n| seen.push(n)).unwrap();
+        assert_eq!(body.len(), 100 * 1024);
+        assert_eq!(seen, [40 * 1024, 80 * 1024, 100 * 1024]);
+        // Oltre il limite si ferma come prima, senza riportare il blocco di troppo.
+        let mut reader = Chunks(vec![7; 100 * 1024], 0);
+        let mut seen = Vec::new();
+        let error = read_limited_with(&mut reader, 50 * 1024, None, &mut |n| seen.push(n));
+        assert_eq!(error.unwrap_err(), TransportError::TooLarge);
+        assert_eq!(seen, [40 * 1024]);
     }
 
     #[test]

@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 use crate::addons::scan::InstalledAddon;
 use crate::installations::Installation;
+use crate::progress::ProgressSink;
 use crate::store::{ProjectRecords, SourceRecord};
 use crate::updates::{AddonUpdate, UpdateOutcome};
 
@@ -40,6 +41,8 @@ pub struct UpdateTarget<'a> {
     pub addons: &'a [InstalledAddon],
     /// Il controllo di tutte le fonti, una voce per cartella.
     pub updates: &'a [AddonUpdate],
+    /// Dove riportare download, estrazione e installazione del progetto (issue #127).
+    pub progress: &'a ProgressSink<'a>,
 }
 
 /// Scrive in `installed-addons.json` quello che una fonte ha appena installato.

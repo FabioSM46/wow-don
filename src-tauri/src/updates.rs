@@ -14,6 +14,7 @@ use serde::Serialize;
 use crate::addons::scan::{self, InstalledAddon};
 use crate::install;
 use crate::installations::Installation;
+use crate::progress::{Phase, ProgressSink, Reporter};
 use crate::sources::curseforge::{
     CurseForgeClient, CurseForgeError, File, FileModule, FingerprintMatch, FingerprintMatches, Mod,
     RELEASE_TYPE_RELEASE, Transport,
@@ -544,7 +545,14 @@ pub fn update_addons(
     records: &SourceRecords,
     projects: &[ProjectKey],
     record: &mut RecordWriter<'_>,
+    progress: &ProgressSink<'_>,
 ) -> Result<Vec<UpdateOutcome>, String> {
+    // Il controllo vale per tutti i progetti richiesti: ognuno è in `checking` finché non tocca
+    // a lui.
+    let mut announced = HashSet::new();
+    for project in projects.iter().filter(|p| announced.insert(*p)) {
+        Reporter::new(progress, Some(project.source), &project.key, "").phase(Phase::Checking);
+    }
     let (addons, updates) = scan_and_check(installation, sources, records)?;
     let addons_dir = installation.path.join("Interface").join("AddOns");
     let mut seen = HashSet::new();
@@ -565,6 +573,7 @@ pub fn update_addons(
                 addons_dir: &addons_dir,
                 addons: &addons,
                 updates: &updates,
+                progress,
             };
             source.update(&target, record)
         })
@@ -621,7 +630,15 @@ fn update_project<T: Transport>(
         );
     }
     let old_modules = removable_modules(target.addons, target.updates, installed);
-    let folders = match install_file(client, &file, target.addons_dir, &old_modules, &|_| Ok(())) {
+    let reporter = Reporter::new(target.progress, Some(CF), key, name);
+    let folders = match install_file(
+        client,
+        &file,
+        target.addons_dir,
+        &old_modules,
+        &|_| Ok(()),
+        &reporter,
+    ) {
         Ok(folders) => folders,
         Err(message) => return UpdateOutcome::error(CF, key, name, message),
     };
@@ -700,9 +717,16 @@ pub(crate) fn install_file<T: Transport>(
     addons_dir: &Path,
     old_modules: &[String],
     check: &dyn Fn(&[String]) -> Result<(), String>,
+    reporter: &Reporter<'_>,
 ) -> Result<Vec<String>, String> {
-    let bytes = client.download(file).map_err(|e| e.to_string())?;
-    install_bytes(&bytes, addons_dir, old_modules, check)
+    reporter.download(0, None);
+    let bytes = client
+        .download_with_progress(file, &mut |received, total| {
+            reporter.download(received, total)
+        })
+        .map_err(|e| e.to_string())?;
+    reporter.downloaded(bytes.len() as u64);
+    install_bytes(&bytes, addons_dir, old_modules, check, reporter)
 }
 
 /// Estrae lo zip `bytes` in staging e sostituisce le cartelle, come [`install_file`] dopo il
@@ -712,10 +736,13 @@ pub(crate) fn install_bytes(
     addons_dir: &Path,
     old_modules: &[String],
     check: &dyn Fn(&[String]) -> Result<(), String>,
+    reporter: &Reporter<'_>,
 ) -> Result<Vec<String>, String> {
+    reporter.phase(Phase::Extracting);
     let staging = install::WorkDir::staging(addons_dir)?;
     let folders = install::extract(bytes, staging.path())?;
     check(&folders)?;
+    reporter.phase(Phase::Installing);
     let new: HashSet<String> = folders.iter().map(|f| f.to_lowercase()).collect();
     let obsolete: Vec<String> = old_modules
         .iter()
@@ -729,6 +756,7 @@ pub(crate) fn install_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress;
     use crate::store::InstalledRecord;
 
     /// `check_updates` con la sola fonte CurseForge e senza record, come prima di D12.
@@ -773,6 +801,7 @@ mod tests {
                     },
                 )
             },
+            &progress::ignore,
         )
     }
     use crate::addons::toc::TocInfo;
@@ -2176,6 +2205,7 @@ mod tests {
                     written.push((source, key.to_owned()));
                     Ok(())
                 },
+                &crate::progress::ignore,
             )
             .unwrap();
             // Il progetto ripetuto si aggiorna una volta; la fonte assente salta.
