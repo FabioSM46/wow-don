@@ -362,9 +362,15 @@ pub fn folder_fingerprint(addon_dir: &Path) -> Option<u32> {
             .clone()
     };
     let selected = select_files(folder, &files, bytes_of);
+    // Ogni file si calcola e si lascia andare: i `.toc` e gli `.xml` letti per le inclusioni
+    // escono dalla cache, i `.lua` si leggono qui e non ci entrano. In memoria resta un file
+    // alla volta, non l'addon intero (la scansione calcola più cartelle in parallelo).
     let hashes: Vec<u32> = selected
         .iter()
-        .filter_map(|relative| bytes_of(relative))
+        .filter_map(|relative| match cache.borrow_mut().remove(relative) {
+            Some(cached) => cached,
+            None => fs::read(addons_dir.join(relative)).ok().map(Rc::from),
+        })
         .map(|bytes| curse_hash(&bytes))
         .collect();
     if hashes.is_empty() {

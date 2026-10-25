@@ -111,6 +111,7 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
 fn read_addons(folders: Vec<Folder>, flavor: &str) -> Vec<InstalledAddon> {
     let threads = thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)
+        .min(MAX_SCAN_THREADS)
         .min(folders.len());
     let results: Vec<Mutex<Option<InstalledAddon>>> =
         folders.iter().map(|_| Mutex::new(None)).collect();
@@ -141,6 +142,11 @@ fn read_addons(folders: Vec<Folder>, flavor: &str) -> Vec<InstalledAddon> {
         .filter_map(|result| result.into_inner().unwrap_or_else(PoisonError::into_inner))
         .collect()
 }
+
+/// Thread della scansione al massimo. Il lavoro è soprattutto lettura dal disco, quindi oltre
+/// questa soglia non si guadagna; e ogni thread tiene in memoria il file che sta calcolando
+/// (fino a decine di MB per alcuni `.toc`), quindi la soglia limita anche il picco di memoria.
+const MAX_SCAN_THREADS: usize = 8;
 
 /// Una cartella da leggere: percorso, nome e data di modifica in millisecondi.
 type Folder = (PathBuf, String, Option<u64>);
