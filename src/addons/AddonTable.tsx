@@ -874,6 +874,15 @@ function UpdateCell({ update, checking, updating, progress, disabled, onUpdate }
           Up to date
         </td>
       );
+    case "betaOnly":
+      return (
+        <td
+          className="muted"
+          title={`${installedTitle(update) ?? ""}\nOnly a beta is newer: ${update.latest.name}. Turn on "Use beta files when there is no release" in Options to update to it.`.trim()}
+        >
+          Only beta files
+        </td>
+      );
     case "error":
       return <td className="error">{update.message}</td>;
     case "notMatched":

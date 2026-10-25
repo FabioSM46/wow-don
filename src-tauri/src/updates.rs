@@ -18,7 +18,7 @@ use crate::installations::Installation;
 use crate::progress::{Phase, ProgressSink, Reporter};
 use crate::sources::curseforge::{
     CurseForgeClient, CurseForgeError, File, FileModule, FingerprintMatch, FingerprintMatches, Mod,
-    RELEASE_TYPE_RELEASE, Transport,
+    Transport, pick_file,
 };
 use crate::sources::{ProjectKey, RecordWriter, Source, SourceKind, UpdateTarget};
 use crate::store::{InstalledRecords, ProjectRecords, SourceRecord, SourceRecords};
@@ -142,8 +142,17 @@ pub struct Project {
 pub enum UpdateStatus {
     NotMatched,
     UpToDate,
-    UpdateAvailable { latest: FileSummary },
-    Error { message: String },
+    UpdateAvailable {
+        latest: FileSummary,
+    },
+    /// Per la versione non c'è una Release più recente, ma una Beta sì, e l'opzione "Beta
+    /// quando non c'è una Release" è spenta (issue #141).
+    BetaOnly {
+        latest: FileSummary,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -172,13 +181,28 @@ pub struct AddonUpdate {
 }
 
 /// Abbina e valuta. `version_type` è il `gameVersionTypeId` dell'installazione; `overrides`
-/// lo sostituisce per i progetti che hanno una versione forzata.
+/// lo sostituisce per i progetti che hanno una versione forzata. Senza Beta (vedi
+/// [`evaluate_with`]).
+#[cfg(test)]
 pub fn evaluate(
     addons: &[InstalledAddon],
     matches: &FingerprintMatches,
     mods: &[Mod],
     version_type: u32,
     overrides: &VersionOverrides,
+) -> Vec<AddonUpdate> {
+    evaluate_with(addons, matches, mods, version_type, overrides, false)
+}
+
+/// Come `evaluate`; con `allow_beta` il file più recente può essere una Beta quando la versione
+/// non ha una Release (issue #141).
+pub fn evaluate_with(
+    addons: &[InstalledAddon],
+    matches: &FingerprintMatches,
+    mods: &[Mod],
+    version_type: u32,
+    overrides: &VersionOverrides,
+    allow_beta: bool,
 ) -> Vec<AddonUpdate> {
     // Ogni fingerprint di cartella → il match del progetto che la contiene. Prima i match
     // parziali (il primo file che contiene il fingerprint), poi gli esatti, che li
@@ -236,11 +260,20 @@ pub fn evaluate(
             update.project_folders = found.file.modules.iter().map(|m| m.name.clone()).collect();
             update.version_override = overrides.get(&found.id).copied();
             let target = update.version_override.unwrap_or(version_type);
-            update.status = match newest_release(found, target) {
+            update.status = match newest_file(found, target, allow_beta) {
                 Some(latest) if is_newer(latest, &found.file) => UpdateStatus::UpdateAvailable {
                     latest: FileSummary::from(latest),
                 },
-                _ => UpdateStatus::UpToDate,
+                Some(_) => UpdateStatus::UpToDate,
+                // Senza Release: se una Beta più recente c'è, lo si dice invece di "aggiornato".
+                None => match newest_file(found, target, true) {
+                    Some(beta) if !allow_beta && is_newer(beta, &found.file) => {
+                        UpdateStatus::BetaOnly {
+                            latest: FileSummary::from(beta),
+                        }
+                    }
+                    _ => UpdateStatus::UpToDate,
+                },
             };
             update
         })
@@ -253,15 +286,20 @@ fn for_version_type(file: &File, version_type: u32) -> bool {
         .any(|v| v.game_version_type_id == Some(version_type))
 }
 
-/// Il file Release più recente per il tipo di versione, tra quelli che CurseForge indica come
-/// ultimi per il progetto.
-fn newest_release(found: &FingerprintMatch, version_type: u32) -> Option<&File> {
-    found
+/// Il file più recente per il tipo di versione, tra quelli che CurseForge indica come ultimi per
+/// il progetto, con la regola di [`pick_file`] (una Beta solo con `allow_beta`).
+fn newest_file(found: &FingerprintMatch, version_type: u32, allow_beta: bool) -> Option<&File> {
+    let candidates = found
         .latest_files
         .iter()
-        .filter(|f| f.release_type == RELEASE_TYPE_RELEASE && f.is_available)
-        .filter(|f| for_version_type(f, version_type))
-        .max_by(|a, b| a.file_date.cmp(&b.file_date).then(a.id.cmp(&b.id)))
+        .filter(|f| f.is_available)
+        .filter(|f| for_version_type(f, version_type));
+    pick_file(
+        candidates,
+        |f| f.release_type,
+        |f| (f.file_date.as_str(), f.id),
+        allow_beta,
+    )
 }
 
 /// Le date sono ISO 8601 in UTC, quindi il confronto come testo segue il tempo; a parità di
@@ -461,6 +499,8 @@ fn unclaimed(addon: &InstalledAddon, status: UpdateStatus) -> AddonUpdate {
 pub struct CurseForgeSource<'a, T: Transport> {
     pub client: &'a CurseForgeClient<T>,
     pub overrides: &'a VersionOverrides,
+    /// L'opzione "Beta quando non c'è una Release" (issue #141).
+    pub allow_beta: bool,
 }
 
 impl<T: Transport> Source for CurseForgeSource<'_, T> {
@@ -494,12 +534,13 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
         mod_ids.sort_unstable();
         mod_ids.dedup();
         let mods = self.client.get_mods(&mod_ids).map_err(|e| e.to_string())?;
-        Ok(evaluate(
+        Ok(evaluate_with(
             offered,
             &matches,
             &mods,
             version_type,
             self.overrides,
+            self.allow_beta,
         ))
     }
 
@@ -857,7 +898,11 @@ mod tests {
         client: &CurseForgeClient<T>,
         overrides: &VersionOverrides,
     ) -> Result<Vec<AddonUpdate>, String> {
-        let source = CurseForgeSource { client, overrides };
+        let source = CurseForgeSource {
+            client,
+            overrides,
+            allow_beta: false,
+        };
         check_updates(installation, &[&source], &SourceRecords::new())
     }
 
@@ -870,7 +915,11 @@ mod tests {
         mod_ids: &[u32],
         record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
     ) -> Result<Vec<UpdateOutcome>, String> {
-        let source = CurseForgeSource { client, overrides };
+        let source = CurseForgeSource {
+            client,
+            overrides,
+            allow_beta: false,
+        };
         let projects: Vec<ProjectKey> = mod_ids
             .iter()
             .map(|id| ProjectKey {
@@ -1024,7 +1073,7 @@ mod tests {
     }
 
     #[test]
-    fn betas_and_other_game_versions_are_ignored() {
+    fn betas_and_other_game_versions_are_not_updates() {
         let found = FingerprintMatch {
             id: 7,
             file: file(10, "2026-09-01T00:00:00Z", 1, RETAIL, &[100]),
@@ -1040,7 +1089,58 @@ mod tests {
             RETAIL,
             &VersionOverrides::new(),
         );
-        assert_eq!(result[0].status, UpdateStatus::UpToDate);
+        // Senza l'opzione la Beta non è un aggiornamento, ma lo stato la nomina (issue #141).
+        assert!(
+            matches!(&result[0].status, UpdateStatus::BetaOnly { latest } if latest.id == 13),
+            "{:?}",
+            result[0].status
+        );
+    }
+
+    fn beta_match(latest_files: Vec<File>) -> FingerprintMatch {
+        FingerprintMatch {
+            id: 7,
+            // Il file installato è una Beta.
+            file: file(10, "2026-09-01T00:00:00Z", 2, FOREVER, &[100]),
+            latest_files,
+        }
+    }
+
+    fn evaluate_beta(found: FingerprintMatch, allow_beta: bool) -> UpdateStatus {
+        evaluate_with(
+            &[addon("Foo", Some(100))],
+            &matches(vec![found]),
+            &[project(7, Some(true))],
+            FOREVER,
+            &VersionOverrides::new(),
+            allow_beta,
+        )
+        .remove(0)
+        .status
+    }
+
+    #[test]
+    fn with_the_beta_option_a_newer_beta_is_an_update_and_a_release_still_wins() {
+        let only_beta = || beta_match(vec![file(13, "2026-10-02T00:00:00Z", 2, FOREVER, &[])]);
+        assert!(matches!(
+            evaluate_beta(only_beta(), true),
+            UpdateStatus::UpdateAvailable { latest } if latest.id == 13
+        ));
+        // Appena esiste una Release, anche più vecchia della Beta, l'aggiornamento è quella.
+        let with_release = beta_match(vec![
+            file(13, "2026-10-02T00:00:00Z", 2, FOREVER, &[]),
+            file(12, "2026-09-20T00:00:00Z", 1, FOREVER, &[]),
+        ]);
+        assert!(matches!(
+            evaluate_beta(with_release, true),
+            UpdateStatus::UpdateAvailable { latest } if latest.id == 12
+        ));
+        // L'Alpha non conta mai.
+        let alpha = beta_match(vec![file(15, "2026-10-05T00:00:00Z", 3, FOREVER, &[])]);
+        assert_eq!(evaluate_beta(alpha, true), UpdateStatus::UpToDate);
+        // La Beta installata è già la più recente.
+        let same = beta_match(vec![file(10, "2026-09-01T00:00:00Z", 2, FOREVER, &[])]);
+        assert_eq!(evaluate_beta(same, true), UpdateStatus::UpToDate);
     }
 
     #[test]
@@ -2360,6 +2460,7 @@ mod tests {
             let curseforge = CurseForgeSource {
                 client: &client,
                 overrides: &overrides,
+                allow_beta: false,
             };
             let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
             let updates = check_updates(
@@ -2388,6 +2489,7 @@ mod tests {
             let curseforge = CurseForgeSource {
                 client: &client,
                 overrides: &overrides,
+                allow_beta: false,
             };
             let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
             let mut written = Vec::new();
@@ -2429,6 +2531,7 @@ mod tests {
             let curseforge = CurseForgeSource {
                 client: &client,
                 overrides: &overrides,
+                allow_beta: false,
             };
             let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
             let records = record_of(SourceKind::Curseforge, "1", &["ElvUI"]);
@@ -2452,6 +2555,7 @@ mod tests {
             let curseforge = CurseForgeSource {
                 client: &client,
                 overrides: &overrides,
+                allow_beta: false,
             };
             let tukui = FakeSource::failing(SourceKind::Tukui, "network down");
             assert_eq!(

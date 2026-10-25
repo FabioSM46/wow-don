@@ -95,3 +95,14 @@ export function withInstalled<T extends Pick<CatalogAddon, "id" | "installed">>(
 ): T {
   return !addon.installed && installed.has(addon.id) ? { ...addon, installed: true } : addon;
 }
+
+/** `releaseType` dei file Beta di CurseForge. */
+const RELEASE_TYPE_BETA = 2;
+
+/**
+ * Il testo del pulsante di installazione: "Install beta" quando il file che l'app installerà è
+ * una Beta (solo con l'opzione, quando la versione non ha una Release; issue #141).
+ */
+export function installLabel(addon: Pick<CatalogAddon, "latestFile">): string {
+  return addon.latestFile?.releaseType === RELEASE_TYPE_BETA ? "Install beta" : "Install";
+}

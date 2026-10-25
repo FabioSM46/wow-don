@@ -11,7 +11,11 @@ export type AppStatus = {
 export type Theme = "system" | "light" | "dark";
 
 /** Le impostazioni dell'app salvate dal backend in `settings.json` (`get_settings`). */
-export type AppSettings = { theme: Theme };
+export type AppSettings = {
+  theme: Theme;
+  /** Installare e aggiornare alla Beta quando la versione non ha una Release (issue #141). */
+  betaWhenNoRelease: boolean;
+};
 
 export type Installation = {
   id: string;
@@ -102,6 +106,8 @@ export type AddonUpdate = {
   | { status: "notMatched" }
   | { status: "upToDate" }
   | { status: "updateAvailable"; latest: FileSummary }
+  /** Nessuna Release più recente, ma una Beta sì, con l'opzione della Beta spenta. */
+  | { status: "betaOnly"; latest: FileSummary }
   | { status: "error"; message: string }
 );
 
@@ -149,7 +155,8 @@ export type BackupInfo = {
 export type CatalogCategory = { id: number; name: string; parentCategoryId: number | null };
 
 /** L'ultimo file Release di un progetto per la versione del gioco della ricerca. */
-export type CatalogFile = { id: number; name: string; gameVersion: string };
+/** `releaseType` 1 Release, 2 Beta (solo con l'opzione della Beta, issue #141). */
+export type CatalogFile = { id: number; name: string; gameVersion: string; releaseType: number };
 
 /** Un addon del catalogo di CurseForge, come lo restituisce `search_catalog`. */
 export type CatalogAddon = {
@@ -275,6 +282,8 @@ export const api = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   /** Un valore sconosciuto è rifiutato dal backend. */
   setTheme: (theme: Theme) => invoke<AppSettings>("set_theme", { theme }),
+  setBetaWhenNoRelease: (enabled: boolean) =>
+    invoke<AppSettings>("set_beta_when_no_release", { enabled }),
 };
 
 /** I comandi rifiutano con il messaggio del backend; qualunque altra cosa diventa testo. */

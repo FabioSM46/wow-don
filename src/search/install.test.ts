@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { InstallOutcome } from "../api.ts";
-import { installedIds, summarizeInstall, withInstalled } from "./install.ts";
+import { installLabel, installedIds, summarizeInstall, withInstalled } from "./install.ts";
 
 const file = { id: 9, name: "Foo-1.0.zip", date: "2026-10-01T00:00:00Z" };
 
@@ -155,5 +155,31 @@ describe("installed state", () => {
     assert.equal(withInstalled(already, installed), already);
     const other = { id: 2, installed: false };
     assert.equal(withInstalled(other, installed), other);
+  });
+});
+
+describe("install label", () => {
+  const latest = (releaseType: number) => ({
+    latestFile: { id: 1, name: "a.zip", gameVersion: "1.60.1", releaseType },
+  });
+
+  it("says beta only when the file the app will install is a beta", () => {
+    assert.equal(installLabel(latest(1)), "Install");
+    assert.equal(installLabel(latest(2)), "Install beta");
+    assert.equal(installLabel({ latestFile: null }), "Install");
+  });
+
+  it("keeps the beta reason in the headline of an installed beta", () => {
+    const outcome: InstallOutcome = {
+      modId: 1,
+      name: "RareScanner",
+      status: "installed",
+      file,
+      message: "Installed the beta: there is no release for this game version.",
+    };
+    assert.equal(
+      summarizeInstall([outcome], { id: 1 }).headline,
+      "RareScanner installed. Installed the beta: there is no release for this game version.",
+    );
   });
 });
