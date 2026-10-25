@@ -230,6 +230,67 @@ pub async fn list_addons(
     .map_err(|error| format!("Reading the addons was interrupted ({error})."))?
 }
 
+/// La lista degli addon e i loro stati di aggiornamento da una sola scansione (issue #126):
+/// "Reload addons" e le riletture dopo un aggiornamento o un'installazione la usano al posto di
+/// `list_addons` seguito da `check_updates`. Un controllo fallito non toglie la lista, che arriva
+/// con `checkError`. `force` ricalcola i fingerprint come in `list_addons`.
+#[tauri::command]
+pub async fn refresh_addons(
+    installation_id: String,
+    force: Option<bool>,
+    app: AppHandle,
+    store: Store<'_>,
+    settings: Settings<'_>,
+    installed: Installed<'_>,
+    config: State<'_, Config>,
+) -> Result<updates::Refresh, String> {
+    let key = config.curseforge_api_key.clone();
+    let installation = find_installation(&store, &installation_id)?;
+    let overrides = overrides_for(&settings, &installation.id)?;
+    let records = records_for_matching(&installed, &installation.id);
+    // Come in `list_addons`: un registro illeggibile non nasconde gli addon.
+    let listed_records = locked_installed(&installed)?
+        .records_for(&installation.id)
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = app.state::<FingerprintCache>();
+        if force == Some(true) {
+            cache.forget_all(&installation.path.join("Interface").join("AddOns"));
+        }
+        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono. Se
+        // le connessioni non si preparano, la lista arriva lo stesso, con il motivo.
+        let prepared = ReqwestTransport::new()
+            .map_err(|e| e.to_string())
+            .and_then(|transport| Ok((transport, tukui_source()?)));
+        let (transport, tukui) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let addons =
+                    scan::scan_addons_with(&installation.path, &installation.flavor, Some(&cache))?;
+                return Ok(updates::Refresh {
+                    addons: scan::with_installed_projects(addons, &listed_records),
+                    updates: Vec::new(),
+                    check_error: Some(error),
+                });
+            }
+        };
+        let client = CurseForgeClient::new(transport, key);
+        let curseforge = CurseForgeSource {
+            client: &client,
+            overrides: &overrides,
+        };
+        updates::refresh_addons(
+            &installation,
+            Some(&cache),
+            &[&curseforge, &tukui],
+            &records,
+            &listed_records,
+        )
+    })
+    .await
+    .map_err(|error| format!("Reading the addons was interrupted ({error})."))?
+}
+
 /// Riconosce gli addon con le fonti (D33) e indica quali hanno un aggiornamento. Scansione e rete
 /// girano fuori dal thread principale.
 #[tauri::command]

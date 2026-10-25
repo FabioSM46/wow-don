@@ -210,6 +210,13 @@ export type CatalogSearch = {
   sortOrder: SortOrder;
 };
 
+/** Il risultato di `refresh_addons` (issue #126). */
+export type Refresh = {
+  addons: InstalledAddon[];
+  updates: AddonUpdate[];
+  checkError: string | null;
+};
+
 export const api = {
   appStatus: () => invoke<AppStatus>("app_status"),
   listInstallations: () => invoke<Installation[]>("list_installations"),
@@ -222,6 +229,9 @@ export const api = {
     invoke<InstalledAddon[]>("list_addons", { installationId, force }),
   checkUpdates: (installationId: string) =>
     invoke<AddonUpdate[]>("check_updates", { installationId }),
+  /** Lista e stati da una sola scansione; un controllo fallito arriva in `checkError`. */
+  refreshAddons: (installationId: string, force = false) =>
+    invoke<Refresh>("refresh_addons", { installationId, force }),
   /** `modIds` sono progetti CurseForge, `projects` quelli delle altre fonti. */
   updateAddons: (
     installationId: string,

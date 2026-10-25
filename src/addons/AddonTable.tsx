@@ -24,6 +24,7 @@ import {
 } from "./filter";
 import { SOURCE_LABELS, projectId, sourcesIn, updateRequest, type ProjectRef } from "./sources";
 import { ProgressBar, useInstallProgress } from "./ProgressBar";
+import { refreshCheck } from "./refresh";
 import {
   progressLabel,
   progressPercent,
@@ -165,13 +166,28 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
     const id = installation.id;
     setRescanning(true);
     setRescanError(null);
+    setChecking(true);
+    setCheckError(null);
+    // Una sola scansione per lista e stati (issue #126).
     return api
-      .listAddons(id, force)
-      .then((addons) => {
+      .refreshAddons(id, force)
+      .then((result) => {
+        const check = refreshCheck(result);
+        if (check.error === null) {
+          updatesCache.set(id, check.updates);
+          errorCache.delete(id);
+        } else {
+          errorCache.set(id, check.error);
+        }
         if (currentId.current !== id) return;
-        setLoad({ state: "ready", addons });
-        // Gli stati di aggiornamento si riferivano alla lista di prima: si ricontrolla.
-        return runCheck();
+        setLoad({ state: "ready", addons: result.addons });
+        if (check.error === null) {
+          setUpdates(byFolder(check.updates));
+        } else {
+          setCheckError(check.error);
+          // Senza nessun risultato il filtro non ha dati su cui agire: lo si toglie.
+          if (!updatesCache.has(id)) setFilters((f) => ({ ...f, onlyUpdates: false }));
+        }
       })
       .catch((err) => {
         if (currentId.current !== id) return;
@@ -182,7 +198,10 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
         setRescanError(errorMessage(err));
       })
       .finally(() => {
-        if (currentId.current === id) setRescanning(false);
+        if (currentId.current === id) {
+          setRescanning(false);
+          setChecking(false);
+        }
       });
   }
 
