@@ -85,6 +85,7 @@ pub fn run() {
             commands::list_backups,
             commands::get_settings,
             commands::set_theme,
+            commands::set_beta_when_no_release,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

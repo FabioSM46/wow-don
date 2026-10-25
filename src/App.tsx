@@ -9,6 +9,7 @@ import { describeZipInstall, fileName, pickZip } from "./addons/zip";
 import { Discovered } from "./installations/Discovered";
 import { Installations } from "./installations/Installations";
 import { Appearance } from "./options/Appearance";
+import { BetaOption } from "./options/BetaOption";
 import { applyTheme } from "./options/theme";
 import { Search } from "./search/Search";
 import "./App.css";
@@ -37,6 +38,8 @@ function App() {
   // Il tema salvato dal backend; finché non arriva vale quello del sistema (niente localStorage:
   // lo stato sta nel backend, un breve lampo all'avvio è accettato).
   const [theme, setTheme] = useState<Theme | null>(null);
+  // L'opzione della Beta (issue #141); `null` finché le impostazioni non sono lette.
+  const [betaWhenNoRelease, setBetaWhenNoRelease] = useState<boolean | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   // Installazione di uno zip trascinato o scelto (D32): una alla volta, con il suo esito.
   const [zipBusy, setZipBusy] = useState(false);
@@ -53,7 +56,10 @@ function App() {
   useEffect(() => {
     api
       .getSettings()
-      .then((settings) => setTheme(settings.theme))
+      .then((settings) => {
+        setTheme(settings.theme);
+        setBetaWhenNoRelease(settings.betaWhenNoRelease);
+      })
       .catch((err) => setSettingsError(errorMessage(err)));
     api
       .appStatus()
@@ -277,6 +283,7 @@ function App() {
               installation={active}
               active={tab === "search"}
               keyConfigured={status?.curseforgeKeyConfigured ?? null}
+              betaWhenNoRelease={betaWhenNoRelease}
               onInstalled={() => setInstalledStale(true)}
             />
           )}
@@ -313,6 +320,14 @@ function App() {
             />
           )}
           <Appearance theme={theme} loadError={settingsError} onChange={setTheme} />
+          <BetaOption
+            enabled={betaWhenNoRelease}
+            onChange={(enabled) => {
+              setBetaWhenNoRelease(enabled);
+              // Gli stati della tab Installed dipendono dall'opzione: si rileggono.
+              setInstalledStale(true);
+            }}
+          />
         </div>
       </main>
 

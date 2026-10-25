@@ -85,7 +85,24 @@ fn locked_app_settings(
         .map_err(|_| "Settings are not available: restart the app.".to_owned())
 }
 
-/// Le impostazioni dell'app (per ora il tema); senza `settings.json` valgono i default.
+/// L'opzione "Beta quando non c'è una Release" (issue #141). Un `settings.json` illeggibile non
+/// blocca ricerca, installazione e aggiornamenti: vale il default, cioè solo Release.
+fn beta_when_no_release(settings: &Mutex<AppSettingsStore>) -> bool {
+    locked_app_settings(settings)
+        .and_then(|store| store.get())
+        .is_ok_and(|settings| settings.beta_when_no_release)
+}
+
+/// Salva l'opzione "Beta quando non c'è una Release" e restituisce le impostazioni aggiornate.
+#[tauri::command]
+pub fn set_beta_when_no_release(
+    enabled: bool,
+    settings: AppSettingsState<'_>,
+) -> Result<AppSettings, String> {
+    locked_app_settings(&settings)?.set_beta_when_no_release(enabled)
+}
+
+/// Le impostazioni dell'app (tema e opzione della Beta); senza `settings.json` valgono i default.
 #[tauri::command]
 pub fn get_settings(settings: AppSettingsState<'_>) -> Result<AppSettings, String> {
     locked_app_settings(&settings)?.get()
@@ -250,6 +267,7 @@ pub async fn refresh_addons(
     let key = config.curseforge_api_key.clone();
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
+    let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
     let records = records_for_matching(&installed, &installation.id);
     // Come in `list_addons`: un registro illeggibile non nasconde gli addon.
     let listed_records = locked_installed(&installed)?
@@ -265,6 +283,7 @@ pub async fn refresh_addons(
             &cache,
             key,
             &overrides,
+            allow_beta,
             &records,
             &listed_records,
         )
@@ -279,6 +298,7 @@ fn refresh_blocking(
     cache: &FingerprintCache,
     key: Option<String>,
     overrides: &VersionOverrides,
+    allow_beta: bool,
     records: &SourceRecords,
     listed_records: &InstalledRecords,
 ) -> Result<updates::Refresh, String> {
@@ -303,6 +323,7 @@ fn refresh_blocking(
     let curseforge = CurseForgeSource {
         client: &client,
         overrides,
+        allow_beta,
     };
     updates::refresh_addons(
         installation,
@@ -335,11 +356,14 @@ pub async fn export_addons(
         .unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
         let cache = app.state::<FingerprintCache>();
+        // L'opzione della Beta cambia solo gli stati, non quali progetti si riconoscono.
+        let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
         let refresh = refresh_blocking(
             &installation,
             &cache,
             key,
             &overrides,
+            allow_beta,
             &records,
             &listed_records,
         )?;
@@ -377,11 +401,13 @@ pub async fn preview_import(
         .unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
         let cache = app.state::<FingerprintCache>();
+        let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
         let refresh = refresh_blocking(
             &installation,
             &cache,
             key.clone(),
             &overrides,
+            allow_beta,
             &records,
             &listed_records,
         )?;
@@ -432,6 +458,7 @@ pub async fn import_addons(
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         let settings = app.state::<Mutex<AddonSettingsStore>>();
         let addons_dir = installation.path.join("Interface").join("AddOns");
+        let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
         // Lo stato prima e dopo le installazioni, con le versioni forzate di quel momento.
         let read_state = || -> Result<(updates::Refresh, SourceRecords), String> {
             let overrides = settings
@@ -452,6 +479,7 @@ pub async fn import_addons(
                 &cache,
                 key.clone(),
                 &overrides,
+                allow_beta,
                 &records,
                 &listed,
             )?;
@@ -470,6 +498,7 @@ pub async fn import_addons(
             client: &client,
             tukui: &tukui,
             availability: &availability,
+            allow_beta,
         };
         let mut result = addon_import::run_import(
             &addons_dir,
@@ -611,6 +640,8 @@ struct CommandInstaller<'a> {
     client: &'a CurseForgeClient<ReqwestTransport>,
     tukui: &'a TukuiSource<PublicReqwestTransport>,
     availability: &'a Availabilities,
+    /// L'impostazione "Use beta files when there is no release" (issue #141).
+    allow_beta: bool,
 }
 
 impl addon_import::Installer for CommandInstaller<'_> {
@@ -662,6 +693,7 @@ impl addon_import::Installer for CommandInstaller<'_> {
                     &records,
                     mod_id,
                     None,
+                    self.allow_beta,
                     &mut |mod_id, record| {
                         cache.forget(&addons_dir, &record.folders);
                         locked_installed(&installed)?.record(&installation.id, mod_id, record)
@@ -764,6 +796,7 @@ pub async fn check_updates(
     let key = config.curseforge_api_key.clone();
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
+    let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
     let records = records_for_matching(&installed, &installation.id);
     tauri::async_runtime::spawn_blocking(move || {
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
@@ -772,6 +805,7 @@ pub async fn check_updates(
         let curseforge = CurseForgeSource {
             client: &client,
             overrides: &overrides,
+            allow_beta,
         };
         let tukui = tukui_source()?;
         let cache = app.state::<FingerprintCache>();
@@ -808,6 +842,7 @@ pub async fn update_addons(
     let key = config.curseforge_api_key.clone();
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
+    let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
     let records = records_for_matching(&installed, &installation.id);
     let projects: Vec<ProjectKey> = mod_ids
         .iter()
@@ -826,6 +861,7 @@ pub async fn update_addons(
         let curseforge = CurseForgeSource {
             client: &client,
             overrides: &overrides,
+            allow_beta,
         };
         let tukui = tukui_source()?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
@@ -905,6 +941,7 @@ pub async fn install_addon(
         .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
+    let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
     tauri::async_runtime::spawn_blocking(move || {
         let lock = app.state::<InstallLock>();
         let _held = lock.hold();
@@ -920,6 +957,7 @@ pub async fn install_addon(
             &records,
             mod_id,
             file_id,
+            allow_beta,
             &mut |mod_id, record| {
                 // Le cartelle appena scritte si ricalcolano alla prossima scansione.
                 app.state::<FingerprintCache>().forget(
@@ -995,6 +1033,7 @@ pub async fn search_catalog(
     index: u32,
     store: Store<'_>,
     installed: Installed<'_>,
+    app_settings: AppSettingsState<'_>,
     config: State<'_, Config>,
 ) -> Result<CatalogPage, String> {
     let key = config
@@ -1013,6 +1052,7 @@ pub async fn search_catalog(
         sort,
         sort_order,
         index,
+        allow_beta: beta_when_no_release(&app_settings),
     };
     tauri::async_runtime::spawn_blocking(move || {
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
@@ -1045,6 +1085,7 @@ pub async fn list_categories(config: State<'_, Config>) -> Result<Vec<CatalogCat
 /// progetto, altrimenti quella dell'installazione. Rete e disco girano fuori dal thread
 /// principale.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn addon_detail(
     installation_id: String,
     mod_id: u32,
@@ -1052,6 +1093,7 @@ pub async fn addon_detail(
     store: Store<'_>,
     settings: Settings<'_>,
     installed: Installed<'_>,
+    app_settings: AppSettingsState<'_>,
     config: State<'_, Config>,
 ) -> Result<AddonDetail, String> {
     let key = config
@@ -1060,6 +1102,7 @@ pub async fn addon_detail(
         .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
+    let allow_beta = beta_when_no_release(&app_settings);
     // Come nella ricerca: un registro illeggibile non blocca il dettaglio, vale solo il `.toc`.
     let records = locked_installed(&installed)?
         .records_for(&installation.id)
@@ -1074,6 +1117,7 @@ pub async fn addon_detail(
             &overrides,
             mod_id,
             version_type,
+            allow_beta,
         )
     })
     .await
@@ -1151,7 +1195,14 @@ mod tests {
 
     #[test]
     fn settings_serialize_as_the_frontend_expects() {
-        let json = serde_json::to_value(AppSettings { theme: Theme::Dark }).unwrap();
-        assert_eq!(json, serde_json::json!({"theme": "dark"}));
+        let json = serde_json::to_value(AppSettings {
+            theme: Theme::Dark,
+            beta_when_no_release: true,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"theme": "dark", "betaWhenNoRelease": true})
+        );
     }
 }

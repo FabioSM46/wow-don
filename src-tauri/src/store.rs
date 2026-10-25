@@ -662,6 +662,10 @@ impl Theme {
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub theme: Theme,
+    /// Installare e aggiornare alla Beta quando la versione del gioco non ha una Release (issue
+    /// #141). Un `settings.json` di prima non ha il campo: vale falso, senza cambiare versione.
+    #[serde(default)]
+    pub beta_when_no_release: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -708,6 +712,15 @@ impl AppSettingsStore {
         // Si cambia solo il tema: le altre impostazioni restano quelle appena rilette.
         let mut next = self.settings;
         next.theme = theme;
+        self.save(next)?;
+        Ok(next)
+    }
+
+    /// Salva l'opzione della Beta e restituisce le impostazioni aggiornate.
+    pub fn set_beta_when_no_release(&mut self, enabled: bool) -> Result<AppSettings, String> {
+        self.reload()?;
+        let mut next = self.settings;
+        next.beta_when_no_release = enabled;
         self.save(next)?;
         Ok(next)
     }
@@ -1402,13 +1415,32 @@ mod tests {
         assert!(!file.with_extension("json.tmp").exists());
 
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
-        assert_eq!(saved, serde_json::json!({"version": 1, "theme": "dark"}));
+        assert_eq!(
+            saved,
+            serde_json::json!({"version": 1, "theme": "dark", "betaWhenNoRelease": false})
+        );
 
         store.set_theme(Theme::System).unwrap();
         assert_eq!(
             AppSettingsStore::load(file).get().unwrap().theme,
             Theme::System
         );
+    }
+
+    #[test]
+    fn the_beta_option_defaults_to_off_and_keeps_the_theme() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        // Un file scritto prima della issue #141 non ha il campo.
+        fs::write(&file, r#"{"version": 1, "theme": "dark"}"#).unwrap();
+        let mut store = AppSettingsStore::load(file.clone());
+        assert!(!store.get().unwrap().beta_when_no_release);
+        let saved = store.set_beta_when_no_release(true).unwrap();
+        assert!(saved.beta_when_no_release);
+        assert_eq!(saved.theme, Theme::Dark);
+        let reloaded = AppSettingsStore::load(file).get().unwrap();
+        assert!(reloaded.beta_when_no_release);
+        assert_eq!(reloaded.theme, Theme::Dark);
     }
 
     #[test]
