@@ -15,11 +15,14 @@ use crate::install_local::{self, LocalInstall};
 use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
+use crate::sources::{ProjectKey, SourceKind};
 use crate::store::{
     AddonSettingsStore, AppSettings, AppSettingsStore, InstallationStore, InstalledAddonsStore,
-    Theme,
+    SourceRecords, Theme,
 };
-use crate::updates::{self, AddonUpdate, UpdateOutcome, VersionOverrides, VersionType};
+use crate::updates::{
+    self, AddonUpdate, CurseForgeSource, UpdateOutcome, VersionOverrides, VersionType,
+};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -221,39 +224,45 @@ pub async fn check_updates(
     installation_id: String,
     store: Store<'_>,
     settings: Settings<'_>,
+    installed: Installed<'_>,
     config: State<'_, Config>,
 ) -> Result<Vec<AddonUpdate>, String> {
     let key = config
         .curseforge_api_key
         .clone()
         .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
-    let installation = locked(&store)?
-        .list()?
-        .into_iter()
-        .find(|installation| installation.id == installation_id)
-        .ok_or_else(|| "Installation not found.".to_owned())?;
+    let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
+    let records = records_for_matching(&installed, &installation.id);
     tauri::async_runtime::spawn_blocking(move || {
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         let client = CurseForgeClient::new(transport, Some(key));
-        updates::check_updates(&installation, &client, &overrides)
+        let curseforge = CurseForgeSource {
+            client: &client,
+            overrides: &overrides,
+        };
+        updates::check_updates(&installation, &[&curseforge], &records)
     })
     .await
     .map_err(|error| format!("The update check was interrupted ({error})."))?
 }
 
-/// Aggiorna i progetti `mod_ids` dell'installazione: rifà il controllo, scarica e installa, e
-/// registra in `installed-addons.json` quello che ha installato. Rete e disco girano fuori dal
-/// thread principale, sotto [`InstallLock`]; il lock del registro si prende solo per scrivere
-/// ogni record.
+/// Aggiorna i progetti dell'installazione: `mod_ids` sono progetti CurseForge, `projects` quelli
+/// di qualsiasi fonte (`{source, key}`). Rifà il controllo, scarica e installa, e registra in
+/// `installed-addons.json` quello che ha installato. Rete e disco girano fuori dal thread
+/// principale, sotto [`InstallLock`]; il lock del registro si prende solo per scrivere ogni
+/// record.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_addons(
     installation_id: String,
     mod_ids: Vec<u32>,
+    projects: Option<Vec<ProjectKey>>,
     app: AppHandle,
     store: Store<'_>,
     settings: Settings<'_>,
+    installed: Installed<'_>,
     config: State<'_, Config>,
 ) -> Result<Vec<UpdateOutcome>, String> {
     let key = config
@@ -262,25 +271,47 @@ pub async fn update_addons(
         .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
+    let records = records_for_matching(&installed, &installation.id);
+    let projects: Vec<ProjectKey> = mod_ids
+        .iter()
+        .map(|mod_id| ProjectKey {
+            source: SourceKind::Curseforge,
+            key: mod_id.to_string(),
+        })
+        .chain(projects.unwrap_or_default())
+        .collect();
     tauri::async_runtime::spawn_blocking(move || {
         let lock = app.state::<InstallLock>();
         let _held = lock.hold();
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         let client = CurseForgeClient::new(transport, Some(key));
+        let curseforge = CurseForgeSource {
+            client: &client,
+            overrides: &overrides,
+        };
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         updates::update_addons(
             &installation,
-            &client,
-            &overrides,
-            &mod_ids,
-            &mut |mod_id, record| {
-                locked_installed(&installed)?.record(&installation.id, mod_id, record)
+            &[&curseforge],
+            &records,
+            &projects,
+            &mut |source, key, record| {
+                locked_installed(&installed)?.record_source(&installation.id, source, key, record)
             },
         )
     })
     .await
     .map_err(|error| format!("The update was interrupted ({error})."))?
+}
+
+/// I record dell'installazione per l'ordine di abbinamento (D33). Un `installed-addons.json`
+/// illeggibile non blocca il controllo: senza record le cartelle si offrono a tutte le fonti,
+/// come prima dei record; le scritture lo segnalano comunque.
+fn records_for_matching(installed: &Installed<'_>, installation_id: &str) -> SourceRecords {
+    locked_installed(installed)
+        .and_then(|store| store.source_records_for(installation_id))
+        .unwrap_or_default()
 }
 
 /// Installa un addon nuovo dal catalogo: il file `file_id` se indicato, altrimenti l'ultimo

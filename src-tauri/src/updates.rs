@@ -1,9 +1,10 @@
-//! Controllo degli aggiornamenti: abbina gli addon installati ai progetti di CurseForge e
-//! sceglie, per ognuno, il file più recente per la versione del gioco dell'installazione.
+//! Controllo degli aggiornamenti: abbina gli addon installati ai progetti delle fonti (D12,
+//! D33) e sceglie, per ognuno, la versione più recente per il gioco dell'installazione.
 //!
-//! [`evaluate`] è pura: riceve la scansione, la risposta dei fingerprint e i mod, e non usa né
-//! rete né disco. [`check_updates`] la collega al client e alla scansione; [`update_addons`]
-//! rifà il controllo e installa i file nuovi con il modulo `install`.
+//! [`check_updates`] scansiona l'installazione e offre le cartelle alle fonti nell'ordine di D33;
+//! [`update_addons`] rifà il controllo e chiede a ogni fonte di aggiornare i suoi progetti.
+//! CurseForge è [`CurseForgeSource`]: [`evaluate`] è pura, riceve la scansione, la risposta dei
+//! fingerprint e i mod, e non usa né rete né disco.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -17,7 +18,8 @@ use crate::sources::curseforge::{
     CurseForgeClient, CurseForgeError, File, FileModule, FingerprintMatch, FingerprintMatches, Mod,
     RELEASE_TYPE_RELEASE, Transport,
 };
-use crate::store::InstalledRecord;
+use crate::sources::{ProjectKey, RecordWriter, Source, SourceKind, UpdateTarget};
+use crate::store::{ProjectRecords, SourceRecord, SourceRecords};
 
 /// Tipi di versione del gioco di CurseForge (`gameVersionTypeId`), verificati il 2026-10-22 con
 /// il test `live_version_types` di `sources::curseforge` sull'API reale.
@@ -117,10 +119,16 @@ impl From<&File> for FileSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
+    /// L'id CurseForge; `0` per le altre fonti, dove il progetto si identifica con `source` e
+    /// `key`.
     pub id: u32,
+    pub source: SourceKind,
+    /// L'id del progetto nella fonte, come stringa (`61284`, `owner/repo`, `-2`).
+    pub key: String,
     pub name: String,
     pub url: Option<String>,
-    /// Se CurseForge permette di scaricare i file da un'app di terzi. Sconosciuto vale `false`.
+    /// Se la fonte permette di scaricare i file da un'app di terzi (per CurseForge
+    /// `allowModDistribution`; sconosciuto vale `false`).
     pub allow_mod_distribution: bool,
 }
 
@@ -137,7 +145,9 @@ pub enum UpdateStatus {
 #[serde(rename_all = "camelCase")]
 pub struct AddonUpdate {
     pub folder: String,
-    /// Progetto CurseForge; più cartelle possono avere lo stesso progetto (per esempio DBM).
+    /// La fonte che ha reclamato la cartella, se c'è.
+    pub source: Option<SourceKind>,
+    /// Il progetto; più cartelle possono avere lo stesso progetto (per esempio DBM).
     pub project: Option<Project>,
     pub installed_file: Option<FileSummary>,
     #[serde(flatten)]
@@ -186,6 +196,7 @@ pub fn evaluate(
         .map(|addon| {
             let mut update = AddonUpdate {
                 folder: addon.folder.clone(),
+                source: None,
                 project: None,
                 installed_file: None,
                 status: UpdateStatus::NotMatched,
@@ -194,6 +205,7 @@ pub fn evaluate(
                 installed_modules: Vec::new(),
             };
             let Some(fingerprint) = addon.fingerprint else {
+                update.source = Some(SourceKind::Curseforge);
                 update.status = UpdateStatus::Error {
                     message: "Unreadable folder: it cannot be recognized.".to_owned(),
                 };
@@ -203,8 +215,11 @@ pub fn evaluate(
                 return update;
             };
             let project = mods_by_id.get(&found.id);
+            update.source = Some(SourceKind::Curseforge);
             update.project = Some(Project {
                 id: found.id,
+                source: SourceKind::Curseforge,
+                key: found.id.to_string(),
                 name: project.map(|m| m.name.clone()).unwrap_or_default(),
                 url: project.and_then(|m| m.links.website_url.clone()),
                 allow_mod_distribution: project
@@ -252,44 +267,175 @@ fn is_newer(candidate: &File, installed: &File) -> bool {
             > (installed.file_date.as_str(), installed.id)
 }
 
-/// Scansiona l'installazione, chiede a CurseForge e valuta. Bloccante: va chiamata fuori dal
-/// thread principale.
-pub fn check_updates<T: Transport>(
+/// Scansiona l'installazione e offre le cartelle alle fonti di `sources`, nell'ordine (D33):
+/// una cartella registrata in `records` va solo alla fonte del record; le altre a ogni fonte
+/// che non le ha ancora reclamate. Una voce per cartella, nell'ordine della scansione; le
+/// cartelle che nessuna fonte riconosce restano `notMatched` senza fonte. Una fonte che fallisce
+/// non ferma le altre: le cartelle che le erano state offerte e che nessuno ha reclamato
+/// riportano il suo errore. Se falliscono tutte, l'errore è quello della prima. Bloccante: va
+/// chiamata fuori dal thread principale.
+pub fn check_updates(
     installation: &Installation,
-    client: &CurseForgeClient<T>,
-    overrides: &VersionOverrides,
+    sources: &[&dyn Source],
+    records: &SourceRecords,
 ) -> Result<Vec<AddonUpdate>, String> {
-    scan_and_evaluate(installation, client, overrides).map(|(_, updates)| updates)
+    scan_and_check(installation, sources, records).map(|(_, updates)| updates)
 }
 
 /// Come [`check_updates`], ma restituisce anche la scansione.
-fn scan_and_evaluate<T: Transport>(
+fn scan_and_check(
     installation: &Installation,
-    client: &CurseForgeClient<T>,
-    overrides: &VersionOverrides,
+    sources: &[&dyn Source],
+    records: &SourceRecords,
 ) -> Result<(Vec<InstalledAddon>, Vec<AddonUpdate>), String> {
-    let version_type = version_type_for(&installation.flavor).ok_or_else(|| {
-        format!(
-            "The update check does not support the game version \"{}\" yet.",
-            installation.name
-        )
-    })?;
     let addons = scan::scan_addons(&installation.path, &installation.flavor)?;
-    let fingerprints: Vec<u32> = addons.iter().filter_map(|a| a.fingerprint).collect();
-    let matches = client
-        .match_fingerprints(&fingerprints)
-        .map_err(|e: CurseForgeError| e.to_string())?;
-    let mut mod_ids: Vec<u32> = matches
-        .exact_matches
+    let no_records = ProjectRecords::new();
+    // Cartella (in minuscolo) → la fonte del record che la nomina. Una cartella nei record di
+    // più fonti non appartiene a nessuna.
+    let mut owners: HashMap<String, Option<SourceKind>> = HashMap::new();
+    for (source, projects) in records {
+        for folder in projects.values().flat_map(|record| &record.folders) {
+            owners
+                .entry(folder.to_lowercase())
+                .and_modify(|owner| {
+                    if *owner != Some(*source) {
+                        *owner = None;
+                    }
+                })
+                .or_insert(Some(*source));
+        }
+    }
+    let owner_of =
+        |addon: &InstalledAddon| owners.get(&addon.folder.to_lowercase()).copied().flatten();
+
+    let mut results: Vec<Option<AddonUpdate>> = vec![None; addons.len()];
+    // Per cartella, l'errore della prima fonte fallita a cui era stata offerta.
+    let mut failures: Vec<Option<String>> = vec![None; addons.len()];
+    let mut first_error: Option<String> = None;
+    let mut succeeded = false;
+    for source in sources {
+        let kind = source.kind();
+        let offered_indexes: Vec<usize> = (0..addons.len())
+            .filter(|&i| results[i].is_none())
+            .filter(|&i| owner_of(&addons[i]).is_none_or(|owner| owner == kind))
+            .collect();
+        let offered: Vec<InstalledAddon> =
+            offered_indexes.iter().map(|&i| addons[i].clone()).collect();
+        let found = match source.check(
+            installation,
+            &offered,
+            records.get(&kind).unwrap_or(&no_records),
+        ) {
+            Ok(found) => found,
+            Err(error) => {
+                for &i in &offered_indexes {
+                    failures[i]
+                        .get_or_insert_with(|| format!("{} check failed: {error}", kind.label()));
+                }
+                first_error.get_or_insert(error);
+                continue;
+            }
+        };
+        succeeded = true;
+        for update in found {
+            let claims =
+                update.project.is_some() || matches!(update.status, UpdateStatus::Error { .. });
+            if !claims {
+                continue;
+            }
+            if let Some(&i) = offered_indexes
+                .iter()
+                .find(|&&i| addons[i].folder == update.folder)
+            {
+                results[i].get_or_insert(update);
+            }
+        }
+    }
+    if !succeeded && let Some(error) = first_error {
+        return Err(error);
+    }
+
+    let updates = addons
         .iter()
-        .chain(&matches.partial_matches)
-        .map(|m| m.id)
+        .zip(results)
+        .zip(failures)
+        .map(|((addon, result), failure)| {
+            result.unwrap_or_else(|| AddonUpdate {
+                folder: addon.folder.clone(),
+                source: None,
+                project: None,
+                installed_file: None,
+                status: match failure {
+                    Some(message) => UpdateStatus::Error { message },
+                    None => UpdateStatus::NotMatched,
+                },
+                version_override: None,
+                project_folders: Vec::new(),
+                installed_modules: Vec::new(),
+            })
+        })
         .collect();
-    mod_ids.sort_unstable();
-    mod_ids.dedup();
-    let mods = client.get_mods(&mod_ids).map_err(|e| e.to_string())?;
-    let updates = evaluate(&addons, &matches, &mods, version_type, overrides);
     Ok((addons, updates))
+}
+
+/// CurseForge come fonte: fingerprint delle cartelle, versioni del gioco forzate per progetto
+/// (D6) e `allowModDistribution` (D13).
+pub struct CurseForgeSource<'a, T: Transport> {
+    pub client: &'a CurseForgeClient<T>,
+    pub overrides: &'a VersionOverrides,
+}
+
+impl<T: Transport> Source for CurseForgeSource<'_, T> {
+    fn kind(&self) -> SourceKind {
+        SourceKind::Curseforge
+    }
+
+    fn check(
+        &self,
+        installation: &Installation,
+        offered: &[InstalledAddon],
+        _records: &ProjectRecords,
+    ) -> Result<Vec<AddonUpdate>, String> {
+        let version_type = version_type_for(&installation.flavor).ok_or_else(|| {
+            format!(
+                "The update check does not support the game version \"{}\" yet.",
+                installation.name
+            )
+        })?;
+        let fingerprints: Vec<u32> = offered.iter().filter_map(|a| a.fingerprint).collect();
+        let matches = self
+            .client
+            .match_fingerprints(&fingerprints)
+            .map_err(|e: CurseForgeError| e.to_string())?;
+        let mut mod_ids: Vec<u32> = matches
+            .exact_matches
+            .iter()
+            .chain(&matches.partial_matches)
+            .map(|m| m.id)
+            .collect();
+        mod_ids.sort_unstable();
+        mod_ids.dedup();
+        let mods = self.client.get_mods(&mod_ids).map_err(|e| e.to_string())?;
+        Ok(evaluate(
+            offered,
+            &matches,
+            &mods,
+            version_type,
+            self.overrides,
+        ))
+    }
+
+    fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome {
+        let Ok(mod_id) = target.key.parse::<u32>() else {
+            return UpdateOutcome::skipped(
+                SourceKind::Curseforge,
+                target.key,
+                "",
+                "Not found among the installed addons.",
+            );
+        };
+        update_project(target, self.client, mod_id, record)
+    }
 }
 
 // ── Aggiornamento ───────────────────────────────────────────────────────────
@@ -302,12 +448,15 @@ pub enum OutcomeStatus {
     Error,
 }
 
-/// L'esito dell'aggiornamento di un progetto. I messaggi sono in inglese: l'interfaccia
-/// sarà solo in inglese (issue #45).
+/// L'esito dell'aggiornamento di un progetto. I messaggi sono in inglese (D27).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateOutcome {
+    /// L'id CurseForge; `0` per le altre fonti (vedi `source` e `key`).
     pub mod_id: u32,
+    pub source: SourceKind,
+    /// L'id del progetto nella fonte, come stringa.
+    pub key: String,
     /// Il nome del progetto; vuoto se il progetto non è tra quelli installati.
     pub name: String,
     pub status: OutcomeStatus,
@@ -320,65 +469,109 @@ pub struct UpdateOutcome {
 }
 
 impl UpdateOutcome {
-    fn skipped(mod_id: u32, name: &str, message: &str) -> Self {
+    fn new(source: SourceKind, key: &str, name: &str, status: OutcomeStatus) -> Self {
+        let mod_id = match source {
+            SourceKind::Curseforge => key.parse().unwrap_or(0),
+            _ => 0,
+        };
         Self {
             mod_id,
+            source,
+            key: key.to_owned(),
             name: name.to_owned(),
-            status: OutcomeStatus::Skipped,
-            message: Some(message.to_owned()),
+            status,
+            message: None,
             file: None,
         }
     }
 
-    fn error(mod_id: u32, name: &str, message: String) -> Self {
+    pub(crate) fn skipped(source: SourceKind, key: &str, name: &str, message: &str) -> Self {
         Self {
-            mod_id,
-            name: name.to_owned(),
-            status: OutcomeStatus::Error,
+            message: Some(message.to_owned()),
+            ..Self::new(source, key, name, OutcomeStatus::Skipped)
+        }
+    }
+
+    pub(crate) fn error(source: SourceKind, key: &str, name: &str, message: String) -> Self {
+        Self {
             message: Some(message),
-            file: None,
+            ..Self::new(source, key, name, OutcomeStatus::Error)
+        }
+    }
+
+    pub(crate) fn updated(
+        source: SourceKind,
+        key: &str,
+        name: &str,
+        file: FileSummary,
+        message: Option<String>,
+    ) -> Self {
+        Self {
+            message,
+            file: Some(file),
+            ..Self::new(source, key, name, OutcomeStatus::Updated)
         }
     }
 }
 
-/// Aggiorna i progetti `mod_ids` di un'installazione. Rifà il controllo, con le stesse versioni
-/// forzate di [`check_updates`], invece di fidarsi del frontend; per ogni progetto con un aggiornamento chiede il file a CurseForge, lo scarica,
-/// lo estrae in staging e sostituisce le cartelle, togliendo quelle del file installato che la
-/// versione nuova non ha più. Un errore su un progetto non ferma gli altri. Bloccante.
+/// Aggiorna i progetti `projects` di un'installazione. Rifà il controllo con le stesse fonti di
+/// [`check_updates`] invece di fidarsi del frontend, poi passa ogni progetto alla sua fonte. Un
+/// errore su un progetto non ferma gli altri; un progetto ripetuto si aggiorna una volta sola.
+/// Bloccante.
 ///
 /// Restituisce `Err` solo se il controllo iniziale fallisce: in quel caso non si tocca niente.
-pub fn update_addons<T: Transport>(
+pub fn update_addons(
     installation: &Installation,
-    client: &CurseForgeClient<T>,
-    overrides: &VersionOverrides,
-    mod_ids: &[u32],
-    record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
+    sources: &[&dyn Source],
+    records: &SourceRecords,
+    projects: &[ProjectKey],
+    record: &mut RecordWriter<'_>,
 ) -> Result<Vec<UpdateOutcome>, String> {
-    let (addons, updates) = scan_and_evaluate(installation, client, overrides)?;
+    let (addons, updates) = scan_and_check(installation, sources, records)?;
     let addons_dir = installation.path.join("Interface").join("AddOns");
     let mut seen = HashSet::new();
-    Ok(mod_ids
+    Ok(projects
         .iter()
-        .copied()
-        .filter(|id| seen.insert(*id))
-        .map(|mod_id| update_project(&addons, &updates, &addons_dir, client, mod_id, record))
+        .filter(|project| seen.insert(*project))
+        .map(|project| {
+            let Some(source) = sources.iter().find(|s| s.kind() == project.source) else {
+                return UpdateOutcome::skipped(
+                    project.source,
+                    &project.key,
+                    "",
+                    "This source is not available.",
+                );
+            };
+            let target = UpdateTarget {
+                key: &project.key,
+                addons_dir: &addons_dir,
+                addons: &addons,
+                updates: &updates,
+            };
+            source.update(&target, record)
+        })
         .collect())
 }
 
 fn update_project<T: Transport>(
-    addons: &[InstalledAddon],
-    updates: &[AddonUpdate],
-    addons_dir: &Path,
+    target: &UpdateTarget<'_>,
     client: &CurseForgeClient<T>,
     mod_id: u32,
-    record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
+    record: &mut RecordWriter<'_>,
 ) -> UpdateOutcome {
-    let folders: Vec<&AddonUpdate> = updates
+    const CF: SourceKind = SourceKind::Curseforge;
+    let key = target.key;
+    let folders: Vec<&AddonUpdate> = target
+        .updates
         .iter()
-        .filter(|u| u.project.as_ref().is_some_and(|p| p.id == mod_id))
+        .filter(|u| {
+            u.project
+                .as_ref()
+                .is_some_and(|p| p.source == CF && p.id == mod_id)
+        })
         .collect();
     let Some(project) = folders.first().and_then(|u| u.project.as_ref()) else {
-        return UpdateOutcome::skipped(mod_id, "", "Not found among the installed addons.");
+        return UpdateOutcome::skipped(CF, key, "", "Not found among the installed addons.");
     };
     let name = project.name.as_str();
     let available = folders.iter().find_map(|u| match &u.status {
@@ -386,11 +579,12 @@ fn update_project<T: Transport>(
         _ => None,
     });
     let Some((installed, latest)) = available else {
-        return UpdateOutcome::skipped(mod_id, name, "Already up to date.");
+        return UpdateOutcome::skipped(CF, key, name, "Already up to date.");
     };
     if !project.allow_mod_distribution {
         return UpdateOutcome::skipped(
-            mod_id,
+            CF,
+            key,
             name,
             "The author does not allow downloads from third-party apps: update it from the CurseForge website.",
         );
@@ -398,38 +592,34 @@ fn update_project<T: Transport>(
 
     let file = match client.get_file(mod_id, latest.id) {
         Ok(file) => file,
-        Err(error) => return UpdateOutcome::error(mod_id, name, error.to_string()),
+        Err(error) => return UpdateOutcome::error(CF, key, name, error.to_string()),
     };
     if file.download_url.is_none() {
         return UpdateOutcome::skipped(
-            mod_id,
+            CF,
+            key,
             name,
             "CurseForge does not provide a download link for this file: update it from the CurseForge website.",
         );
     }
-    let old_modules = removable_modules(addons, updates, installed);
-    let folders = match install_file(client, &file, addons_dir, &old_modules, &|_| Ok(())) {
+    let old_modules = removable_modules(target.addons, target.updates, installed);
+    let folders = match install_file(client, &file, target.addons_dir, &old_modules, &|_| Ok(())) {
         Ok(folders) => folders,
-        Err(message) => return UpdateOutcome::error(mod_id, name, message),
+        Err(message) => return UpdateOutcome::error(CF, key, name, message),
     };
     // Le cartelle sono già sostituite: se il registro non si salva l'aggiornamento resta
     // riuscito, e il messaggio lo dice.
     let message = record(
-        mod_id,
-        InstalledRecord {
-            file_id: file.id,
+        CF,
+        key,
+        SourceRecord {
+            file: file.id.to_string(),
             folders,
         },
     )
     .err()
     .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
-    UpdateOutcome {
-        mod_id,
-        name: name.to_owned(),
-        status: OutcomeStatus::Updated,
-        message,
-        file: Some(FileSummary::from(&file)),
-    }
+    UpdateOutcome::updated(CF, key, name, FileSummary::from(&file), message)
 }
 
 /// Le cartelle del file installato che l'aggiornamento può togliere se il nuovo zip non le ha
@@ -447,7 +637,8 @@ fn removable_modules(
     installed: &AddonUpdate,
 ) -> Vec<String> {
     let lower = |name: &str| name.to_lowercase();
-    let mod_id = installed.project.as_ref().map(|p| p.id);
+    let project_of = |u: &AddonUpdate| u.project.as_ref().map(|p| (p.source, p.key.clone()));
+    let this_project = project_of(installed);
     let own: HashSet<String> = installed
         .installed_modules
         .iter()
@@ -455,7 +646,7 @@ fn removable_modules(
         .collect();
     let shared: HashSet<String> = updates
         .iter()
-        .filter(|u| u.project.as_ref().map(|p| p.id) != mod_id)
+        .filter(|u| project_of(u) != this_project)
         .flat_map(|u| u.installed_modules.iter().map(|m| lower(&m.name)))
         .collect();
     let needed: HashSet<String> = addons
@@ -509,6 +700,52 @@ pub(crate) fn install_file<T: Transport>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::InstalledRecord;
+
+    /// `check_updates` con la sola fonte CurseForge e senza record, come prima di D12.
+    fn cf_check_updates<T: Transport>(
+        installation: &Installation,
+        client: &CurseForgeClient<T>,
+        overrides: &VersionOverrides,
+    ) -> Result<Vec<AddonUpdate>, String> {
+        let source = CurseForgeSource { client, overrides };
+        check_updates(installation, &[&source], &SourceRecords::new())
+    }
+
+    /// `update_addons` con la sola fonte CurseForge, i progetti per `mod_id` e il registro nella
+    /// forma CurseForge.
+    fn cf_update_addons<T: Transport>(
+        installation: &Installation,
+        client: &CurseForgeClient<T>,
+        overrides: &VersionOverrides,
+        mod_ids: &[u32],
+        record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
+    ) -> Result<Vec<UpdateOutcome>, String> {
+        let source = CurseForgeSource { client, overrides };
+        let projects: Vec<ProjectKey> = mod_ids
+            .iter()
+            .map(|id| ProjectKey {
+                source: SourceKind::Curseforge,
+                key: id.to_string(),
+            })
+            .collect();
+        update_addons(
+            installation,
+            &[&source],
+            &SourceRecords::new(),
+            &projects,
+            &mut |source, key, written| {
+                assert_eq!(source, SourceKind::Curseforge);
+                record(
+                    key.parse().unwrap(),
+                    InstalledRecord {
+                        file_id: written.file.parse().unwrap(),
+                        folders: written.folders,
+                    },
+                )
+            },
+        )
+    }
     use crate::addons::toc::TocInfo;
     use crate::sources::curseforge::{FileModule, ModLinks, SortableGameVersion};
 
@@ -854,6 +1091,7 @@ mod tests {
     fn the_payload_has_a_status_tag() {
         let update = AddonUpdate {
             folder: "Foo".to_owned(),
+            source: None,
             project: None,
             installed_file: None,
             status: UpdateStatus::UpdateAvailable {
@@ -895,7 +1133,9 @@ mod tests {
         use zip::write::SimpleFileOptions;
 
         use super::super::*;
+        use super::{cf_check_updates, cf_update_addons};
         use crate::sources::curseforge::{ApiKey, BytesResponse, HttpResponse, TransportError};
+        use crate::store::InstalledRecord;
         use crate::test_support::TempDir;
 
         const API: &str = "https://api.curseforge.com";
@@ -1070,7 +1310,7 @@ mod tests {
             overrides: &VersionOverrides,
             mod_ids: &[u32],
         ) -> Result<Vec<UpdateOutcome>, String> {
-            update_addons(installation, client, overrides, mod_ids, &mut |_, _| Ok(()))
+            cf_update_addons(installation, client, overrides, mod_ids, &mut |_, _| Ok(()))
         }
 
         fn client(routes: Routes) -> CurseForgeClient<Routes> {
@@ -1123,6 +1363,8 @@ mod tests {
                 outcomes,
                 [UpdateOutcome {
                     mod_id: 1,
+                    source: SourceKind::Curseforge,
+                    key: "1".to_owned(),
                     name: "Alpha".to_owned(),
                     status: OutcomeStatus::Updated,
                     message: None,
@@ -1177,7 +1419,7 @@ mod tests {
             };
             let client = client(routes);
 
-            let checked = check_updates(&fx.installation, &client, &no_overrides()).unwrap();
+            let checked = cf_check_updates(&fx.installation, &client, &no_overrides()).unwrap();
             let beta = checked.iter().find(|u| u.folder == "Beta").unwrap();
             assert_eq!(beta.project.as_ref().unwrap().name, "Beta");
             assert_eq!(beta.project_folders, ["Beta", "Beta_Extra"]);
@@ -1343,7 +1585,7 @@ mod tests {
             let client = client(routes);
 
             let mut records = Vec::new();
-            let outcomes = update_addons(
+            let outcomes = cf_update_addons(
                 &fx.installation,
                 &client,
                 &no_overrides(),
@@ -1483,7 +1725,7 @@ mod tests {
             let fx = fixture(&[("Alpha", "alpha v1")]);
             let client = CurseForgeClient::new(Routes::default(), None);
             let mut recorded = false;
-            let result = update_addons(
+            let result = cf_update_addons(
                 &fx.installation,
                 &client,
                 &no_overrides(),
@@ -1518,7 +1760,7 @@ mod tests {
                 ..Routes::default()
             };
 
-            let outcomes = update_addons(
+            let outcomes = cf_update_addons(
                 &fx.installation,
                 &client(routes),
                 &no_overrides(),
@@ -1566,7 +1808,7 @@ mod tests {
                 .collect();
             if mod_ids.is_empty() {
                 for update in
-                    check_updates(&installation, &client, &VersionOverrides::new()).unwrap()
+                    cf_check_updates(&installation, &client, &VersionOverrides::new()).unwrap()
                 {
                     if let (Some(project), UpdateStatus::UpdateAvailable { latest }) =
                         (&update.project, &update.status)
@@ -1587,13 +1829,32 @@ mod tests {
 
         #[test]
         fn the_outcome_payload_is_camel_case() {
-            let json = serde_json::to_value(UpdateOutcome::skipped(7, "Foo", "why")).unwrap();
+            let json = serde_json::to_value(UpdateOutcome::skipped(
+                SourceKind::Curseforge,
+                "7",
+                "Foo",
+                "why",
+            ))
+            .unwrap();
             assert_eq!(
                 json,
-                json!({"modId": 7, "name": "Foo", "status": "skipped", "message": "why"})
+                json!({"modId": 7, "source": "curseforge", "key": "7", "name": "Foo", "status": "skipped", "message": "why"})
             );
+            // Le altre fonti non hanno un id CurseForge.
+            let json = serde_json::to_value(UpdateOutcome::skipped(
+                SourceKind::Github,
+                "owner/repo",
+                "Foo",
+                "why",
+            ))
+            .unwrap();
+            assert_eq!(json["modId"], 0);
+            assert_eq!(json["source"], "github");
+            assert_eq!(json["key"], "owner/repo");
             let json = serde_json::to_value(UpdateOutcome {
                 mod_id: 7,
+                source: SourceKind::Curseforge,
+                key: "7".to_owned(),
                 name: "Foo".to_owned(),
                 status: OutcomeStatus::Updated,
                 message: None,
@@ -1608,6 +1869,248 @@ mod tests {
             assert_eq!(json["file"]["id"], 1);
             assert!(json.get("message").is_none());
             assert_eq!(serde_json::to_value(OutcomeStatus::Error).unwrap(), "error");
+        }
+
+        /// Una fonte finta: reclama le cartelle di `claims` con un progetto proprio, oppure
+        /// fallisce; ricorda le cartelle che le sono state offerte.
+        struct FakeSource {
+            kind: SourceKind,
+            claims: Vec<&'static str>,
+            fails: Option<&'static str>,
+            offered: Mutex<Vec<String>>,
+        }
+
+        impl FakeSource {
+            fn new(kind: SourceKind, claims: &[&'static str]) -> Self {
+                Self {
+                    kind,
+                    claims: claims.to_vec(),
+                    fails: None,
+                    offered: Mutex::new(Vec::new()),
+                }
+            }
+
+            fn failing(kind: SourceKind, error: &'static str) -> Self {
+                Self {
+                    fails: Some(error),
+                    ..Self::new(kind, &[])
+                }
+            }
+
+            fn offered(&self) -> Vec<String> {
+                self.offered.lock().unwrap().clone()
+            }
+        }
+
+        impl Source for FakeSource {
+            fn kind(&self) -> SourceKind {
+                self.kind
+            }
+
+            fn check(
+                &self,
+                _installation: &Installation,
+                offered: &[InstalledAddon],
+                _records: &ProjectRecords,
+            ) -> Result<Vec<AddonUpdate>, String> {
+                self.offered
+                    .lock()
+                    .unwrap()
+                    .extend(offered.iter().map(|a| a.folder.clone()));
+                if let Some(error) = self.fails {
+                    return Err(error.to_owned());
+                }
+                Ok(offered
+                    .iter()
+                    .filter(|a| self.claims.contains(&a.folder.as_str()))
+                    .map(|a| AddonUpdate {
+                        folder: a.folder.clone(),
+                        source: Some(self.kind),
+                        project: Some(Project {
+                            id: 0,
+                            source: self.kind,
+                            key: format!("{}-key", a.folder),
+                            name: a.folder.clone(),
+                            url: None,
+                            allow_mod_distribution: true,
+                        }),
+                        installed_file: None,
+                        status: UpdateStatus::UpToDate,
+                        version_override: None,
+                        project_folders: vec![a.folder.clone()],
+                        installed_modules: Vec::new(),
+                    })
+                    .collect())
+            }
+
+            fn update(
+                &self,
+                target: &UpdateTarget<'_>,
+                record: &mut RecordWriter<'_>,
+            ) -> UpdateOutcome {
+                record(
+                    self.kind,
+                    target.key,
+                    SourceRecord {
+                        file: "v2".to_owned(),
+                        folders: Vec::new(),
+                    },
+                )
+                .unwrap();
+                UpdateOutcome::skipped(self.kind, target.key, "", "fake")
+            }
+        }
+
+        fn sources_of(updates: &[AddonUpdate]) -> Vec<(&str, Option<SourceKind>)> {
+            updates
+                .iter()
+                .map(|u| (u.folder.as_str(), u.source))
+                .collect()
+        }
+
+        fn record_of(source: SourceKind, key: &str, folders: &[&str]) -> SourceRecords {
+            SourceRecords::from([(
+                source,
+                ProjectRecords::from([(
+                    key.to_owned(),
+                    SourceRecord {
+                        file: "1".to_owned(),
+                        folders: folders.iter().map(|f| (*f).to_owned()).collect(),
+                    },
+                )]),
+            )])
+        }
+
+        #[test]
+        fn sources_claim_folders_in_order() {
+            let fx = fixture(&[("Alpha", "a"), ("Beta", "b"), ("Gamma", "c")]);
+            let first = FakeSource::new(SourceKind::Curseforge, &["Alpha"]);
+            let second = FakeSource::new(SourceKind::Tukui, &["Alpha", "Beta"]);
+            let updates =
+                check_updates(&fx.installation, &[&first, &second], &SourceRecords::new()).unwrap();
+            assert_eq!(
+                sources_of(&updates),
+                [
+                    ("Alpha", Some(SourceKind::Curseforge)),
+                    ("Beta", Some(SourceKind::Tukui)),
+                    ("Gamma", None),
+                ]
+            );
+            assert_eq!(updates[2].status, UpdateStatus::NotMatched);
+            // Una cartella reclamata non si offre alla fonte successiva.
+            assert_eq!(first.offered(), ["Alpha", "Beta", "Gamma"]);
+            assert_eq!(second.offered(), ["Beta", "Gamma"]);
+        }
+
+        #[test]
+        fn a_recorded_folder_goes_only_to_its_source() {
+            let fx = fixture(&[("Alpha", "a"), ("Beta", "b")]);
+            let first = FakeSource::new(SourceKind::Curseforge, &["Alpha", "Beta"]);
+            let second = FakeSource::new(SourceKind::Github, &["Alpha"]);
+            // Il record nomina la cartella con maiuscole diverse da quelle del disco.
+            let records = record_of(SourceKind::Github, "owner/alpha", &["ALPHA"]);
+            let updates = check_updates(&fx.installation, &[&first, &second], &records).unwrap();
+            assert_eq!(
+                sources_of(&updates),
+                [
+                    ("Alpha", Some(SourceKind::Github)),
+                    ("Beta", Some(SourceKind::Curseforge)),
+                ]
+            );
+            assert_eq!(first.offered(), ["Beta"]);
+        }
+
+        #[test]
+        fn a_folder_recorded_by_two_sources_belongs_to_neither() {
+            let fx = fixture(&[("Libs", "l")]);
+            let first = FakeSource::new(SourceKind::Curseforge, &["Libs"]);
+            let mut records = record_of(SourceKind::Github, "owner/a", &["Libs"]);
+            records.extend(record_of(SourceKind::Tukui, "-2", &["Libs"]));
+            let updates = check_updates(&fx.installation, &[&first], &records).unwrap();
+            assert_eq!(
+                sources_of(&updates),
+                [("Libs", Some(SourceKind::Curseforge))]
+            );
+        }
+
+        #[test]
+        fn a_failing_source_does_not_stop_the_others() {
+            let fx = fixture(&[("Alpha", "a"), ("Beta", "b")]);
+            let failing = FakeSource::failing(SourceKind::Curseforge, "network down");
+            let working = FakeSource::new(SourceKind::Tukui, &["Beta"]);
+            let updates = check_updates(
+                &fx.installation,
+                &[&failing, &working],
+                &SourceRecords::new(),
+            )
+            .unwrap();
+            assert_eq!(updates[1].source, Some(SourceKind::Tukui));
+            assert_eq!(updates[0].source, None);
+            assert_eq!(
+                updates[0].status,
+                UpdateStatus::Error {
+                    message: "CurseForge check failed: network down".to_owned()
+                }
+            );
+        }
+
+        #[test]
+        fn when_every_source_fails_the_check_fails() {
+            let fx = fixture(&[("Alpha", "a")]);
+            let first = FakeSource::failing(SourceKind::Curseforge, "first");
+            let second = FakeSource::failing(SourceKind::Tukui, "second");
+            assert_eq!(
+                check_updates(&fx.installation, &[&first, &second], &SourceRecords::new()),
+                Err("first".to_owned())
+            );
+        }
+
+        #[test]
+        fn updates_go_to_the_project_source() {
+            let fx = fixture(&[("Alpha", "a")]);
+            let tukui = FakeSource::new(SourceKind::Tukui, &["Alpha"]);
+            let mut written = Vec::new();
+            let outcomes = update_addons(
+                &fx.installation,
+                &[&tukui],
+                &SourceRecords::new(),
+                &[
+                    ProjectKey {
+                        source: SourceKind::Tukui,
+                        key: "-2".to_owned(),
+                    },
+                    ProjectKey {
+                        source: SourceKind::Tukui,
+                        key: "-2".to_owned(),
+                    },
+                    ProjectKey {
+                        source: SourceKind::Github,
+                        key: "owner/repo".to_owned(),
+                    },
+                ],
+                &mut |source, key, _| {
+                    written.push((source, key.to_owned()));
+                    Ok(())
+                },
+            )
+            .unwrap();
+            // Il progetto ripetuto si aggiorna una volta; la fonte assente salta.
+            assert_eq!(written, [(SourceKind::Tukui, "-2".to_owned())]);
+            let summary: Vec<(SourceKind, &str, Option<&str>)> = outcomes
+                .iter()
+                .map(|o| (o.source, o.key.as_str(), o.message.as_deref()))
+                .collect();
+            assert_eq!(
+                summary,
+                [
+                    (SourceKind::Tukui, "-2", Some("fake")),
+                    (
+                        SourceKind::Github,
+                        "owner/repo",
+                        Some("This source is not available.")
+                    ),
+                ]
+            );
         }
     }
 }

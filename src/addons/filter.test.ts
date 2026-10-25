@@ -41,7 +41,15 @@ function checked(
       const update: AddonUpdate = match
         ? {
             folder: a.folder,
-            project: { id: match[0], name: `P${match[0]}`, url: null, allowModDistribution: true },
+            source: "curseforge",
+            project: {
+              id: match[0],
+              source: "curseforge",
+              key: String(match[0]),
+              name: `P${match[0]}`,
+              url: null,
+              allowModDistribution: true,
+            },
             installedFile: { id: 1, name: "file", date: "2026-10-01T00:00:00Z" },
             versionOverride: null,
             projectFolders: match[1],
@@ -49,6 +57,7 @@ function checked(
           }
         : {
             folder: a.folder,
+            source: null,
             project: null,
             installedFile: null,
             versionOverride: null,
