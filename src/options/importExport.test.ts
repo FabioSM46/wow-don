@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { ExportResult, ImportPreview, ImportResult, PreviewEntry } from "../api";
+import { progressKey } from "../addons/progress.ts";
 import {
   exportSummary,
   importProgressText,
@@ -67,6 +68,23 @@ describe("importProgressText", () => {
 
   it("takes only the new projects", () => {
     assert.deepEqual(fresh, ["curseforge:1", "curseforge:3"]);
+  });
+
+  it("uses the same ids as the progress events", () => {
+    // Il contatore confronta gli id della lista con quelli degli eventi: devono coincidere.
+    const event = {
+      installationId: "test",
+      source: "curseforge" as const,
+      key: "3",
+      name: "Addon 3",
+      phase: "downloading" as const,
+    };
+    assert.equal(progressKey(event), fresh[1]);
+    assert.equal(importProgressText(new Set([progressKey(event)]), fresh), "Importing 1 of 2");
+    assert.equal(
+      importProgressText(new Set([progressKey({ ...event, key: "1" }), progressKey(event)]), fresh),
+      "Importing 2 of 2",
+    );
   });
 
   it("counts the projects that have started, at least the first", () => {

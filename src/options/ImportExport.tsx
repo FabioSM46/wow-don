@@ -52,6 +52,15 @@ export function ImportExport({ installation, onImported }: Props) {
   const [result, setResult] = useState<Load<ImportResult>>({ state: "idle" });
   const [progress, setProgress] = useState<InstallProgress | undefined>();
   const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const importRef = useRef<HTMLButtonElement>(null);
+  // Una risposta vale solo per l'installazione e il testo da cui è partita la richiesta.
+  const idRef = useRef(id);
+  const textRef = useRef(text);
+  useEffect(() => {
+    idRef.current = id;
+    textRef.current = text;
+  });
 
   useInstallProgress(id, (event) => {
     if (!importing) return;
@@ -68,6 +77,11 @@ export function ImportExport({ installation, onImported }: Props) {
     setConfirming(false);
     setCopied(null);
   }, [id]);
+
+  // La conferma prende il focus quando compare, così tastiera e lettori di schermo ci arrivano.
+  useEffect(() => {
+    if (confirming) cancelRef.current?.focus();
+  }, [confirming]);
 
   // Il messaggio di "Copy" sparisce da solo.
   useEffect(() => {
@@ -89,12 +103,14 @@ export function ImportExport({ installation, onImported }: Props) {
   const current = installation;
 
   async function runExport() {
+    const requested = current.id;
     setExported({ state: "loading" });
     setCopied(null);
     try {
-      setExported({ state: "ready", value: await api.exportAddons(current.id) });
+      const value = await api.exportAddons(requested);
+      if (idRef.current === requested) setExported({ state: "ready", value });
     } catch (err) {
-      setExported({ state: "error", message: errorMessage(err) });
+      if (idRef.current === requested) setExported({ state: "error", message: errorMessage(err) });
     }
   }
 
@@ -117,36 +133,50 @@ export function ImportExport({ installation, onImported }: Props) {
   }
 
   async function runPreview() {
+    const requested = { id: current.id, text };
+    const stillCurrent = () =>
+      idRef.current === requested.id && textRef.current === requested.text;
     setPreview({ state: "loading" });
     setResult({ state: "idle" });
     setConfirming(false);
     try {
-      setPreview({ state: "ready", value: await api.previewImport(current.id, text) });
+      const value = await api.previewImport(requested.id, requested.text);
+      // Un'anteprima di un altro testo o di un'altra installazione mostrerebbe cartelle da
+      // togliere che non c'entrano.
+      if (stillCurrent()) setPreview({ state: "ready", value });
     } catch (err) {
-      setPreview({ state: "error", message: errorMessage(err) });
+      if (stillCurrent()) setPreview({ state: "error", message: errorMessage(err) });
     }
   }
 
   async function runImport(confirmed: string[]) {
+    const requested = current.id;
     setConfirming(false);
     setImporting(true);
     setProgress(undefined);
     setSeen(new Set());
     setResult({ state: "loading" });
     try {
-      const value = await api.importAddons(current.id, text, mode, confirmed);
-      setResult({ state: "ready", value });
-      // L'anteprima descriveva lo stato di prima.
-      setPreview({ state: "idle" });
-      onImported();
+      const value = await api.importAddons(requested, text, mode, confirmed);
+      if (idRef.current === requested) {
+        setResult({ state: "ready", value });
+        // L'anteprima descriveva lo stato di prima.
+        setPreview({ state: "idle" });
+      }
     } catch (err) {
-      setResult({ state: "error", message: errorMessage(err) });
-      // Qualcosa può essere cambiato anche se il comando ha fallito.
-      onImported();
+      if (idRef.current === requested) setResult({ state: "error", message: errorMessage(err) });
     } finally {
       setImporting(false);
       setProgress(undefined);
+      // Gli addon sul disco possono essere cambiati anche se il comando ha fallito.
+      onImported();
     }
+  }
+
+  function cancelConfirm() {
+    setConfirming(false);
+    // Il pulsante Import torna al posto della conferma: il focus ci torna con lui.
+    window.setTimeout(() => importRef.current?.focus(), 0);
   }
 
   function startImport(shown: ImportPreview) {
@@ -339,7 +369,7 @@ export function ImportExport({ installation, onImported }: Props) {
                     Remove {shownPreview.removals.length}{" "}
                     {shownPreview.removals.length === 1 ? "folder" : "folders"} and import
                   </button>
-                  <button className="button secondary" onClick={() => setConfirming(false)}>
+                  <button ref={cancelRef} className="button secondary" onClick={cancelConfirm}>
                     Cancel
                   </button>
                 </div>
@@ -347,6 +377,7 @@ export function ImportExport({ installation, onImported }: Props) {
             ) : (
               <div className="import-export-actions">
                 <button
+                  ref={importRef}
                   className="button"
                   onClick={() => startImport(shownPreview)}
                   disabled={
