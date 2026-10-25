@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::addons::toc;
 use crate::installations::Installation;
 use crate::sources::curseforge::{
-    CatalogMod, Category, CurseForgeClient, ModSearch, RELEASE_TYPE_RELEASE, SortOrder, Transport,
+    CatalogMod, Category, CurseForgeClient, ModSearch, SortOrder, Transport, pick_file,
 };
 use crate::store::InstalledRecords;
 use crate::updates::{is_known_version_type, version_type_for};
@@ -79,6 +79,8 @@ pub struct CatalogFile {
     pub name: String,
     /// La versione del gioco del file, per esempio `12.1.5`.
     pub game_version: String,
+    /// `releaseType` di CurseForge: 1 Release, 2 Beta (solo con l'opzione della issue #141).
+    pub release_type: u8,
 }
 
 /// Un addon del catalogo, come lo vede il frontend.
@@ -103,8 +105,14 @@ pub struct CatalogAddon {
 }
 
 impl CatalogAddon {
-    /// `version_type` sceglie l'ultimo file; `installed` è l'insieme di [`installed_projects`].
-    pub fn new(found: &CatalogMod, version_type: u32, installed: &HashSet<u32>) -> Self {
+    /// `version_type` sceglie l'ultimo file, una Beta solo con `allow_beta` e senza Release
+    /// (issue #141); `installed` è l'insieme di [`installed_projects`].
+    pub fn new(
+        found: &CatalogMod,
+        version_type: u32,
+        allow_beta: bool,
+        installed: &HashSet<u32>,
+    ) -> Self {
         let project = &found.project;
         Self {
             id: project.id,
@@ -126,28 +134,33 @@ impl CatalogAddon {
                 .filter(|url| !url.is_empty()),
             url: project.links.website_url.clone(),
             allow_mod_distribution: project.allow_mod_distribution.unwrap_or(false),
-            latest_file: latest_release(found, version_type),
+            latest_file: latest_file(found, version_type, allow_beta),
             installed: installed.contains(&project.id),
         }
     }
 }
 
-/// Il file Release più recente per la versione, tra quelli che CurseForge indica come ultimi
-/// del progetto. L'indice non ha la data: decide l'id, che CurseForge assegna in ordine
-/// crescente.
-fn latest_release(found: &CatalogMod, version_type: u32) -> Option<CatalogFile> {
-    found
+/// Il file da installare per la versione, tra quelli che CurseForge indica come ultimi del
+/// progetto, con la regola di [`pick_file`]. L'indice non ha la data: decide l'id, che
+/// CurseForge assegna in ordine crescente.
+fn latest_file(found: &CatalogMod, version_type: u32, allow_beta: bool) -> Option<CatalogFile> {
+    let for_version = found
         .project
         .latest_files_indexes
         .iter()
-        .filter(|index| index.release_type == RELEASE_TYPE_RELEASE)
-        .filter(|index| index.game_version_type_id == Some(version_type))
-        .max_by_key(|index| index.file_id)
-        .map(|index| CatalogFile {
-            id: index.file_id,
-            name: index.filename.clone().unwrap_or_default(),
-            game_version: index.game_version.clone(),
-        })
+        .filter(|index| index.game_version_type_id == Some(version_type));
+    pick_file(
+        for_version,
+        |index| index.release_type,
+        |index| index.file_id,
+        allow_beta,
+    )
+    .map(|index| CatalogFile {
+        id: index.file_id,
+        name: index.filename.clone().unwrap_or_default(),
+        game_version: index.game_version.clone(),
+        release_type: index.release_type,
+    })
 }
 
 /// Una pagina di risultati per il frontend.
@@ -175,6 +188,8 @@ pub struct CatalogQuery {
     pub category_id: Option<u32>,
     /// Senza, vale la versione del gioco dell'installazione.
     pub version_type: Option<u32>,
+    /// L'opzione "Beta quando non c'è una Release" (issue #141).
+    pub allow_beta: bool,
     pub sort: CatalogSort,
     pub sort_order: SortOrder,
     pub index: u32,
@@ -231,12 +246,12 @@ pub fn search_catalog<T: Transport>(
     let page = client.search_mods(&search).map_err(|e| e.to_string())?;
     let installed = installed_projects(installation, records);
     // `gameVersionTypeId` include i progetti con un file di qualunque tipo per la versione (per
-    // esempio solo una Beta): l'installazione prende solo Release, quindi quelli senza si
-    // tolgono qui, con la stessa regola (`latest_release`).
+    // esempio solo una Beta): quelli che l'installazione non prenderebbe si tolgono qui, con la
+    // stessa regola (`pick_file`, Beta solo con l'opzione).
     let all: Vec<CatalogAddon> = page
         .data
         .iter()
-        .map(|found| CatalogAddon::new(found, version_type, &installed))
+        .map(|found| CatalogAddon::new(found, version_type, request.allow_beta, &installed))
         .collect();
     let fetched = u32::try_from(all.len()).unwrap_or(u32::MAX);
     let addons: Vec<CatalogAddon> = all
@@ -427,6 +442,7 @@ mod tests {
             sort: CatalogSort::Popularity,
             sort_order: SortOrder::Desc,
             index,
+            allow_beta: false,
         }
     }
 
@@ -487,7 +503,8 @@ mod tests {
             Some(CatalogFile {
                 id: 12,
                 name: "new.zip".to_owned(),
-                game_version: "12.1.5".to_owned()
+                game_version: "12.1.5".to_owned(),
+                release_type: 1,
             })
         );
         assert!(details.allow_mod_distribution && !details.installed);
@@ -508,6 +525,30 @@ mod tests {
               &gameVersionTypeId=517&sortField=2&sortOrder=desc&index=50&pageSize=50"
             ]
         );
+    }
+
+    #[test]
+    fn with_the_beta_option_a_beta_only_addon_is_shown_as_a_beta() {
+        let tmp = TempDir::new();
+        let client = client(200, PAGE);
+        let mut request = query(50);
+        request.allow_beta = true;
+        let page = search_catalog(
+            &installation(tmp.path(), "retail"),
+            &client,
+            &InstalledRecords::new(),
+            &request,
+        )
+        .unwrap();
+        assert_eq!((page.fetched, page.hidden), (3, 0));
+        let rare = page.addons.iter().find(|a| a.id == 84208).unwrap();
+        assert_eq!(
+            rare.latest_file.as_ref().map(|f| (f.id, f.release_type)),
+            Some((30, 2))
+        );
+        // Una Release vince sempre sulla Beta, anche con l'opzione.
+        let details = page.addons.iter().find(|a| a.id == 61284).unwrap();
+        assert_eq!(details.latest_file.as_ref().map(|f| f.id), Some(12));
     }
 
     #[test]
@@ -703,6 +744,7 @@ mod tests {
                     id: 2,
                     name: "a.zip".to_owned(),
                     game_version: "12.1.5".to_owned(),
+                    release_type: 1,
                 }),
                 installed: true,
             }],

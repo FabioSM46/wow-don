@@ -27,7 +27,8 @@ use crate::installations::Installation;
 use crate::progress::{Phase, ProgressSink, Reporter};
 use crate::sources::SourceKind;
 use crate::sources::curseforge::{
-    CurseForgeClient, File, Mod, RELATION_REQUIRED_DEPENDENCY, RELEASE_TYPE_RELEASE, Transport,
+    CurseForgeClient, File, Mod, RELATION_REQUIRED_DEPENDENCY, RELEASE_TYPE_BETA, Transport,
+    pick_file,
 };
 use crate::store::{InstalledRecord, InstalledRecords};
 use crate::updates::{self, FileSummary, VersionOverrides};
@@ -114,6 +115,7 @@ pub fn install_addon<T: Transport>(
     records: &InstalledRecords,
     mod_id: u32,
     file_id: Option<u32>,
+    allow_beta: bool,
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
     progress: &ProgressSink<'_>,
 ) -> Vec<InstallOutcome> {
@@ -132,6 +134,7 @@ pub fn install_addon<T: Transport>(
         installation,
         client,
         version_type,
+        allow_beta,
         records: records.clone(),
         installed,
         record,
@@ -229,6 +232,8 @@ struct Installer<'a, T: Transport> {
     client: &'a CurseForgeClient<T>,
     /// La versione del gioco del progetto scelto, per i progetti senza `file_id`.
     version_type: Option<u32>,
+    /// Una Beta quando la versione non ha una Release (issue #141), anche per le dipendenze.
+    allow_beta: bool,
     /// I record di partenza più quelli delle installazioni già fatte.
     records: InstalledRecords,
     /// I progetti installati, aggiornato dopo ogni installazione riuscita.
@@ -255,12 +260,13 @@ impl<T: Transport> Installer<'_, T> {
             self.client,
             project,
             self.version_type,
+            self.allow_beta,
             file_id,
         ) {
             Ok(file) => file,
             Err(outcome) => return (outcome, Vec::new()),
         };
-        let result = install_checked(
+        let mut result = install_checked(
             self.installation,
             self.client,
             &mut self.records,
@@ -271,6 +277,12 @@ impl<T: Transport> Installer<'_, T> {
         );
         if result.0.status == InstallStatus::Installed {
             self.installed.insert(project.id);
+            // Una Beta scelta dall'app, non dall'utente nel dettaglio: l'esito lo dice.
+            if file_id.is_none() && file.release_type == RELEASE_TYPE_BETA {
+                result.0.message.get_or_insert_with(|| {
+                    "Installed the beta: there is no release for this game version.".to_owned()
+                });
+            }
         }
         result
     }
@@ -283,6 +295,7 @@ fn find_file<T: Transport>(
     client: &CurseForgeClient<T>,
     project: &Mod,
     version_type: Option<u32>,
+    allow_beta: bool,
     file_id: Option<u32>,
 ) -> Result<File, InstallOutcome> {
     let mod_id = project.id;
@@ -309,7 +322,7 @@ fn find_file<T: Transport>(
                     ),
                 ));
             };
-            latest_release(project, version_type).ok_or_else(|| {
+            latest_file(project, version_type, allow_beta).ok_or_else(|| {
                 InstallOutcome::skipped(
                     mod_id,
                     name,
@@ -339,17 +352,22 @@ fn find_file<T: Transport>(
     Ok(file)
 }
 
-/// Il file Release più recente per la versione tra quelli che CurseForge indica come ultimi del
-/// progetto. L'indice non ha la data: decide l'id, che CurseForge assegna in ordine crescente
-/// (come l'ultimo file della ricerca).
-fn latest_release(project: &Mod, version_type: u32) -> Option<u32> {
-    project
+/// Il file da installare per la versione tra quelli che CurseForge indica come ultimi del
+/// progetto, con la regola di [`pick_file`] (una Beta solo con `allow_beta`). L'indice non ha la
+/// data: decide l'id, che CurseForge assegna in ordine crescente (come l'ultimo file della
+/// ricerca).
+fn latest_file(project: &Mod, version_type: u32, allow_beta: bool) -> Option<u32> {
+    let for_version = project
         .latest_files_indexes
         .iter()
-        .filter(|index| index.release_type == RELEASE_TYPE_RELEASE)
-        .filter(|index| index.game_version_type_id == Some(version_type))
-        .map(|index| index.file_id)
-        .max()
+        .filter(|index| index.game_version_type_id == Some(version_type));
+    pick_file(
+        for_version,
+        |index| index.release_type,
+        |index| index.file_id,
+        allow_beta,
+    )
+    .map(|index| index.file_id)
 }
 
 /// Scarica e installa `file`, rifiutando le cartelle di altri progetti, poi lo registra sia
@@ -741,6 +759,7 @@ mod tests {
             records,
             mod_id,
             file_id,
+            false,
             &mut |id, r| {
                 written.push((id, r));
                 Ok(())
@@ -787,6 +806,7 @@ mod tests {
             &InstalledRecords::new(),
             1,
             None,
+            false,
             &mut |_, _| Ok(()),
             &progress::ignore,
         )
@@ -891,6 +911,58 @@ mod tests {
         assert_eq!(
             outcome.message.as_deref(),
             Some("There is no release file for this game version.")
+        );
+    }
+
+    /// Un progetto che per WoW Forever ha solo una Beta (come RareScanner, issue #141).
+    fn beta_only_routes() -> Routes {
+        let mut routes = routes(1, 12, &[("Alpha/Alpha.toc", "")]);
+        routes.projects = vec![json!({
+            "id": 1, "name": "Project 1", "allowModDistribution": true,
+            "latestFilesIndexes": [
+                {"fileId": 12, "releaseType": 2, "gameVersionTypeId": crate::updates::FOREVER},
+                {"fileId": 13, "releaseType": 3, "gameVersionTypeId": crate::updates::FOREVER},
+            ],
+        })];
+        let mut file = file_json(1, 12, true);
+        file["releaseType"] = json!(2);
+        routes.files.insert(
+            format!("{API}/v1/mods/1/files/12"),
+            json!({"data": file}).to_string(),
+        );
+        routes
+    }
+
+    #[test]
+    fn a_beta_is_installed_only_with_the_option_and_says_so() {
+        let mut fx = fixture();
+        fx.installation.flavor = "classic_beta".to_owned();
+        let run = |allow_beta| {
+            install_addon(
+                &fx.installation,
+                &client(beta_only_routes()),
+                &VersionOverrides::new(),
+                &InstalledRecords::new(),
+                1,
+                None,
+                allow_beta,
+                &mut |_, _| Ok(()),
+                &progress::ignore,
+            )
+            .remove(0)
+        };
+        let off = run(false);
+        assert_eq!(off.status, InstallStatus::Skipped);
+        assert_eq!(
+            off.message.as_deref(),
+            Some("There is no release file for this game version.")
+        );
+        let on = run(true);
+        assert_eq!(on.status, InstallStatus::Installed, "{on:?}");
+        assert_eq!(on.file.as_ref().map(|f| f.id), Some(12));
+        assert_eq!(
+            on.message.as_deref(),
+            Some("Installed the beta: there is no release for this game version.")
         );
     }
 
@@ -1010,6 +1082,7 @@ mod tests {
             &InstalledRecords::new(),
             1,
             None,
+            false,
             &mut |_, _| Err("disk full".to_owned()),
             &progress::ignore,
         )
@@ -1284,6 +1357,7 @@ mod tests {
             &InstalledRecords::new(),
             1,
             None,
+            false,
             &mut |id, r| {
                 written.push((id, r.file_id));
                 Ok(())

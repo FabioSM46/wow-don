@@ -46,6 +46,9 @@ type Props = {
   active: boolean;
   /** `false` quando la chiave CurseForge manca; `null` finché lo stato non è noto. */
   keyConfigured: boolean | null;
+  /** L'opzione della Beta (issue #141): quando cambia, la ricerca riparte. Il backend la legge
+   * da sé; qui serve solo a sapere quando i risultati non valgono più. */
+  betaWhenNoRelease?: boolean | null;
   /** Un'installazione ha messo almeno un progetto nell'installazione (la tab Installed). */
   onInstalled?: () => void;
 };
@@ -68,7 +71,13 @@ function installKey(installationId: string, modId: number): string {
   return `${installationId}:${modId}`;
 }
 
-export function Search({ installation, active, keyConfigured, onInstalled }: Props) {
+export function Search({
+  installation,
+  active,
+  keyConfigured,
+  betaWhenNoRelease,
+  onInstalled,
+}: Props) {
   const [started, setStarted] = useState(active);
   if (active && !started) setStarted(true);
 
@@ -263,7 +272,7 @@ export function Search({ installation, active, keyConfigured, onInstalled }: Pro
         if (!tracker.current.isLatest(id)) return;
         setLoad({ results: null, loading: false, error: errorMessage(err) });
       });
-  }, [started, missingKey, installation.id, params, retry]);
+  }, [started, missingKey, installation.id, params, retry, betaWhenNoRelease]);
 
   function loadMore() {
     const results = load.results;

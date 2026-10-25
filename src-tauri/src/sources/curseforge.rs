@@ -26,6 +26,32 @@ pub const WOW_GAME_ID: u32 = 1;
 pub const RELEASE_TYPE_RELEASE: u8 = 1;
 /// `releaseType` dei file Beta (`FileReleaseType`: 1 Release, 2 Beta, 3 Alpha).
 pub const RELEASE_TYPE_BETA: u8 = 2;
+/// La regola di scelta di un file per una versione del gioco, una sola per ricerca,
+/// installazione e aggiornamento (issue #141): il Release più recente; se non c'è e `allow_beta`
+/// è vero, la Beta più recente. Mai Alpha. `newest` ordina i candidati dello stesso tipo.
+pub fn pick_file<T: Copy, K: Ord>(
+    candidates: impl IntoIterator<Item = T>,
+    release_type: impl Fn(T) -> u8,
+    newest: impl Fn(T) -> K,
+    allow_beta: bool,
+) -> Option<T> {
+    let candidates: Vec<T> = candidates.into_iter().collect();
+    let best = |wanted: u8| {
+        candidates
+            .iter()
+            .copied()
+            .filter(|&candidate| release_type(candidate) == wanted)
+            .max_by_key(|&candidate| newest(candidate))
+    };
+    best(RELEASE_TYPE_RELEASE).or_else(|| {
+        if allow_beta {
+            best(RELEASE_TYPE_BETA)
+        } else {
+            None
+        }
+    })
+}
+
 /// `relationType` di una dipendenza obbligatoria. I valori di `FileRelationType`
 /// (docs.curseforge.com/rest-api, verificati il 2026-10-24): 1 EmbeddedLibrary,
 /// 2 OptionalDependency, 3 RequiredDependency, 4 Tool, 5 Incompatible, 6 Include.
@@ -970,6 +996,23 @@ mod tests {
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(seen[0].0, "https://api.curseforge.com/v1/mods");
         assert_eq!(seen[0].2.as_deref(), Some(r#"{"modIds":[1,2]}"#));
+    }
+
+    #[test]
+    fn pick_file_prefers_release_then_beta_only_when_allowed_and_never_alpha() {
+        // (id, releaseType)
+        let files = [(1, 1u8), (5, 2), (3, 1), (9, 3)];
+        let pick = |files: &[(u32, u8)], beta| {
+            pick_file(files.iter(), |f| f.1, |f| f.0, beta).map(|f| f.0)
+        };
+        assert_eq!(pick(&files, false), Some(3));
+        assert_eq!(pick(&files, true), Some(3));
+        let beta_only = [(5, 2u8), (7, 2), (9, 3)];
+        assert_eq!(pick(&beta_only, false), None);
+        assert_eq!(pick(&beta_only, true), Some(7));
+        let alpha_only = [(9, 3u8)];
+        assert_eq!(pick(&alpha_only, true), None);
+        assert_eq!(pick(&[], true), None);
     }
 
     #[test]

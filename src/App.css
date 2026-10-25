@@ -233,8 +233,13 @@ button:focus-visible {
 /* Options: le sezioni (Found on this computer, Installations, Appearance) una sotto l'altra. */
 
 .discovered + .installations,
-.appearance {
+.appearance,
+.updates-option {
   margin-top: 32px;
+}
+
+.updates-option .hint {
+  margin-top: 4px;
 }
 
 /* Installazioni trovate: cartella del gioco e provenienza accanto al nome, in tono neutro. */

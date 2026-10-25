@@ -91,6 +91,7 @@ pub fn addon_detail<T: Transport>(
     overrides: &VersionOverrides,
     mod_id: u32,
     version_type: Option<u32>,
+    allow_beta: bool,
 ) -> Result<AddonDetail, String> {
     let requested = version_type.or_else(|| overrides.get(&mod_id).copied());
     let version_type = search_version_type(installation, requested)?;
@@ -98,7 +99,7 @@ pub fn addon_detail<T: Transport>(
     let description = plain_text(&client.mod_description(mod_id).map_err(|e| e.to_string())?);
     let mut files = recent_files(client, mod_id, version_type)?;
     let installed = installed_projects(installation, records);
-    let addon = CatalogAddon::new(&found, version_type, &installed);
+    let addon = CatalogAddon::new(&found, version_type, allow_beta, &installed);
     let latest = addon.latest_file.as_ref().map(|file| file.id);
     // Le dipendenze si leggono dalla lista intera: tagliarla prima perderebbe l'ultimo
     // Release dietro più di [`MAX_FILES`] Beta.
@@ -373,6 +374,7 @@ mod tests {
             overrides,
             61284,
             version_type,
+            false,
         )
     }
 

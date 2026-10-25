@@ -1,5 +1,5 @@
 import type { CatalogAddon } from "../api";
-import type { InstallSummary } from "./install";
+import { installLabel, type InstallSummary } from "./install";
 import { ProgressBar } from "../addons/ProgressBar";
 
 /** Un'installazione avviata dalla tab Search: in corso, finita con gli esiti o rifiutata. */
@@ -91,7 +91,7 @@ function ActionContent({ addon, run, progress, variant, onInstall, onOpenPage }:
           onInstall(addon);
         }}
       >
-        Install
+        {installLabel(addon)}
       </button>
     </>
   );
