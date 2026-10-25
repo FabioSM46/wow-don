@@ -184,6 +184,9 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
         if (check.error === null) {
           setUpdates(byFolder(check.updates));
         } else {
+          // Come in `runCheck`: l'ultimo risultato valido resta visibile accanto all'errore, così
+          // un controllo fallito (rete assente) non toglie tutti gli stati. Dopo un aggiornamento
+          // `updateProjects` ha già svuotato la cache, quindi lì non resta niente di vecchio.
           setCheckError(check.error);
           // Senza nessun risultato il filtro non ha dati su cui agire: lo si toglie.
           if (!updatesCache.has(id)) setFilters((f) => ({ ...f, onlyUpdates: false }));
