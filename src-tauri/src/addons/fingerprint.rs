@@ -319,7 +319,7 @@ fn index_files(addon_dir: &Path, folder: &str) -> FileIndex {
 /// rileggere i file (vedi `addons::cache`).
 pub type FileStamp = (String, u64, Option<SystemTime>);
 
-/// Come [`index_files`], con la dimensione e la data di modifica di ogni file, ordinate per
+/// Come `index_files`, con la dimensione e la data di modifica di ogni file, ordinate per
 /// percorso. Per un link a un file valgono quelle del file a cui punta.
 fn index_files_stamped(addon_dir: &Path, folder: &str) -> (FileIndex, Vec<FileStamp>) {
     let mut index = FileIndex::new();

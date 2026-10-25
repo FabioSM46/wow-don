@@ -44,7 +44,7 @@ pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<Installe
     scan_addons_with(installation_dir, flavor, None)
 }
 
-/// Come [`scan_addons`], con i fingerprint presi da `cache` quando le cartelle non sono
+/// Come `scan_addons`, con i fingerprint presi da `cache` quando le cartelle non sono
 /// cambiate (issue #125). Le cartelle che non ci sono più escono dalla cache.
 pub fn scan_addons_with(
     installation_dir: &Path,

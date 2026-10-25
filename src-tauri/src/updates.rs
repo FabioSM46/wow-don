@@ -1,8 +1,8 @@
 //! Controllo degli aggiornamenti: abbina gli addon installati ai progetti delle fonti (D12,
 //! D33) e sceglie, per ognuno, la versione più recente per il gioco dell'installazione.
 //!
-//! [`check_updates`] scansiona l'installazione e offre le cartelle alle fonti nell'ordine di D33;
-//! [`update_addons`] rifà il controllo e chiede a ogni fonte di aggiornare i suoi progetti.
+//! [`check_updates_with`] scansiona l'installazione e offre le cartelle alle fonti nell'ordine di D33;
+//! [`update_addons_with`] rifà il controllo e chiede a ogni fonte di aggiornare i suoi progetti.
 //! CurseForge è [`CurseForgeSource`]: [`evaluate`] è pura, riceve la scansione, la risposta dei
 //! fingerprint e i mod, e non usa né rete né disco.
 
@@ -290,7 +290,7 @@ pub fn check_updates(
     check_updates_with(installation, None, sources, records)
 }
 
-/// Come [`check_updates`], con i fingerprint della scansione presi da `cache` (issue #125).
+/// Come `check_updates`, con i fingerprint della scansione presi da `cache` (issue #125).
 pub fn check_updates_with(
     installation: &Installation,
     cache: Option<&FingerprintCache>,
@@ -300,7 +300,7 @@ pub fn check_updates_with(
     scan_and_check(installation, cache, sources, records).map(|(_, updates)| updates)
 }
 
-/// Come [`check_updates`], ma restituisce anche la scansione.
+/// Come `check_updates`, ma restituisce anche la scansione.
 fn scan_and_check(
     installation: &Installation,
     cache: Option<&FingerprintCache>,
@@ -557,7 +557,7 @@ impl UpdateOutcome {
 }
 
 /// Aggiorna i progetti `projects` di un'installazione. Rifà il controllo con le stesse fonti di
-/// [`check_updates`] invece di fidarsi del frontend, poi passa ogni progetto alla sua fonte. Un
+/// `check_updates` invece di fidarsi del frontend, poi passa ogni progetto alla sua fonte. Un
 /// errore su un progetto non ferma gli altri; un progetto ripetuto si aggiorna una volta sola.
 /// Bloccante.
 ///
@@ -582,7 +582,7 @@ pub fn update_addons(
     )
 }
 
-/// Come [`update_addons`], con i fingerprint del controllo iniziale presi da `cache`.
+/// Come `update_addons`, con i fingerprint del controllo iniziale presi da `cache`.
 pub fn update_addons_with(
     installation: &Installation,
     cache: Option<&FingerprintCache>,
