@@ -1,6 +1,6 @@
 # Roadmap
 
-Ultimo aggiornamento: 2026-10-24.
+Ultimo aggiornamento: 2026-10-25.
 
 ## M0 — Scaffolding (fatto)
 
@@ -58,6 +58,18 @@ Ultimo aggiornamento: 2026-10-24.
   sole.
 - Options: scelta del tema (sistema, chiaro, scuro) salvata dal backend.
 
+## M4.6 — Fonti libere (in corso)
+
+Fonti senza accordi pubblicitari né chiavi (D31), dietro l'interfaccia comune (D12):
+
+- Installazione di uno zip scaricato a mano, trascinandolo nella finestra o con "Install from
+  zip…" (D32): così si installano anche gli addon con `allowModDistribution = false`.
+- `installed-addons.json` v2 con i record per fonte e l'ordine di abbinamento tra le fonti (D33).
+- Tukui (ElvUI, Tukui), WoWInterface e GitHub Releases, con l'installazione da link nella tab
+  Search e la fonte di ogni addon nella tab Installed.
+
+Iteration 3: #102, #103, #104, #105, #106, #111, #117. Dopo: #107, #108, #109, #110.
+
 ## M5 — Richiesta chiave per applicazioni di terzi
 
 - Inviare a CurseForge/Overwolf il form per la chiave da applicazione.
@@ -65,10 +77,9 @@ Ultimo aggiornamento: 2026-10-24.
 
 ## Dopo
 
-- Altre fonti: GitHub releases, WoWInterface, Wago. Wago richiede la "Wago Access Key" da abbonato
-  Patreon dell'utente (facoltativa, mai inclusa nell'app; l'API usata da WowUp è
-  `addons.wago.io/api/external`, non documentata) e il permesso di usarla in un gestore
-  diverso da WowUp: in attesa della chiave. GitHub releases non aiuta per Details (nessuno
-  zip dal 2021).
+- Wago resta fuori (D31): richiederebbe la "Wago Access Key" da abbonato Patreon dell'utente e il
+  permesso di usarla in un gestore diverso da WowUp.
+- Token GitHub personale facoltativo, per superare il limite di 60 richieste l'ora.
+- Ricerca nel catalogo WoWInterface.
 - Primo rilascio provato: `.deb`, installer NSIS e `.dmg` costruiti dalla CI (D24) al primo
   tag su `main`.
