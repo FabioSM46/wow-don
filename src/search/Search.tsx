@@ -10,6 +10,7 @@ import {
   type Installation,
   type VersionType,
 } from "../api";
+import { AddByLink } from "./AddByLink";
 import { AddonDetailView } from "./AddonDetail";
 import { CatalogTable } from "./CatalogTable";
 import { InstallAction, InstallResult, type InstallRun } from "./InstallAction";
@@ -308,12 +309,21 @@ export function Search({
     setSearch((previous) => ({ ...previous, query: "", categoryId: null }));
   }
 
+  // "Add by link" non usa CurseForge: resta anche senza la chiave. Il suo stato vale per
+  // l'installazione, quindi si rimonta quando cambia.
+  const addByLink = (
+    <AddByLink key={installation.id} installationId={installation.id} onInstalled={onInstalled} />
+  );
+
   if (missingKey) {
     return (
-      <p className="empty">
-        Search needs a CurseForge API key. Set <code>CURSEFORGE_API_KEY</code> in the{" "}
-        <code>.env</code> file and restart the app.
-      </p>
+      <section aria-label="Search">
+        {addByLink}
+        <p className="empty">
+          Search needs a CurseForge API key. Set <code>CURSEFORGE_API_KEY</code> in the{" "}
+          <code>.env</code> file and restart the app.
+        </p>
+      </section>
     );
   }
 
@@ -427,6 +437,8 @@ export function Search({
             </button>
           </div>
         </div>
+
+        {addByLink}
 
         {pageError && (
           <p className="message error" role="alert">
