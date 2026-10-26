@@ -216,17 +216,23 @@ fn same_project(source: SourceKind, key: &str, source_b: SourceKind, key_b: &str
 }
 
 /// Se l'app ha installato il progetto: un record della stessa fonte nomina una cartella che
-/// c'è ancora in `AddOns`. Solo disco, nessuna rete.
-fn is_installed(addons_dir: &Path, records: &SourceRecords, source: SourceKind, key: &str) -> bool {
+/// c'è ancora in `AddOns`. Solo disco, nessuna rete. Una cartella `AddOns` illeggibile è un
+/// errore, non "non installato": l'installazione fallirebbe comunque nel controllo delle cartelle.
+fn is_installed(
+    addons_dir: &Path,
+    records: &SourceRecords,
+    source: SourceKind,
+    key: &str,
+) -> Result<bool, String> {
     let Some(projects) = records.get(&source) else {
-        return false;
+        return Ok(false);
     };
-    let on_disk = install_new::folder_names(addons_dir).unwrap_or_default();
-    projects
+    let on_disk = install_new::folder_names(addons_dir)?;
+    Ok(projects
         .iter()
         .filter(|(recorded, _)| same_project(source, key, source, recorded))
         .flat_map(|(_, record)| &record.folders)
-        .any(|folder| on_disk.contains_key(&folder.to_lowercase()))
+        .any(|folder| on_disk.contains_key(&folder.to_lowercase())))
 }
 
 /// Rifiuta lo zip se una delle sue cartelle esiste già e appartiene a un altro progetto, con la
@@ -285,13 +291,15 @@ pub fn preview<T: PublicTransport>(
 ) -> Result<LinkPreview, String> {
     check_key(target.source, &target.key)?;
     let key = target.key.as_str();
+    // Prima il disco: un `AddOns` illeggibile fallisce senza rete.
+    let addons_dir = installation.path.join("Interface").join("AddOns");
+    let installed = is_installed(&addons_dir, records, target.source, key)?;
     let info: LinkInfo = match target.source {
         SourceKind::Github => sources.github.preview(installation, key)?,
         SourceKind::Wowinterface => sources.wowinterface.preview(key)?,
         SourceKind::Tukui => sources.tukui.preview(installation, key)?,
         SourceKind::Curseforge => return Err(CURSEFORGE.to_owned()),
     };
-    let addons_dir = installation.path.join("Interface").join("AddOns");
     Ok(LinkPreview {
         source: target.source,
         id: target.key.clone(),
@@ -300,7 +308,7 @@ pub fn preview<T: PublicTransport>(
         downloadable: info.downloadable,
         message: info.message,
         url: info.url,
-        installed: is_installed(&addons_dir, records, target.source, key),
+        installed,
     })
 }
 
@@ -320,8 +328,10 @@ pub fn install<T: PublicTransport>(
         return UpdateOutcome::error(source, key, "", error);
     }
     let addons_dir = installation.path.join("Interface").join("AddOns");
-    if is_installed(&addons_dir, records, source, key) {
-        return UpdateOutcome::skipped(source, key, "", "Already installed.");
+    match is_installed(&addons_dir, records, source, key) {
+        Ok(true) => return UpdateOutcome::skipped(source, key, "", "Already installed."),
+        Ok(false) => {}
+        Err(error) => return UpdateOutcome::error(source, key, "", error),
     }
     let flavor = installation.flavor.as_str();
     let check = |folders: &[String]| {
@@ -857,6 +867,29 @@ mod tests {
                 "## Interface: 120100\n## X-Curse-Project-ID: 1234\n"
             );
         }
+    }
+
+    /// Un `AddOns` che non si legge (qui un file al suo posto) è un errore senza rete, non
+    /// "non installato".
+    #[test]
+    fn an_unreadable_addons_folder_fails_without_network() {
+        let game = game();
+        fs::remove_dir(&game.addons).unwrap();
+        fs::write(&game.addons, "not a folder").unwrap();
+        let sources = Sources::new();
+        let records = recorded(SourceKind::Tukui, "-2", "ElvUI");
+        let error = preview(
+            &game.installation,
+            &sources.links(),
+            &records,
+            &target(SourceKind::Tukui, "-2"),
+        )
+        .unwrap_err();
+        assert!(error.contains("AddOns"), "{error}");
+        let (outcome, written) = run_install(&game, &sources, &records, SourceKind::Tukui, "-2");
+        assert_eq!(outcome.status, OutcomeStatus::Error, "{outcome:?}");
+        assert!(written.is_empty());
+        assert!(sources.calls().is_empty(), "{:?}", sources.calls());
     }
 
     #[test]
