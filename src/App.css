@@ -1022,6 +1022,11 @@ button:focus-visible {
   color: var(--muted);
 }
 
+/* Un errore nell'intestazione (link non aperto, controllo del mirror GitHub fallito). */
+.detail-meta.error {
+  color: var(--danger);
+}
+
 .detail-actions {
   flex: none;
   display: flex;

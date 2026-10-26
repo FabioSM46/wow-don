@@ -27,6 +27,13 @@ import { projectId } from "../addons/sources";
 import { installedIds, summarizeInstall, withInstalled } from "./install";
 import { forgetFinishedRuns, forgetInstalled, installKey } from "./stale";
 import {
+  blockedHint,
+  detailNote,
+  isBlocked,
+  mirrorStep,
+  type MirrorCheck,
+} from "./mirror";
+import {
   RequestTracker,
   SEARCH_DELAY_MS,
   SORTS,
@@ -150,6 +157,109 @@ export function Search({
     setRunProgress((previous) => withRunProgress(previous, event, installation.id, running));
   });
 
+  // Il mirror GitHub dei progetti bloccati (issue #165), per installazione e progetto: chiesto
+  // solo dal dettaglio o da Install, mai per tutti i risultati (GitHub dà 60 richieste l'ora), e
+  // ricordato per la sessione. `checking` evita due richieste per lo stesso progetto; `mirrorGen`
+  // scarta le risposte arrivate dopo che gli esiti sono stati dimenticati.
+  const [mirrors, setMirrors] = useState<Map<string, MirrorCheck>>(new Map());
+  const checking = useRef(new Set<string>());
+  const mirrorGen = useRef(0);
+
+  // L'opzione della Beta cambia il file che l'app installerebbe, e con lui il mirror: gli esiti,
+  // le richieste in corso e i motivi già mostrati non valgono più. Una risposta arrivata dopo
+  // si scarta (`mirrorGen`), così un nuovo clic su Install fa subito una richiesta nuova.
+  useEffect(() => {
+    mirrorGen.current += 1;
+    checking.current.clear();
+    setMirrors((previous) => (previous.size === 0 ? previous : new Map()));
+    setRuns((previous) => {
+      if (![...previous.values()].some((run) => run.status === "unavailable")) return previous;
+      return new Map([...previous].filter(([, run]) => run.status !== "unavailable"));
+    });
+  }, [betaWhenNoRelease]);
+
+  function setRunFor(key: string, run: InstallRun) {
+    setRuns((previous) => new Map(previous).set(key, run));
+  }
+
+  /** Con l'esito del controllo: installa, oppure dice perché il progetto resta sul sito. */
+  function installChecked(addon: CatalogAddon, check: MirrorCheck) {
+    const step = mirrorStep(check);
+    if (step.kind === "install") {
+      install(addon);
+      return;
+    }
+    if (step.kind !== "website") return;
+    const key = installKey(installation.id, addon.id);
+    setRunFor(key, {
+      status: "unavailable",
+      name: addon.name || `#${addon.id}`,
+      reason: step.reason,
+      url: addon.url,
+    });
+    setLastInstall(key);
+    setPageError(null);
+  }
+
+  /** Chiede a `github_mirror` il mirror di `addon`; con `installAfter` poi lo installa. */
+  function checkMirror(addon: CatalogAddon, installAfter: boolean) {
+    const id = installation.id;
+    const key = installKey(id, addon.id);
+    if (checking.current.has(key)) return;
+    checking.current.add(key);
+    const gen = mirrorGen.current;
+    // Una risposta di una generazione vecchia non scrive niente e non installa: il file che ha
+    // controllato non è più quello che `install_addon` sceglierebbe.
+    const current = () => gen === mirrorGen.current;
+    const setCheck = (check: MirrorCheck) =>
+      setMirrors((previous) => new Map(previous).set(key, check));
+    setCheck({ status: "checking" });
+    if (installAfter) {
+      setLastInstall(key);
+      setPageError(null);
+      // L'esito di prima (un errore) non descrive questo tentativo.
+      setRuns((previous) => {
+        if (!previous.has(key)) return previous;
+        const next = new Map(previous);
+        next.delete(key);
+        return next;
+      });
+    }
+    api
+      .githubMirror(id, addon.id)
+      .then(
+        (result) => {
+          if (!current()) return;
+          const check: MirrorCheck = { status: "done", result };
+          setCheck(check);
+          if (installAfter) installChecked(addon, check);
+        },
+        (err) => {
+          if (!current()) return;
+          const message = errorMessage(err);
+          setCheck({ status: "failed", message });
+          if (installAfter) {
+            setRunFor(key, { status: "failed", message: `GitHub could not be checked: ${message}` });
+          }
+        },
+      )
+      .finally(() => {
+        if (current()) checking.current.delete(key);
+      });
+  }
+
+  /** Install: subito per un progetto scaricabile, dal mirror GitHub per uno bloccato. */
+  function requestInstall(addon: CatalogAddon) {
+    if (!isBlocked(addon)) {
+      install(addon);
+      return;
+    }
+    const check = mirrors.get(installKey(installation.id, addon.id));
+    const step = mirrorStep(check);
+    if (step.kind === "check") checkMirror(addon, true);
+    else if (check && step.kind !== "wait") installChecked(addon, check);
+  }
+
   function install(addon: CatalogAddon) {
     const id = installation.id;
     const key = installKey(id, addon.id);
@@ -202,9 +312,39 @@ export function Search({
         run={runs.get(installKey(installation.id, addon.id))}
         progress={runProgressOf(addon.id)}
         variant={variant}
-        onInstall={install}
+        mirror={mirrors.get(installKey(installation.id, addon.id))}
+        onInstall={requestInstall}
         onOpenPage={openPage}
       />
+    );
+  }
+
+  /** La frase del dettaglio per un addon bloccato: l'esito del mirror, o l'errore con un nuovo
+   *  tentativo. */
+  function renderBlockedNote(addon: CatalogAddon) {
+    if (addon.installed) {
+      return (
+        <p className="hint">
+          The author does not allow downloads from other apps: updates use GitHub when it has
+          the same release.
+        </p>
+      );
+    }
+    const check = mirrors.get(installKey(installation.id, addon.id));
+    if (check?.status === "failed") {
+      return (
+        <p className="detail-meta error" role="alert">
+          {detailNote(check)}{" "}
+          <button className="link inline" onClick={() => checkMirror(addon, false)}>
+            Try again
+          </button>
+        </p>
+      );
+    }
+    return (
+      <p className="hint" role="status">
+        {detailNote(check)}
+      </p>
     );
   }
 
@@ -220,6 +360,17 @@ export function Search({
     setSelection(null);
     setPageError(null);
   }, []);
+
+  // Il dettaglio di un addon bloccato e non installato chiede subito il mirror GitHub, una
+  // volta per sessione: Install e la frase sotto il nome lo mostrano (issue #165).
+  const detailBlocked =
+    selected !== null && isBlocked(selected) && !withInstalled(selected, installedHere).installed;
+  useEffect(() => {
+    if (!selected || !detailBlocked) return;
+    if (mirrors.has(installKey(installation.id, selected.id))) return;
+    checkMirror(selected, false);
+    // Solo all'apertura (o quando l'addon diventa da controllare): un errore non riprova da sé.
+  }, [selected?.id, detailBlocked, installation.id]);
 
   // Prima del disegno: il dettaglio parte dall'alto, i risultati tornano dove erano, con il
   // focus sulla riga da cui si era partiti.
@@ -388,13 +539,14 @@ export function Search({
           active={active}
           onBack={closeDetail}
           renderActions={renderInstall("detail")}
+          blockedNote={renderBlockedNote}
         >
           {pageError && (
             <p className="message error" role="alert">
               {pageError}
             </p>
           )}
-          {selectedRun && <InstallResult run={selectedRun} />}
+          {selectedRun && <InstallResult run={selectedRun} onOpenPage={openPage} />}
         </AddonDetailView>
       )}
 
@@ -486,7 +638,7 @@ export function Search({
             {pageError}
           </p>
         )}
-        {lastRun && <InstallResult run={lastRun} />}
+        {lastRun && <InstallResult run={lastRun} onOpenPage={openPage} />}
 
         {categoriesError && (
           <p className="message hint" role="status">
@@ -532,6 +684,9 @@ export function Search({
                 onSelect={openDetail}
                 selectedId={lastSelectedId}
                 renderActions={renderInstall("row")}
+                hintFor={(addon) =>
+                  blockedHint(mirrors.get(installKey(installation.id, addon.id)))
+                }
               />
             )}
             {hasMore(results) && (

@@ -37,6 +37,7 @@ import { SOURCE_LABELS, projectId, sourcesIn, updateRequest, type ProjectRef } f
 import { ProgressBar, useInstallProgress } from "./ProgressBar";
 import { refreshCheck } from "./refresh";
 import { ContextMenu } from "./ContextMenu";
+import { blockedHint, isUpdatable } from "./mirror";
 import {
   confirmText,
   foldersOf,
@@ -1098,6 +1099,8 @@ function ProjectCell({
   if (!project) return <td className="muted">—</td>;
   const override = update?.versionOverride ?? null;
   const selected = saving ? saving.versionType : override;
+  // "website only" o, con il mirror trovato dal controllo, "via GitHub" (issue #165).
+  const blocked = blockedHint(update);
   return (
     <td>
       {project.url ? (
@@ -1146,12 +1149,9 @@ function ProjectCell({
           )}
         </select>
       )}
-      {!project.allowModDistribution && (
-        <span
-          className="hint"
-          title="The author does not allow downloads from third-party apps: download it from the website, then drop the zip into this window."
-        >
-          website only
+      {blocked && (
+        <span className="hint" title={blocked.title}>
+          {blocked.label}
         </span>
       )}
       {override !== null && (
@@ -1166,11 +1166,6 @@ function ProjectCell({
       )}
     </td>
   );
-}
-
-/** Un aggiornamento che l'app può installare da sola: i progetti non distribuibili no (D13). */
-function isUpdatable(update: AddonUpdate): boolean {
-  return update.status === "updateAvailable" && Boolean(update.project?.allowModDistribution);
 }
 
 type UpdateCellProps = {
@@ -1275,7 +1270,8 @@ function UpdateSummary({ result }: { result: UpdateResult }) {
     skipped > 0 && `${skipped} skipped`,
     errors > 0 && `${errors} ${errors === 1 ? "error" : "errors"}`,
   ].filter(Boolean);
-  const details = result.outcomes.filter((o) => o.status !== "updated");
+  // Un progetto aggiornato compare solo con un messaggio (per esempio "Installed from GitHub").
+  const details = result.outcomes.filter((o) => o.status !== "updated" || o.message);
   return (
     <div className="message update-summary" role="status">
       <p>

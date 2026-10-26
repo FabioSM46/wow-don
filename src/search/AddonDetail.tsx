@@ -29,6 +29,9 @@ type Props = {
   renderActions?: (addon: CatalogAddon) => ReactNode;
   /** Messaggi sull'addon (per esempio l'esito di un'installazione), sotto l'intestazione. */
   children?: ReactNode;
+  /** Per un addon che CurseForge non lascia scaricare: la frase sotto il nome, con l'esito del
+   *  mirror GitHub (issue #165). Senza, resta la frase sul download dal sito. */
+  blockedNote?: (addon: CatalogAddon) => ReactNode;
 };
 
 type Load =
@@ -47,6 +50,7 @@ export function AddonDetailView({
   onBack,
   renderActions,
   children,
+  blockedNote,
 }: Props) {
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [retry, setRetry] = useState(0);
@@ -121,12 +125,15 @@ export function AddonDetailView({
             <span>Updated {formatDate(shown.dateModified)}</span>
           </p>
           <p className="detail-meta">{formatCategories(shown.categories)}</p>
-          {!shown.allowModDistribution && (
-            <p className="hint">
-              The author does not allow downloads from other apps: get it from the CurseForge
-              website.
-            </p>
-          )}
+          {!shown.allowModDistribution &&
+            (blockedNote ? (
+              blockedNote(shown)
+            ) : (
+              <p className="hint">
+                The author does not allow downloads from other apps: get it from the CurseForge
+                website.
+              </p>
+            ))}
           {shown.url && (
             <button
               className="link inline"

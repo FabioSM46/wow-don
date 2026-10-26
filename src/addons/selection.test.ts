@@ -182,3 +182,55 @@ describe("confirmation and result texts", () => {
     );
   });
 });
+
+describe("Reinstall of projects CurseForge blocks (issue #165)", () => {
+  const blockedUpdate = (folder: string, mirror: Partial<AddonUpdate>) =>
+    ({
+      folder,
+      status: "updateAvailable",
+      latest: { id: 2, name: `${folder}-2.zip`, date: "2026-10-01T00:00:00Z" },
+      project: {
+        id: 7,
+        source: "curseforge",
+        key: folder === "Blocked" ? "7" : "8",
+        name: folder,
+        url: null,
+        allowModDistribution: false,
+      },
+      githubMirror: null,
+      githubMirrorReason: null,
+      ...mirror,
+    }) as AddonUpdate;
+  const blocked = group("Blocked");
+  const mirrored = group("Mirrored");
+  const withBlocked = new Map<string, AddonUpdate>([
+    ...updates,
+    ["Blocked", blockedUpdate("Blocked", { githubMirrorReason: "No release on GitHub." })],
+    ["Mirrored", blockedUpdate("Mirrored", { githubMirror: { repo: "o/r", tag: "v2" } })],
+  ]);
+  const state = { updates: withBlocked, busy: false, checking: false };
+
+  it("leaves out a blocked update whose GitHub copy the check ruled out", () => {
+    assert.deepEqual(reinstallProjects([blocked, mirrored, details], withBlocked), [
+      { source: "curseforge", key: "8" },
+      { source: "github", key: "Tercioo/Details" },
+    ]);
+  });
+
+  it("disables Reinstall for that row with the reason", () => {
+    const [, reinstall] = menuItems([blocked], false, state);
+    assert.equal(
+      reinstall.disabledReason,
+      "CurseForge blocks third-party downloads and the GitHub copy cannot be used: No release on GitHub.",
+    );
+    const [, viaGithub] = menuItems([mirrored], false, state);
+    assert.equal(viaGithub.disabledReason, null);
+  });
+
+  it("keeps Reinstall for a selection where another project can be reinstalled", () => {
+    const [reinstall] = menuItems([blocked, details], true, state);
+    assert.equal(reinstall.disabledReason, null);
+    const [mixed] = menuItems([blocked, loose], true, state);
+    assert.equal(/^None of these addons can be reinstalled/.test(mixed.disabledReason ?? ""), true);
+  });
+});
