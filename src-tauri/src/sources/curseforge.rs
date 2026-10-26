@@ -411,6 +411,10 @@ pub struct Mod {
 #[serde(rename_all = "camelCase", default)]
 pub struct ModLinks {
     pub website_url: Option<String>,
+    /// Il repository dei sorgenti dichiarato dall'autore (per esempio
+    /// `https://github.com/Nevcairiel/Bartender4`): assente o `null` resta `None`. Serve al
+    /// mirror GitHub dei progetti bloccati (`github_mirror`, issue #162).
+    pub source_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -953,7 +957,8 @@ mod tests {
 
     const MODS: &str = r#"{"data": [
           {"id": 1, "name": "Full", "slug": "full", "allowModDistribution": false,
-           "links": {"websiteUrl": "https://www.curseforge.com/wow/addons/full"},
+           "links": {"websiteUrl": "https://www.curseforge.com/wow/addons/full",
+             "sourceUrl": "https://github.com/Nevcairiel/Bartender4"},
            "latestFilesIndexes": [{"gameVersion": "12.1.5", "fileId": 9, "filename": "f.zip",
              "releaseType": 1, "gameVersionTypeId": 517}]},
           {"id": 2, "name": "Minimal"}
@@ -1007,7 +1012,16 @@ mod tests {
             mods[0].links.website_url.as_deref(),
             Some("https://www.curseforge.com/wow/addons/full")
         );
+        assert_eq!(
+            mods[0].links.source_url.as_deref(),
+            Some("https://github.com/Nevcairiel/Bartender4")
+        );
         assert_eq!(mods[1].allow_mod_distribution, None);
+        assert_eq!(mods[1].links.source_url, None);
+        // `sourceUrl: null` vale come assente.
+        let links: ModLinks =
+            serde_json::from_str(r#"{"websiteUrl": null, "sourceUrl": null}"#).unwrap();
+        assert_eq!(links, ModLinks::default());
         assert!(mods[1].latest_files_indexes.is_empty());
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(seen[0].0, "https://api.curseforge.com/v1/mods");
