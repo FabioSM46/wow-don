@@ -94,7 +94,7 @@ impl FingerprintCache {
     }
 
     #[cfg(test)]
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.lock().len()
     }
 }
