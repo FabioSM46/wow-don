@@ -28,11 +28,16 @@ export function SystemOptions({ active }: Props) {
   // Conta letture e salvataggi: una lettura vale solo se nel frattempo non è partito altro, così
   // una risposta vecchia non copre il valore appena salvato.
   const generation = useRef(0);
+  // Un salvataggio in corso vince: nessuna lettura parte finché non finisce, perché il backend
+  // potrebbe servirla prima della scrittura e la sua risposta arrivare dopo. Un ref e non
+  // `saving`, che l'effetto non rivede.
+  const savingRef = useRef(false);
 
   useEffect(() => {
     if (!active) return;
 
     async function refresh() {
+      if (savingRef.current) return;
       const id = ++generation.current;
       const [settings, enabled] = await Promise.allSettled([
         api.getSettings(),
@@ -59,6 +64,7 @@ export function SystemOptions({ active }: Props) {
   }, [active]);
 
   async function save(which: Exclude<Saving, null>, next: boolean) {
+    savingRef.current = true;
     generation.current++;
     setError(null);
     setSaving(which);
@@ -73,6 +79,7 @@ export function SystemOptions({ active }: Props) {
       // La casella è controllata: senza un valore salvato nuovo resta su quello di prima.
       setError(errorMessage(err));
     } finally {
+      savingRef.current = false;
       setSaving(null);
     }
   }
