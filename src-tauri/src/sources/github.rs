@@ -862,7 +862,7 @@ fn repo_name(repo: &str) -> &str {
 /// | --- | --- | --- |
 /// | `_retail_` (e PTR, beta) | Retail | `mainline` |
 /// | `_classic_era_` | Classic Era | `classic` |
-/// | `_classic_beta_` | WoW Forever | `forever` |
+/// | `_forever_`, `_classic_beta_` | WoW Forever | `forever` |
 /// | `_anniversary_` | Anniversary (TBC) | `bcc` |
 /// | `_classic_` | Classic progressiva (Mists) | `mists` |
 ///
@@ -1358,6 +1358,7 @@ mod tests {
         assert_eq!(packager_flavor("ptr"), Some("mainline"));
         assert_eq!(packager_flavor("classic_era"), Some("classic"));
         assert_eq!(packager_flavor("classic_beta"), Some("forever"));
+        assert_eq!(packager_flavor("forever"), Some("forever"));
         assert_eq!(packager_flavor("anniversary"), Some("bcc"));
         assert_eq!(packager_flavor("classic"), Some("mists"));
         // Ogni flavor della tabella esiste nel `release.json` reale.
@@ -1651,6 +1652,21 @@ mod tests {
 
     #[test]
     fn the_rate_limit_is_a_clear_error_and_stops_further_api_requests() {
+        // Il limite scade tra un'ora secondo l'orologio del test: una data scritta nel test
+        // prima o poi passa, e un limite già scaduto non ferma più le richieste.
+        let reset = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3_600;
+        let at = reset % 86_400;
+        let expected = UpdateStatus::Error {
+            message: format!(
+                "GitHub's limit of 60 requests an hour has been reached: try again after {:02}:{:02} UTC.",
+                at / 3_600,
+                at % 3_600 / 60
+            ),
+        };
         for status in [403, 429] {
             let calls = Arc::new(Mutex::new(Vec::new()));
             let mut fake = Fake {
@@ -1670,8 +1686,7 @@ mod tests {
                     status,
                     body: "{}".to_owned(),
                     ratelimit_remaining: Some(0),
-                    // 2026-10-26 14:32:00 UTC.
-                    ratelimit_reset: Some(1_793_025_120),
+                    ratelimit_reset: Some(reset),
                 }),
             );
             let record = |folder: &str| SourceRecord {
@@ -1689,9 +1704,6 @@ mod tests {
                     &records,
                 )
                 .unwrap();
-            let expected = UpdateStatus::Error {
-                message: "GitHub's limit of 60 requests an hour has been reached: try again after 14:32 UTC.".to_owned(),
-            };
             assert_eq!(updates[0].status, expected, "HTTP {status}");
             assert_eq!(updates[1].status, expected, "HTTP {status}");
             // Il secondo progetto non fa partire una richiesta all'API.

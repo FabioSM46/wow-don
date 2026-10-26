@@ -381,7 +381,7 @@ fn patch_interface(patch: &str) -> Option<u32> {
 /// | --- | --- | --- |
 /// | `_retail_` | Retail | da 100000 (10.0) |
 /// | `_classic_era_` | Classic Era | 11000–11599 (1.10–1.15) |
-/// | `_classic_beta_` | WoW Forever | 16000–16999 (1.16) |
+/// | `_forever_`, `_classic_beta_` | WoW Forever | 16000–16999 (1.16) |
 /// | `_anniversary_` | Anniversary | 20000–29999 (2.x) |
 /// | `_classic_` | Classic progressiva | 30000–99999 (3.x–9.x, oggi Mists 5.x) |
 ///
@@ -390,7 +390,7 @@ fn fits(flavor: &str, interface: u32) -> bool {
     match flavor.trim_matches('_').to_ascii_lowercase().as_str() {
         "retail" => interface >= 100_000,
         "classic_era" => (11_000..11_600).contains(&interface),
-        "classic_beta" => (16_000..17_000).contains(&interface),
+        "classic_beta" | "forever" => (16_000..17_000).contains(&interface),
         "anniversary" => (20_000..30_000).contains(&interface),
         "classic" => (30_000..100_000).contains(&interface),
         _ => false,
@@ -834,6 +834,8 @@ mod tests {
         assert!(fits("_classic_era_", 11_509));
         assert!(!fits("_classic_era_", 16_001));
         assert!(fits("_classic_beta_", 16_001));
+        assert!(fits("_forever_", 16_001));
+        assert!(!fits("_forever_", 11_508));
         assert!(fits("_anniversary_", 20_506));
         assert!(fits("_classic_", 50_504));
         assert!(!fits("_ptr_", 120_100));

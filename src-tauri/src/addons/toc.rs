@@ -151,8 +151,8 @@ pub fn strip_ui_escapes(text: &str) -> String {
 /// Il gioco cerca prima il suffisso del tipo di gioco, poi quello della famiglia (`Mainline`
 /// o `Classic`), poi il file senza suffisso. La cartella `_classic_` ospita la Classic a
 /// espansioni progressive (oggi Mists of Pandaria), `_anniversary_` la Classic Anniversary
-/// (TBC) e `_classic_beta_` WoW Forever (game type `Camelot`, famiglia Mainline): il nome
-/// della cartella di Forever va riverificato su un'installazione reale.
+/// (TBC); WoW Forever (game type `Camelot`, famiglia Mainline) usa `_forever_` per il client
+/// ufficiale e `_classic_beta_` per la beta.
 pub fn toc_suffixes(flavor: &str) -> &'static [&'static str] {
     const RETAIL: &[&str] = &["Standard", "Mainline"];
     const FOREVER: &[&str] = &["Forever", "Camelot", "Mainline"];

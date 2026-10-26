@@ -39,7 +39,7 @@ Il contesto completo è in [docs/context.md](docs/context.md).
 
 ## Funzionalità previste
 
-- Aggiunta di installazioni di WoW (cartelle `_retail_`, `_classic_era_`,
+- Aggiunta di installazioni di WoW (cartelle `_retail_`, `_classic_era_`, `_forever_`,
   `_classic_beta_`, ...), anche dentro prefissi Wine.
 - Lettura degli addon installati dai file `.toc`.
 - Riconoscimento degli addon installati tramite fingerprint di CurseForge.
