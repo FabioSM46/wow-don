@@ -28,6 +28,7 @@
     "linux": {
       "deb": {
         "section": "games",
+        "depends": ["libayatana-appindicator3-1"],
         "desktopTemplate": "linux/wow-don.desktop"
       }
     },

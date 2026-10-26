@@ -31,6 +31,7 @@ use crate::store::{
     AddonSettingsStore, AppSettings, AppSettingsStore, InstallationStore, InstalledAddonsStore,
     InstalledRecords, SourceRecord, SourceRecords, Theme,
 };
+use crate::tray::TrayStatus;
 use crate::updates::{
     self, AddonUpdate, CurseForgeSource, UpdateOutcome, VersionOverrides, VersionType,
 };
@@ -97,25 +98,71 @@ fn beta_when_no_release(settings: &Mutex<AppSettingsStore>) -> bool {
         .is_ok_and(|settings| settings.beta_when_no_release)
 }
 
+/// Le impostazioni come le riceve il frontend: quelle salvate in `settings.json` più
+/// `trayAvailable`, che non si salva perché dice solo se in questo avvio l'icona nella tray
+/// c'è (issue #158). Senza icona `closeToTray` resta salvata ma non ha effetto: la X chiude.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsView {
+    #[serde(flatten)]
+    settings: AppSettings,
+    tray_available: bool,
+}
+
+fn settings_view(
+    settings: Result<AppSettings, String>,
+    tray: &TrayStatus,
+) -> Result<SettingsView, String> {
+    Ok(SettingsView {
+        settings: settings?,
+        tray_available: tray.available(),
+    })
+}
+
 /// Salva l'opzione "Beta quando non c'è una Release" e restituisce le impostazioni aggiornate.
 #[tauri::command]
 pub fn set_beta_when_no_release(
     enabled: bool,
     settings: AppSettingsState<'_>,
-) -> Result<AppSettings, String> {
-    locked_app_settings(&settings)?.set_beta_when_no_release(enabled)
+    tray: State<'_, TrayStatus>,
+) -> Result<SettingsView, String> {
+    settings_view(
+        locked_app_settings(&settings)?.set_beta_when_no_release(enabled),
+        &tray,
+    )
 }
 
-/// Le impostazioni dell'app (tema e opzione della Beta); senza `settings.json` valgono i default.
+/// Salva l'opzione "Close to tray" (issue #158) e restituisce le impostazioni aggiornate.
 #[tauri::command]
-pub fn get_settings(settings: AppSettingsState<'_>) -> Result<AppSettings, String> {
-    locked_app_settings(&settings)?.get()
+pub fn set_close_to_tray(
+    enabled: bool,
+    settings: AppSettingsState<'_>,
+    tray: State<'_, TrayStatus>,
+) -> Result<SettingsView, String> {
+    settings_view(
+        locked_app_settings(&settings)?.set_close_to_tray(enabled),
+        &tray,
+    )
+}
+
+/// Le impostazioni dell'app (tema, opzione della Beta, "Close to tray") e se l'icona nella
+/// tray c'è; senza `settings.json` valgono i default.
+#[tauri::command]
+pub fn get_settings(
+    settings: AppSettingsState<'_>,
+    tray: State<'_, TrayStatus>,
+) -> Result<SettingsView, String> {
+    settings_view(locked_app_settings(&settings)?.get(), &tray)
 }
 
 /// Salva il tema (`system`, `light` o `dark`) e restituisce le impostazioni aggiornate.
 #[tauri::command]
-pub fn set_theme(theme: String, settings: AppSettingsState<'_>) -> Result<AppSettings, String> {
-    save_theme(&settings, &theme)
+pub fn set_theme(
+    theme: String,
+    settings: AppSettingsState<'_>,
+    tray: State<'_, TrayStatus>,
+) -> Result<SettingsView, String> {
+    settings_view(save_theme(&settings, &theme), &tray)
 }
 
 /// Il corpo di [`set_theme`], separato dallo `State` di Tauri per i test. Il nome si controlla
@@ -1363,11 +1410,29 @@ mod tests {
         let json = serde_json::to_value(AppSettings {
             theme: Theme::Dark,
             beta_when_no_release: true,
+            close_to_tray: true,
         })
         .unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"theme": "dark", "betaWhenNoRelease": true})
+            serde_json::json!({"theme": "dark", "betaWhenNoRelease": true, "closeToTray": true})
         );
+    }
+
+    #[test]
+    fn the_settings_view_adds_whether_the_tray_icon_exists() {
+        let tray = TrayStatus::default();
+        let view = settings_view(Ok(AppSettings::default()), &tray).unwrap();
+        assert_eq!(
+            serde_json::to_value(view).unwrap(),
+            serde_json::json!({
+                "theme": "system",
+                "betaWhenNoRelease": false,
+                "closeToTray": false,
+                "trayAvailable": false
+            })
+        );
+        let error = settings_view(Err("damaged".to_owned()), &tray).unwrap_err();
+        assert_eq!(error, "damaged");
     }
 }

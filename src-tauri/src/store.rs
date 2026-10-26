@@ -666,6 +666,10 @@ pub struct AppSettings {
     /// #141). Un `settings.json` di prima non ha il campo: vale falso, senza cambiare versione.
     #[serde(default)]
     pub beta_when_no_release: bool,
+    /// Chiudere la finestra principale la nasconde nella tray invece di chiudere l'app (issue
+    /// #158, D34). Un `settings.json` di prima non ha il campo: vale falso, la X chiude.
+    #[serde(default)]
+    pub close_to_tray: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -721,6 +725,15 @@ impl AppSettingsStore {
         self.reload()?;
         let mut next = self.settings;
         next.beta_when_no_release = enabled;
+        self.save(next)?;
+        Ok(next)
+    }
+
+    /// Salva l'opzione "Close to tray" e restituisce le impostazioni aggiornate.
+    pub fn set_close_to_tray(&mut self, enabled: bool) -> Result<AppSettings, String> {
+        self.reload()?;
+        let mut next = self.settings;
+        next.close_to_tray = enabled;
         self.save(next)?;
         Ok(next)
     }
@@ -1417,7 +1430,12 @@ mod tests {
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
         assert_eq!(
             saved,
-            serde_json::json!({"version": 1, "theme": "dark", "betaWhenNoRelease": false})
+            serde_json::json!({
+                "version": 1,
+                "theme": "dark",
+                "betaWhenNoRelease": false,
+                "closeToTray": false
+            })
         );
 
         store.set_theme(Theme::System).unwrap();
@@ -1441,6 +1459,50 @@ mod tests {
         let reloaded = AppSettingsStore::load(file).get().unwrap();
         assert!(reloaded.beta_when_no_release);
         assert_eq!(reloaded.theme, Theme::Dark);
+    }
+
+    #[test]
+    fn close_to_tray_defaults_to_off_and_keeps_the_other_settings() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        assert!(
+            !AppSettingsStore::load(file.clone())
+                .get()
+                .unwrap()
+                .close_to_tray
+        );
+
+        // A file written before the option existed has no field: it reads as off.
+        fs::write(
+            &file,
+            r#"{"version": 1, "theme": "dark", "betaWhenNoRelease": true}"#,
+        )
+        .unwrap();
+        let mut store = AppSettingsStore::load(file.clone());
+        assert!(!store.get().unwrap().close_to_tray);
+
+        let saved = store.set_close_to_tray(true).unwrap();
+        assert!(saved.close_to_tray);
+        assert_eq!(saved.theme, Theme::Dark);
+        assert!(saved.beta_when_no_release);
+        let reloaded = AppSettingsStore::load(file.clone()).get().unwrap();
+        assert!(reloaded.close_to_tray);
+        assert_eq!(reloaded.theme, Theme::Dark);
+        assert!(reloaded.beta_when_no_release);
+
+        assert!(!store.set_close_to_tray(false).unwrap().close_to_tray);
+        assert!(!AppSettingsStore::load(file).get().unwrap().close_to_tray);
+    }
+
+    #[test]
+    fn a_damaged_settings_file_blocks_the_close_to_tray_option() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        fs::write(&file, b"not json").unwrap();
+        let mut store = AppSettingsStore::load(file.clone());
+        assert!(store.get().is_err());
+        assert!(store.set_close_to_tray(true).is_err());
+        assert_eq!(fs::read(&file).unwrap(), b"not json");
     }
 
     #[test]

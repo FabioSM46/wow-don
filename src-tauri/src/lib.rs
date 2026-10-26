@@ -17,6 +17,7 @@ mod sources;
 mod store;
 #[cfg(test)]
 mod test_support;
+mod tray;
 mod updates;
 
 use std::sync::Mutex;
@@ -46,6 +47,7 @@ pub fn run() {
         .manage(Config::load())
         .manage(commands::InstallLock::default())
         .manage(addons::cache::FingerprintCache::default())
+        .manage(tray::TrayStatus::default())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             app.manage(Mutex::new(InstallationStore::load(
@@ -60,8 +62,10 @@ pub fn run() {
             app.manage(Mutex::new(AppSettingsStore::load(
                 config_dir.join(APP_SETTINGS_FILE),
             )));
+            tray::create(app.handle());
             Ok(())
         })
+        .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
             commands::list_installations,
@@ -91,7 +95,9 @@ pub fn run() {
             commands::get_settings,
             commands::set_theme,
             commands::set_beta_when_no_release,
+            commands::set_close_to_tray,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| tray::on_run_event(app, &event));
 }
