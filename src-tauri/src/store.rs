@@ -667,7 +667,7 @@ pub struct AppSettings {
     #[serde(default)]
     pub beta_when_no_release: bool,
     /// Chiudere la finestra principale la nasconde nella tray invece di chiudere l'app (issue
-    /// #158, D34). Un `settings.json` di prima non ha il campo: vale falso, la X chiude.
+    /// #158, D35). Un `settings.json` di prima non ha il campo: vale falso, la X chiude.
     #[serde(default)]
     pub close_to_tray: bool,
 }

@@ -20,6 +20,8 @@
   /* Riga selezionata e menu contestuale della tab Installed (issue #149). */
   --selected: rgb(59 110 245 / 10%);
   --menu-shadow: 0 4px 16px rgb(0 0 0 / 10%);
+  /* Sfondo dell'immagine grande della gallery (issue #168). */
+  --viewer-bg: #ececef;
 
   --dark-bg: #111113;
   --dark-surface: #18181b;
@@ -33,6 +35,7 @@
   --dark-progress-track: #2a2a2f;
   --dark-selected: rgb(109 147 255 / 16%);
   --dark-menu-shadow: 0 4px 16px rgb(0 0 0 / 45%);
+  --dark-viewer-bg: #0b0b0d;
 
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -61,6 +64,7 @@
     --progress-track: var(--dark-progress-track);
     --selected: var(--dark-selected);
     --menu-shadow: var(--dark-menu-shadow);
+    --viewer-bg: var(--dark-viewer-bg);
     color-scheme: dark;
   }
 }
@@ -78,6 +82,7 @@
   --progress-track: var(--dark-progress-track);
   --selected: var(--dark-selected);
   --menu-shadow: var(--dark-menu-shadow);
+  --viewer-bg: var(--dark-viewer-bg);
   color-scheme: dark;
 }
 
@@ -1032,6 +1037,150 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 32px;
+}
+
+/* Description e Gallery: le tab dell'app in piccolo, appoggiate su una linea sottile. */
+.detail-main {
+  min-width: 0;
+}
+
+.detail-tabs {
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-tabs .tab {
+  padding: 6px 2px 8px;
+  font-size: 0.9rem;
+}
+
+.detail-panel p {
+  margin: 0;
+}
+
+/* Gallery (issue #168): miniature in una griglia regolare, l'immagine grande al loro posto. */
+.gallery-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: 12px;
+}
+
+.gallery-thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--hover);
+  cursor: zoom-in;
+}
+
+.gallery-thumb:hover {
+  border-color: var(--muted);
+}
+
+.gallery-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Un'immagine che non si carica: il titolo al suo posto, nelle stesse misure. */
+.gallery-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+}
+
+.gallery-placeholder-large {
+  flex: 1;
+  min-height: 16rem;
+  font-size: 0.9rem;
+}
+
+.gallery-viewer {
+  margin: 0;
+}
+
+.gallery-viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.gallery-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px;
+  border-radius: var(--radius);
+  background: var(--viewer-bg);
+}
+
+.gallery-image {
+  flex: 1;
+  min-width: 0;
+  max-height: 60vh;
+  object-fit: contain;
+}
+
+.gallery-nav {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  font: inherit;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.gallery-nav:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.gallery-nav:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.gallery-caption {
+  margin-top: 12px;
+}
+
+.gallery-title {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.gallery-caption .gallery-description {
+  margin-top: 4px;
+  max-width: 44rem;
+  color: var(--muted);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .detail-section h3 {

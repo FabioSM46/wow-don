@@ -1,6 +1,7 @@
 //! Fonti degli addon dietro un'interfaccia comune (D12). CurseForge è la prima implementazione
 //! (`updates::CurseForgeSource`); tra le fonti libere (D31) ci sono Tukui ([`tukui`]),
-//! WoWInterface ([`wowinterface`]) e GitHub Releases ([`github`]).
+//! WoWInterface ([`wowinterface`]) e GitHub Releases ([`github`]). [`github_mirror`] cerca su
+//! GitHub lo stesso file di un progetto CurseForge che non si può scaricare (issue #162).
 //!
 //! Il controllo degli aggiornamenti (`updates::check_updates`) offre le cartelle installate alle
 //! fonti nell'ordine di D33: una cartella registrata in `installed-addons.json` va solo alla fonte
@@ -19,6 +20,7 @@ use crate::updates::{AddonUpdate, UpdateOutcome};
 
 pub mod curseforge;
 pub mod github;
+pub mod github_mirror;
 pub mod http;
 pub mod tukui;
 pub mod wowinterface;

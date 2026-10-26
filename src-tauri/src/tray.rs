@@ -1,4 +1,4 @@
-//! Icona nella tray e opzione "Close to tray" (issue #158, D34).
+//! Icona nella tray e opzione "Close to tray" (issue #158, D35).
 //!
 //! All'avvio [`create`] costruisce l'icona con il menu "Show WoW-don" / "Quit". Se la creazione
 //! fallisce (su Linux, per esempio, senza la libreria AppIndicator) l'errore si scrive su stderr

@@ -60,6 +60,9 @@ pub const RELATION_REQUIRED_DEPENDENCY: u8 = 3;
 pub const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 /// I domini da cui si scaricano gli zip, con i loro sottodomini.
 const DOWNLOAD_DOMAINS: [&str; 2] = ["forgecdn.net", "curseforge.com"];
+/// I domini delle immagini della gallery mostrate nel dettaglio, con i loro sottodomini: solo
+/// il CDN, non il sito.
+const MEDIA_DOMAINS: [&str; 1] = ["forgecdn.net"];
 
 /// La chiave API. Il `Debug` non la mostra.
 #[derive(Clone)]
@@ -205,6 +208,13 @@ impl Transport for ReqwestTransport {
 /// dominio di [`DOWNLOAD_DOMAINS`] o un suo sottodominio.
 fn is_download_url(url: &reqwest::Url) -> bool {
     super::http::is_allowed_url(url, &DOWNLOAD_DOMAINS)
+}
+
+/// Un'immagine che il frontend può mostrare: un URL valido con la stessa regola dei download
+/// ([`super::http::is_allowed_url`]), ma solo verso un dominio di [`MEDIA_DOMAINS`]. Il backend
+/// non la scarica: il frontend la carica con `<img src>` come il logo dei risultati.
+pub fn is_media_url(url: &str) -> bool {
+    reqwest::Url::parse(url).is_ok_and(|url| super::http::is_allowed_url(&url, &MEDIA_DOMAINS))
 }
 
 // ── Errori ──────────────────────────────────────────────────────────────────
@@ -401,6 +411,10 @@ pub struct Mod {
 #[serde(rename_all = "camelCase", default)]
 pub struct ModLinks {
     pub website_url: Option<String>,
+    /// Il repository dei sorgenti dichiarato dall'autore (per esempio
+    /// `https://github.com/Nevcairiel/Bartender4`): assente o `null` resta `None`. Serve al
+    /// mirror GitHub dei progetti bloccati (`github_mirror`, issue #162).
+    pub source_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -447,6 +461,9 @@ pub struct CatalogMod {
     pub categories: Vec<Category>,
     #[serde(default)]
     pub logo: Option<ModAsset>,
+    /// La gallery del progetto, nell'ordine dell'API; assente o `null` vale vuota.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub screenshots: Vec<ModAsset>,
 }
 
 /// Un conteggio descrittivo: `null` vale 0, e un numero con la virgola (l'API ne manda per
@@ -475,6 +492,9 @@ pub struct ModAuthor {
 #[serde(rename_all = "camelCase", default)]
 pub struct ModAsset {
     pub thumbnail_url: Option<String>,
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -937,7 +957,8 @@ mod tests {
 
     const MODS: &str = r#"{"data": [
           {"id": 1, "name": "Full", "slug": "full", "allowModDistribution": false,
-           "links": {"websiteUrl": "https://www.curseforge.com/wow/addons/full"},
+           "links": {"websiteUrl": "https://www.curseforge.com/wow/addons/full",
+             "sourceUrl": "https://github.com/Nevcairiel/Bartender4"},
            "latestFilesIndexes": [{"gameVersion": "12.1.5", "fileId": 9, "filename": "f.zip",
              "releaseType": 1, "gameVersionTypeId": 517}]},
           {"id": 2, "name": "Minimal"}
@@ -991,7 +1012,16 @@ mod tests {
             mods[0].links.website_url.as_deref(),
             Some("https://www.curseforge.com/wow/addons/full")
         );
+        assert_eq!(
+            mods[0].links.source_url.as_deref(),
+            Some("https://github.com/Nevcairiel/Bartender4")
+        );
         assert_eq!(mods[1].allow_mod_distribution, None);
+        assert_eq!(mods[1].links.source_url, None);
+        // `sourceUrl: null` vale come assente.
+        let links: ModLinks =
+            serde_json::from_str(r#"{"websiteUrl": null, "sourceUrl": null}"#).unwrap();
+        assert_eq!(links, ModLinks::default());
         assert!(mods[1].latest_files_indexes.is_empty());
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(seen[0].0, "https://api.curseforge.com/v1/mods");
@@ -1125,7 +1155,7 @@ mod tests {
          "allowModDistribution": true,
          "latestFilesIndexes": [{"gameVersion": "12.1.5", "fileId": 9, "releaseType": 1, "gameVersionTypeId": 517}]},
         {"id": 2, "name": "Bare", "summary": null, "authors": null, "downloadCount": null,
-         "dateModified": null, "categories": null, "logo": null}
+         "dateModified": null, "categories": null, "logo": null, "screenshots": null}
       ],
       "pagination": {"index": 50, "pageSize": 50, "resultCount": 2, "totalCount": 52}
     }"#;
@@ -1168,6 +1198,7 @@ mod tests {
         assert!(bare.summary.is_empty() && bare.authors.is_empty());
         assert!(bare.categories.is_empty() && bare.date_modified.is_empty());
         assert_eq!((bare.download_count, bare.logo.clone()), (0, None));
+        assert!(details.screenshots.is_empty() && bare.screenshots.is_empty());
 
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(
@@ -1749,6 +1780,63 @@ mod tests {
                 println!("download not allowed by the author");
             }
             Err(error) => panic!("{error}"),
+        }
+    }
+
+    #[test]
+    fn screenshots_keep_the_api_order_and_null_fields_are_none() {
+        let reply = r#"{"data": {"id": 61284, "name": "Details!",
+          "logo": {"thumbnailUrl": "https://media.forgecdn.net/thumb.png"},
+          "screenshots": [
+            {"id": 1, "modId": 61284, "title": "Meter", "description": "The window",
+             "thumbnailUrl": "https://media.forgecdn.net/1-thumb.png",
+             "url": "https://media.forgecdn.net/1.png"},
+            {"id": 2, "title": null, "description": null, "thumbnailUrl": null, "url": null},
+            {}
+          ]}}"#;
+        let found = client(Ok((200, reply))).get_mod(61284).unwrap();
+        assert_eq!(
+            found.screenshots,
+            [
+                ModAsset {
+                    thumbnail_url: Some("https://media.forgecdn.net/1-thumb.png".to_owned()),
+                    url: Some("https://media.forgecdn.net/1.png".to_owned()),
+                    title: Some("Meter".to_owned()),
+                    description: Some("The window".to_owned()),
+                },
+                ModAsset::default(),
+                ModAsset::default(),
+            ]
+        );
+        // Il logo continua a leggersi con i nuovi campi.
+        assert_eq!(
+            found.logo.unwrap().thumbnail_url.as_deref(),
+            Some("https://media.forgecdn.net/thumb.png")
+        );
+
+        let missing = r#"{"data": {"id": 61284, "name": "Details!"}}"#;
+        let found = client(Ok((200, missing))).get_mod(61284).unwrap();
+        assert!(found.screenshots.is_empty());
+    }
+
+    #[test]
+    fn media_urls_are_https_on_the_cdn_only() {
+        assert!(is_media_url(
+            "https://media.forgecdn.net/attachments/1/2/a.png"
+        ));
+        assert!(is_media_url("https://forgecdn.net/a.png"));
+        for url in [
+            "http://media.forgecdn.net/a.png",
+            "https://www.curseforge.com/a.png",
+            "https://example.com/a.png",
+            "https://forgecdn.net.example.com/a.png",
+            "https://evilforgecdn.net/a.png",
+            "https://media.forgecdn.net:8443/a.png",
+            "",
+            "not a url",
+            "//media.forgecdn.net/a.png",
+        ] {
+            assert!(!is_media_url(url), "{url}");
         }
     }
 }
