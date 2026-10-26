@@ -337,6 +337,7 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
                     version_override: None,
                     project_folders: Vec::new(),
                     installed_modules: Vec::new(),
+                    reinstall_file: None,
                 });
                 continue;
             };
@@ -391,6 +392,7 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
                 version_override: None,
                 project_folders,
                 installed_modules: Vec::new(),
+                reinstall_file: None,
             });
         }
         Ok(updates)
@@ -408,13 +410,17 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
             })
             .collect();
         let Some(project) = folders.first().and_then(|u| u.project.as_ref()) else {
-            return UpdateOutcome::skipped(WOWI, key, "", "Not found among the installed addons.");
+            return target.not_found(WOWI);
         };
         let name = project.name.as_str();
-        if !folders
-            .iter()
-            .any(|u| matches!(u.status, UpdateStatus::UpdateAvailable { .. }))
-        {
+        // Con `reinstall` (issue #148) un addon aggiornato si riscarica comunque: WoWInterface dà
+        // un solo file, quello installato.
+        let wanted = |status: &UpdateStatus| match status {
+            UpdateStatus::UpdateAvailable { .. } => true,
+            UpdateStatus::UpToDate => target.reinstall,
+            _ => false,
+        };
+        if !folders.iter().any(|u| wanted(&u.status)) {
             return UpdateOutcome::skipped(WOWI, key, name, "Already up to date.");
         }
         let file = match self.file(key) {
@@ -845,6 +851,7 @@ mod tests {
                         version_override: None,
                         project_folders: Vec::new(),
                         installed_modules: Vec::new(),
+                        reinstall_file: None,
                     })
                     .collect())
             }
@@ -1109,6 +1116,59 @@ mod tests {
         .unwrap();
         assert_eq!(outcomes[0].status, updates::OutcomeStatus::Skipped);
         assert_eq!(outcomes[0].message.as_deref(), Some("Already up to date."));
+    }
+
+    /// Issue #148: con `reinstall` un progetto aggiornato si riscarica.
+    #[test]
+    fn reinstall_downloads_an_up_to_date_project_again() {
+        let tmp = TempDir::new();
+        let path = tmp.path().join("World of Warcraft").join("_retail_");
+        let addons = path.join("Interface").join("AddOns");
+        write_addon(
+            &addons,
+            "Clique",
+            "## Version: v5.0.15\n## X-WoWI-ID: 5108\n",
+        );
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut wowi = clique_source("v5.0.15");
+        wowi.transport.zip = Some(zip_of(&[(
+            "Clique/Clique.toc",
+            "## Version: v5.0.15\n## X-WoWI-ID: 5108\n## Title: restored\n",
+        )]));
+        wowi.transport.calls = Arc::clone(&calls);
+        let mut written = Vec::new();
+        let outcomes = updates::update_addons_with(
+            &Installation {
+                path,
+                ..installation()
+            },
+            None,
+            &[&wowi],
+            &SourceRecords::new(),
+            &[ProjectKey {
+                source: WOWI,
+                key: "5108".to_owned(),
+            }],
+            true,
+            &mut |_, _, record| {
+                written.push(record);
+                Ok(())
+            },
+            &progress::ignore,
+        )
+        .unwrap();
+        assert_eq!(
+            outcomes[0].status,
+            updates::OutcomeStatus::Updated,
+            "{outcomes:?}"
+        );
+        assert!(
+            fs::read_to_string(addons.join("Clique").join("Clique.toc"))
+                .unwrap()
+                .contains("restored")
+        );
+        assert_eq!(written.len(), 1);
+        assert!(calls.lock().unwrap().contains(&DOWNLOAD.to_owned()));
     }
 
     #[test]
