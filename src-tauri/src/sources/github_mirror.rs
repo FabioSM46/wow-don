@@ -136,6 +136,15 @@ pub(crate) fn installed_message(repo: &str, tag: &str) -> String {
     format!("Installed from GitHub ({repo} {tag}): CurseForge blocks third-party downloads.")
 }
 
+/// Il messaggio di un progetto bloccato che non si può prendere da GitHub, con il motivo:
+/// aggiornamenti, reinstallazione e installazione dalla Search.
+pub(crate) fn unavailable_message(reason: &Reason) -> String {
+    format!(
+        "The author does not allow downloads from third-party apps and the GitHub copy cannot be used. {}",
+        reason.message()
+    )
+}
+
 /// L'esito della ricerca del mirror.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Outcome {

@@ -19,7 +19,7 @@ use crate::config::Config;
 use crate::discovery::{self, DiscoveredInstallation};
 use crate::install_link::{self, LinkPreview, LinkSources};
 use crate::install_local::{self, LocalInstall};
-use crate::install_new::{self, InstallOutcome};
+use crate::install_new::{self, InstallOutcome, MirrorAvailability};
 use crate::installations::Installation;
 use crate::progress::{self, Progress, ProgressEvent};
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
@@ -769,9 +769,12 @@ impl addon_import::Installer for CommandInstaller<'_> {
                     Ok(records) => records,
                     Err(error) => return EntryOutcome::new(entry, EntryStatus::Error, Some(error)),
                 };
+                // L'importazione non chiede il mirror GitHub (issue #164): un elenco lungo
+                // consumerebbe il limite di 60 richieste l'ora.
                 let outcomes = install_new::install_addon(
                     installation,
                     self.client,
+                    None,
                     &overrides,
                     &records,
                     mod_id,
@@ -1077,11 +1080,14 @@ pub async fn install_addon(
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         let client = CurseForgeClient::new(transport, Some(key));
+        // I progetti che CurseForge non lascia scaricare usano il mirror GitHub (D34).
+        let github = github_source()?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         let records = locked_installed(&installed)?.records_for(&installation.id)?;
         Ok(install_new::install_addon(
             &installation,
             &client,
+            Some(&github),
             &overrides,
             &records,
             mod_id,
@@ -1100,6 +1106,47 @@ pub async fn install_addon(
     })
     .await
     .map_err(|error| format!("The installation was interrupted ({error})."))?
+}
+
+/// Il mirror GitHub del progetto CurseForge `mod_id` per l'installazione (D34, issue #164):
+/// `{ available, repo, tag, reason }`, per il file `file_id` se indicato (come `install_addon`),
+/// altrimenti per l'ultimo della versione del gioco. Si chiama su richiesta (dettaglio o Install), mai dalla
+/// ricerca; un progetto che CurseForge lascia scaricare risponde `available: false` con
+/// `reason: null` senza richieste a GitHub. Rete fuori dal thread principale.
+#[tauri::command]
+pub async fn github_mirror(
+    installation_id: String,
+    mod_id: u32,
+    file_id: Option<u32>,
+    app: AppHandle,
+    store: Store<'_>,
+    settings: Settings<'_>,
+    config: State<'_, Config>,
+) -> Result<MirrorAvailability, String> {
+    let key = config
+        .curseforge_api_key
+        .clone()
+        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let installation = find_installation(&store, &installation_id)?;
+    let overrides = overrides_for(&settings, &installation.id)?;
+    let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
+    tauri::async_runtime::spawn_blocking(move || {
+        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        let client = CurseForgeClient::new(transport, Some(key));
+        let github = github_source()?;
+        install_new::github_mirror(
+            &installation,
+            &client,
+            &github,
+            &overrides,
+            mod_id,
+            file_id,
+            allow_beta,
+        )
+    })
+    .await
+    .map_err(|error| format!("The GitHub check was interrupted ({error})."))?
 }
 
 /// Installa nell'installazione lo zip che l'utente ha scaricato a mano e trascinato nella

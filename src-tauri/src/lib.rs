@@ -91,6 +91,7 @@ pub fn run() {
             commands::check_updates,
             commands::update_addons,
             commands::install_addon,
+            commands::github_mirror,
             commands::install_zip,
             commands::resolve_link,
             commands::install_from_link,
