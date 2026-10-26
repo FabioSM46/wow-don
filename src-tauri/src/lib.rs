@@ -2,6 +2,7 @@ mod addon_import;
 mod addon_list;
 mod addon_remove;
 mod addons;
+mod autostart;
 mod backup;
 mod catalog;
 mod commands;
@@ -35,6 +36,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Start with the system (D36): only the backend uses it, through `get_autostart` and
+        // `set_autostart`; no `autostart:*` permission reaches the frontend.
+        .plugin(autostart::plugin())
         // Remember only size, position and maximized state of the main window (D28): the
         // default flags would also restore visibility, decorations and fullscreen, and
         // without the filter every future window would be tracked too.
@@ -63,6 +67,10 @@ pub fn run() {
                 config_dir.join(APP_SETTINGS_FILE),
             )));
             tray::create(app.handle());
+            // The main window is declared invisible in `tauri.conf.json` (no flash, D36), and
+            // the window-state plugin above never restores visibility (no `VISIBLE` flag):
+            // shown here unless an autostart launch stays in the tray.
+            autostart::show_main_window_unless_hidden_start(app.handle());
             Ok(())
         })
         .on_window_event(tray::on_window_event)
@@ -96,6 +104,8 @@ pub fn run() {
             commands::set_theme,
             commands::set_beta_when_no_release,
             commands::set_close_to_tray,
+            commands::get_autostart,
+            commands::set_autostart,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -12,6 +12,7 @@ use crate::addon_list;
 use crate::addon_remove;
 use crate::addons::cache::FingerprintCache;
 use crate::addons::scan::{self, ListedAddon};
+use crate::autostart;
 use crate::backup::{self, BackupInfo};
 use crate::catalog::{self, AddonDetail, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
 use crate::config::Config;
@@ -144,6 +145,20 @@ pub fn set_close_to_tray(
         locked_app_settings(&settings)?.set_close_to_tray(enabled),
         &tray,
     )
+}
+
+/// Se l'app parte con il sistema (issue #159). Lo stato si legge dal sistema operativo a ogni
+/// chiamata: non è in `settings.json`.
+#[tauri::command]
+pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    autostart::is_enabled(&app)
+}
+
+/// Attiva o disattiva l'avvio con il sistema e restituisce lo stato riletto dal sistema
+/// operativo.
+#[tauri::command]
+pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    autostart::set_enabled(&app, enabled)
 }
 
 /// Le impostazioni dell'app (tema, opzione della Beta, "Close to tray") e se l'icona nella
