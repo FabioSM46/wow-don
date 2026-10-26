@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -21,12 +21,14 @@ use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
 use crate::progress::{self, Progress, ProgressEvent};
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
+use crate::sources::github::{self, GithubSource};
 use crate::sources::http::PublicReqwestTransport;
 use crate::sources::tukui::{self, TukuiSource};
+use crate::sources::wowinterface::{self, WowInterfaceSource};
 use crate::sources::{ProjectKey, SourceKind};
 use crate::store::{
     AddonSettingsStore, AppSettings, AppSettingsStore, InstallationStore, InstalledAddonsStore,
-    InstalledRecords, SourceRecords, Theme,
+    InstalledRecords, SourceRecord, SourceRecords, Theme,
 };
 use crate::updates::{
     self, AddonUpdate, CurseForgeSource, UpdateOutcome, VersionOverrides, VersionType,
@@ -307,8 +309,15 @@ fn refresh_blocking(
     // connessioni non si preparano, la lista arriva lo stesso, con il motivo.
     let prepared = ReqwestTransport::new()
         .map_err(|e| e.to_string())
-        .and_then(|transport| Ok((transport, tukui_source()?)));
-    let (transport, tukui) = match prepared {
+        .and_then(|transport| {
+            Ok((
+                transport,
+                tukui_source()?,
+                wowinterface_source()?,
+                github_source()?,
+            ))
+        });
+    let (transport, tukui, wowi, github) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             let addons =
@@ -329,7 +338,7 @@ fn refresh_blocking(
     updates::refresh_addons(
         installation,
         Some(cache),
-        &[&curseforge, &tukui],
+        &[&curseforge, &tukui, &wowi, &github],
         records,
         listed_records,
     )
@@ -491,6 +500,7 @@ pub async fn import_addons(
         let has_key = key.is_some();
         let client = CurseForgeClient::new(transport, key.clone());
         let tukui = tukui_source()?;
+        let github = github_source()?;
         let (availability, lookup_error) =
             import_availability(&decoded.list.addons, &client, has_key, &tukui);
         let mut installer = CommandInstaller {
@@ -498,6 +508,7 @@ pub async fn import_addons(
             installation: &installation,
             client: &client,
             tukui: &tukui,
+            github: &github,
             availability: &availability,
             allow_beta,
         };
@@ -612,12 +623,16 @@ fn import_availability(
         .iter()
         .filter(|e| !matches!(e.source, SourceKind::Curseforge | SourceKind::Tukui))
     {
+        // Un progetto GitHub vale come installabile senza leggere la release, per non spendere
+        // il limite di richieste; un id che non è `owner/repo` no.
+        let message = match entry.source {
+            SourceKind::Github if github::is_valid_repo(&entry.key) => continue,
+            SourceKind::Github => "Invalid GitHub project: it must be owner/repo.".to_owned(),
+            source => format!("WoW-don cannot install from {} yet.", source.label()),
+        };
         availability.insert(
             (entry.source, entry.key.clone()),
-            not_downloadable(
-                &format!("WoW-don cannot install from {} yet.", entry.source.label()),
-                None,
-            ),
+            not_downloadable(&message, None),
         );
     }
     let error = (!errors.is_empty()).then(|| errors.join(" "));
@@ -640,6 +655,8 @@ struct CommandInstaller<'a> {
     installation: &'a Installation,
     client: &'a CurseForgeClient<ReqwestTransport>,
     tukui: &'a TukuiSource<PublicReqwestTransport>,
+    /// Senza un controllo nell'anteprima: ogni release costa una delle 60 richieste l'ora.
+    github: &'a GithubSource<PublicReqwestTransport>,
     availability: &'a Availabilities,
     /// L'impostazione "Use beta files when there is no release" (issue #141).
     allow_beta: bool,
@@ -703,21 +720,23 @@ impl addon_import::Installer for CommandInstaller<'_> {
                 );
                 import_outcome_from_install(entry, &outcomes, note)
             }
-            SourceKind::Tukui => {
-                let outcome = self.tukui.install_new(
-                    installation,
-                    &entry.key,
-                    &mut |source, key, record| {
-                        cache.forget(&addons_dir, &record.folders);
-                        locked_installed(&installed)?.record_source(
-                            &installation.id,
-                            source,
-                            key,
-                            record,
-                        )
-                    },
-                    &progress,
-                );
+            SourceKind::Tukui | SourceKind::Github => {
+                let mut record = |source, key: &str, record: SourceRecord| {
+                    cache.forget(&addons_dir, &record.folders);
+                    locked_installed(&installed)?.record_source(
+                        &installation.id,
+                        source,
+                        key,
+                        record,
+                    )
+                };
+                let outcome = if entry.source == SourceKind::Tukui {
+                    self.tukui
+                        .install_new(installation, &entry.key, &mut record, &progress)
+                } else {
+                    self.github
+                        .install_new(installation, &entry.key, &mut record, &progress)
+                };
                 let status = match outcome.status {
                     updates::OutcomeStatus::Updated => EntryStatus::Installed,
                     updates::OutcomeStatus::Skipped => EntryStatus::Skipped,
@@ -809,11 +828,13 @@ pub async fn check_updates(
             allow_beta,
         };
         let tukui = tukui_source()?;
+        let wowi = wowinterface_source()?;
+        let github = github_source()?;
         let cache = app.state::<FingerprintCache>();
         updates::check_updates_with(
             &installation,
             Some(&cache),
-            &[&curseforge, &tukui],
+            &[&curseforge, &tukui, &wowi, &github],
             &records,
         )
     })
@@ -868,13 +889,15 @@ pub async fn update_addons(
             allow_beta,
         };
         let tukui = tukui_source()?;
+        let wowi = wowinterface_source()?;
+        let github = github_source()?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         let cache = app.state::<FingerprintCache>();
         let addons_dir = installation.path.join("Interface").join("AddOns");
         updates::update_addons_with(
             &installation,
             Some(&cache),
-            &[&curseforge, &tukui],
+            &[&curseforge, &tukui, &wowi, &github],
             &records,
             &projects,
             reinstall,
@@ -911,6 +934,28 @@ fn tukui_source() -> Result<TukuiSource<PublicReqwestTransport>, String> {
         .map_err(|_| "Could not prepare the connection to Tukui.".to_owned())?;
     Ok(TukuiSource::new(transport))
 }
+
+/// La fonte WoWInterface (D31, issue #107), senza chiave. Va creata fuori dal runtime
+/// asincrono, come le altre.
+fn wowinterface_source() -> Result<WowInterfaceSource<PublicReqwestTransport>, String> {
+    let transport = PublicReqwestTransport::new(&wowinterface::DOMAINS)
+        .map_err(|_| "Could not prepare the connection to WoWInterface.".to_owned())?;
+    Ok(WowInterfaceSource::new(transport))
+}
+
+/// La fonte GitHub Releases (issue #108), senza token. Va creata fuori dal runtime asincrono.
+fn github_source() -> Result<GithubSource<PublicReqwestTransport>, String> {
+    let transport = PublicReqwestTransport::new(&github::DOMAINS)
+        .map_err(|_| "Could not prepare the connection to GitHub.".to_owned())?;
+    Ok(GithubSource::with_cache(
+        transport,
+        Arc::clone(&GITHUB_CACHE),
+    ))
+}
+
+/// Le release GitHub lette e il limite di richieste, condivisi da tutti i comandi: ogni Reload
+/// rifà il controllo, e le richieste senza token sono 60 l'ora.
+static GITHUB_CACHE: LazyLock<Arc<github::Cache>> = LazyLock::new(Arc::default);
 
 /// I record dell'installazione per l'ordine di abbinamento (D33). Un `installed-addons.json`
 /// illeggibile non blocca il controllo: senza record le cartelle si offrono a tutte le fonti,

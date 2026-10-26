@@ -716,6 +716,7 @@ pub fn update_addons_with(
             let target = UpdateTarget {
                 key: &project.key,
                 addons_dir: &addons_dir,
+                flavor: &installation.flavor,
                 addons: &addons,
                 updates: &updates,
                 progress,
