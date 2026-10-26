@@ -60,7 +60,8 @@ export function AddByLink({ installationId, onInstalled }: Props) {
         if (!tracker.current.isLatest(id)) return;
         setResolving(false);
         setPreview(result);
-        setRun(null);
+        // Un'installazione in corso non si perde: il suo esito resta da mostrare.
+        setRun((previous) => (previous?.status === "running" ? previous : null));
       },
       (err) => {
         if (!tracker.current.isLatest(id)) return;
@@ -73,7 +74,8 @@ export function AddByLink({ installationId, onInstalled }: Props) {
   }
 
   function install(target: LinkPreview) {
-    if (installing) return;
+    // Durante una lettura l'anteprima sta per essere sostituita.
+    if (installing || resolving) return;
     runKey.current = projectId({ source: target.source, key: target.id });
     setRun({ status: "running" });
     setPageError(null);
@@ -101,7 +103,9 @@ export function AddByLink({ installationId, onInstalled }: Props) {
   }
 
   function dismiss() {
+    // Anche una lettura in corso si annulla: la sua risposta non si applicherà più.
     tracker.current.next();
+    setResolving(false);
     setPreview(null);
     setRun(null);
     setError(null);
@@ -157,7 +161,12 @@ export function AddByLink({ installationId, onInstalled }: Props) {
                 <td>{preview.version || "—"}</td>
                 <td className="nowrap">
                   <span className="link-actions">
-                    <PreviewInstall preview={preview} run={run} onInstall={install} />
+                    <PreviewInstall
+                      preview={preview}
+                      run={run}
+                      disabled={resolving}
+                      onInstall={install}
+                    />
                     <button className="button secondary small" onClick={() => openPage(preview.url)}>
                       Open page
                     </button>
@@ -202,10 +211,13 @@ export function AddByLink({ installationId, onInstalled }: Props) {
 function PreviewInstall({
   preview,
   run,
+  disabled,
   onInstall,
 }: {
   preview: LinkPreview;
   run: Run | null;
+  /** Una lettura di un altro link è in corso. */
+  disabled: boolean;
   onInstall: (preview: LinkPreview) => void;
 }) {
   if (run?.status === "running") {
@@ -219,7 +231,7 @@ function PreviewInstall({
   }
   if (preview.installed || !preview.downloadable) return null;
   return (
-    <button className="button small" onClick={() => onInstall(preview)}>
+    <button className="button small" disabled={disabled} onClick={() => onInstall(preview)}>
       Install
     </button>
   );
