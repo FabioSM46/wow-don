@@ -1251,3 +1251,33 @@ button:focus-visible {
 .remove-confirm .muted {
   font-size: 0.85rem;
 }
+
+/* "Add by link" (issue #110): una riga sotto i filtri, l'anteprima come una riga di tabella. */
+.link-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.link-input {
+  max-width: 480px;
+  font-size: 0.9rem;
+}
+
+.link-preview {
+  margin-bottom: 12px;
+}
+
+.link-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.link.dismiss {
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+}
