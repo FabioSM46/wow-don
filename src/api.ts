@@ -10,11 +10,21 @@ export type AppStatus = {
 /** Il tema dell'interfaccia; `system` segue il sistema operativo. */
 export type Theme = "system" | "light" | "dark";
 
-/** Le impostazioni dell'app salvate dal backend in `settings.json` (`get_settings`). */
+/**
+ * Le impostazioni dell'app come le restituiscono `get_settings` e i comandi `set_*` (il
+ * `SettingsView` del backend): quelle salvate in `settings.json` più `trayAvailable`.
+ */
 export type AppSettings = {
   theme: Theme;
   /** Installare e aggiornare alla Beta quando la versione non ha una Release (issue #141). */
   betaWhenNoRelease: boolean;
+  /** Chiudere la finestra la nasconde nella tray invece di chiudere l'app (issue #158). */
+  closeToTray: boolean;
+  /**
+   * Non salvato: se adesso l'icona nella tray c'è e qualcuno la mostra. Può cambiare mentre
+   * l'app gira (per esempio un'estensione di GNOME attivata o disattivata).
+   */
+  trayAvailable: boolean;
 };
 
 export type Installation = {
@@ -410,6 +420,11 @@ export const api = {
   setTheme: (theme: Theme) => invoke<AppSettings>("set_theme", { theme }),
   setBetaWhenNoRelease: (enabled: boolean) =>
     invoke<AppSettings>("set_beta_when_no_release", { enabled }),
+  setCloseToTray: (enabled: boolean) => invoke<AppSettings>("set_close_to_tray", { enabled }),
+  /** Lo stato reale, riletto dal sistema operativo: non sta in `settings.json` (issue #159). */
+  getAutostart: () => invoke<boolean>("get_autostart"),
+  /** Restituisce lo stato riletto dal sistema operativo dopo la modifica. */
+  setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
   exportAddons: (installationId: string) =>
     invoke<ExportResult>("export_addons", { installationId }),
   previewImport: (installationId: string, text: string) =>

@@ -133,16 +133,19 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
     let tray_available = app
         .try_state::<TrayStatus>()
         .is_some_and(|status| status.available());
-    let close_to_tray = app
-        .try_state::<Mutex<AppSettingsStore>>()
-        .and_then(|settings| {
-            let store = settings.lock().ok()?;
-            store.get().ok().map(|settings| settings.close_to_tray)
-        });
+    let close_to_tray = close_to_tray_setting(app);
     // A window that does not hide is closed: never a window that cannot be closed.
     if hide_on_close(close_to_tray, tray_available) && window.hide().is_ok() {
         api.prevent_close();
     }
+}
+
+/// L'opzione `closeToTray` salvata, o `None` se non si legge (store assente, lock avvelenato,
+/// `settings.json` danneggiato). Usata dalla chiusura e dalla partenza nascosta (issue #159).
+pub fn close_to_tray_setting<R: Runtime>(app: &AppHandle<R>) -> Option<bool> {
+    let settings = app.try_state::<Mutex<AppSettingsStore>>()?;
+    let store = settings.lock().ok()?;
+    store.get().ok().map(|settings| settings.close_to_tray)
 }
 
 /// Se la chiusura della finestra principale va intercettata. `close_to_tray` è `None` quando
