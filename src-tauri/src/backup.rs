@@ -297,6 +297,16 @@ fn timestamp(time: SystemTime) -> String {
     )
 }
 
+/// `AAAA-MM-GGTHH:MM:SSZ` in UTC: la data di un file per una fonte che la dà come tempo Unix
+/// (WoWInterface, issue #107).
+pub(crate) fn iso_utc(time: SystemTime) -> String {
+    let t = utc(time);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        t.year, t.month, t.day, t.hour, t.minute, t.second
+    )
+}
+
 /// L'ora di modifica per la voce zip (in UTC: il formato non ha un fuso). Fuori dagli anni
 /// che lo zip sa scrivere resta quella predefinita.
 fn zip_time(time: SystemTime) -> Option<DateTime> {
@@ -575,6 +585,10 @@ mod tests {
         assert_eq!(at(951_782_400), "20000229-000000");
         assert_eq!(at(1_735_689_599), "20241231-235959");
         assert_eq!(at(4_102_444_800), "21000101-000000");
+        assert_eq!(
+            iso_utc(UNIX_EPOCH + Duration::from_secs(1_735_689_599)),
+            "2024-12-31T23:59:59Z"
+        );
     }
 
     #[test]

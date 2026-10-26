@@ -24,6 +24,7 @@ use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTrans
 use crate::sources::github::{self, GithubSource};
 use crate::sources::http::PublicReqwestTransport;
 use crate::sources::tukui::{self, TukuiSource};
+use crate::sources::wowinterface::{self, WowInterfaceSource};
 use crate::sources::{ProjectKey, SourceKind};
 use crate::store::{
     AddonSettingsStore, AppSettings, AppSettingsStore, InstallationStore, InstalledAddonsStore,
@@ -308,8 +309,15 @@ fn refresh_blocking(
     // connessioni non si preparano, la lista arriva lo stesso, con il motivo.
     let prepared = ReqwestTransport::new()
         .map_err(|e| e.to_string())
-        .and_then(|transport| Ok((transport, tukui_source()?, github_source()?)));
-    let (transport, tukui, github) = match prepared {
+        .and_then(|transport| {
+            Ok((
+                transport,
+                tukui_source()?,
+                wowinterface_source()?,
+                github_source()?,
+            ))
+        });
+    let (transport, tukui, wowi, github) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             let addons =
@@ -330,7 +338,7 @@ fn refresh_blocking(
     updates::refresh_addons(
         installation,
         Some(cache),
-        &[&curseforge, &tukui, &github],
+        &[&curseforge, &tukui, &wowi, &github],
         records,
         listed_records,
     )
@@ -820,12 +828,13 @@ pub async fn check_updates(
             allow_beta,
         };
         let tukui = tukui_source()?;
+        let wowi = wowinterface_source()?;
         let github = github_source()?;
         let cache = app.state::<FingerprintCache>();
         updates::check_updates_with(
             &installation,
             Some(&cache),
-            &[&curseforge, &tukui, &github],
+            &[&curseforge, &tukui, &wowi, &github],
             &records,
         )
     })
@@ -877,6 +886,7 @@ pub async fn update_addons(
             allow_beta,
         };
         let tukui = tukui_source()?;
+        let wowi = wowinterface_source()?;
         let github = github_source()?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         let cache = app.state::<FingerprintCache>();
@@ -884,7 +894,7 @@ pub async fn update_addons(
         updates::update_addons_with(
             &installation,
             Some(&cache),
-            &[&curseforge, &tukui, &github],
+            &[&curseforge, &tukui, &wowi, &github],
             &records,
             &projects,
             &mut |source, key, record| {
@@ -919,6 +929,14 @@ fn tukui_source() -> Result<TukuiSource<PublicReqwestTransport>, String> {
     let transport = PublicReqwestTransport::new(&tukui::DOMAINS)
         .map_err(|_| "Could not prepare the connection to Tukui.".to_owned())?;
     Ok(TukuiSource::new(transport))
+}
+
+/// La fonte WoWInterface (D31, issue #107), senza chiave. Va creata fuori dal runtime
+/// asincrono, come le altre.
+fn wowinterface_source() -> Result<WowInterfaceSource<PublicReqwestTransport>, String> {
+    let transport = PublicReqwestTransport::new(&wowinterface::DOMAINS)
+        .map_err(|_| "Could not prepare the connection to WoWInterface.".to_owned())?;
+    Ok(WowInterfaceSource::new(transport))
 }
 
 /// La fonte GitHub Releases (issue #108), senza token. Va creata fuori dal runtime asincrono.
