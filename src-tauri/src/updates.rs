@@ -78,9 +78,10 @@ pub type VersionOverrides = HashMap<u32, u32>;
 /// - `_retail_` → Retail; `_classic_era_` → Classic Era;
 /// - `_classic_` → la Classic progressiva attuale (Mists of Pandaria);
 /// - `_anniversary_` → Burning Crusade Classic (vedi [`ANNIVERSARY`]);
-/// - `_classic_beta_` → WoW Forever: è il client che usa quella cartella nell'installazione
-///   reale descritta in `docs/architecture.md`. Se un'altra beta di Classic tornasse a usarla,
-///   questa riga andrebbe rivista.
+/// - `_forever_` → WoW Forever: la cartella del client ufficiale (prodotto `wowf` in
+///   `.build.info`, verificata su un'installazione reale);
+/// - `_classic_beta_` → WoW Forever: la cartella della beta (prodotto `wow_classic_beta`). Se
+///   un'altra beta di Classic tornasse a usarla, questa riga andrebbe rivista.
 ///
 /// PTR, beta di Retail e Titan Reforged (81212) restano senza tipo finché non si sa con
 /// certezza quale cartella usano: meglio un errore chiaro che un aggiornamento per la versione
@@ -92,7 +93,7 @@ pub fn version_type_for(flavor: &str) -> Option<u32> {
         "classic_era" => Some(CLASSIC_ERA),
         "classic" => Some(CLASSIC_PROGRESSIVE),
         "anniversary" => Some(ANNIVERSARY),
-        "classic_beta" => Some(FOREVER),
+        "classic_beta" | "forever" => Some(FOREVER),
         _ => None,
     }
 }
@@ -1585,6 +1586,7 @@ mod tests {
             "classic",
             "anniversary",
             "classic_beta",
+            "forever",
         ] {
             let id = version_type_for(flavor).unwrap();
             assert!(is_known_version_type(id), "{flavor}");
@@ -1611,7 +1613,8 @@ mod tests {
         assert_eq!(version_type_for("classic"), Some(CLASSIC_PROGRESSIVE));
         assert_eq!(version_type_for("anniversary"), Some(ANNIVERSARY));
         assert_eq!(version_type_for("classic_beta"), Some(FOREVER));
-        assert_eq!(version_type_for("forever"), None);
+        assert_eq!(version_type_for("forever"), Some(FOREVER));
+        assert_eq!(version_type_for("_forever_"), Some(FOREVER));
         assert_eq!(version_type_for("ptr"), None);
         assert_eq!(version_type_for("beta"), None);
     }

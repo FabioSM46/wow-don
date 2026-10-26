@@ -862,7 +862,7 @@ fn repo_name(repo: &str) -> &str {
 /// | --- | --- | --- |
 /// | `_retail_` (e PTR, beta) | Retail | `mainline` |
 /// | `_classic_era_` | Classic Era | `classic` |
-/// | `_classic_beta_` | WoW Forever | `forever` |
+/// | `_forever_`, `_classic_beta_` | WoW Forever | `forever` |
 /// | `_anniversary_` | Anniversary (TBC) | `bcc` |
 /// | `_classic_` | Classic progressiva (Mists) | `mists` |
 ///
@@ -1358,6 +1358,7 @@ mod tests {
         assert_eq!(packager_flavor("ptr"), Some("mainline"));
         assert_eq!(packager_flavor("classic_era"), Some("classic"));
         assert_eq!(packager_flavor("classic_beta"), Some("forever"));
+        assert_eq!(packager_flavor("forever"), Some("forever"));
         assert_eq!(packager_flavor("anniversary"), Some("bcc"));
         assert_eq!(packager_flavor("classic"), Some("mists"));
         // Ogni flavor della tabella esiste nel `release.json` reale.
@@ -1670,8 +1671,9 @@ mod tests {
                     status,
                     body: "{}".to_owned(),
                     ratelimit_remaining: Some(0),
-                    // 2026-10-26 14:32:00 UTC.
-                    ratelimit_reset: Some(1_793_025_120),
+                    // Le 14:32:00 UTC di un giorno lontano: un orario già passato farebbe
+                    // scadere il limite durante il test.
+                    ratelimit_reset: Some(1_793_025_120 + 36_500 * 86_400),
                 }),
             );
             let record = |folder: &str| SourceRecord {
