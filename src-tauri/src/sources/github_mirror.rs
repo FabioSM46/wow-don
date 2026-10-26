@@ -14,16 +14,114 @@
 //! Dati verificati il 2026-10-26: Bartender4 (`4.18.3.1`) e Deadly Boss Mods (`12.1.17`) hanno
 //! release con `release.json`; Details ha l'ultima release del 2021; Auctionator e Leatrix Plus
 //! non hanno release (404).
+//!
+//! Gli aggiornamenti e la reinstallazione (issue #163) usano il mirror attraverso
+//! [`MirrorSource`]: scaricano lo zip di GitHub con [`install`] e scrivono il record
+//! **CurseForge** del file che combacia, così il progetto resta abbinato a CurseForge.
 
-// Il primo uso arriva con gli aggiornamenti e la reinstallazione (issue #163) e con
-// l'installazione dalla Search (issue #164): fino ad allora il modulo è raggiunto solo dai test.
-#![allow(dead_code)]
+use std::path::Path;
+
+use serde::Serialize;
 
 use super::curseforge::{File, Mod};
 use super::github::{Asset, ChoiceError, GithubSource, ReleaseError};
-use super::http::PublicTransport;
+use super::http::{DownloadProgress, PublicTransport};
 use crate::install_link;
+use crate::progress::Reporter;
 use crate::sources::SourceKind;
+use crate::updates;
+
+/// Quello che la fonte CurseForge chiede a GitHub per un progetto bloccato: l'esito del mirror e
+/// il download del suo zip. Un trait a oggetti, così `CurseForgeSource` non ha un secondo
+/// parametro di tipo per il trasporto di GitHub.
+pub(crate) trait MirrorSource {
+    /// [`resolve`] con la fonte GitHub.
+    fn resolve(&self, project: &Mod, file: &File, flavor: &str) -> Outcome;
+
+    /// Lo zip `asset`, con le regole di download di `github.rs` (domini, dimensione).
+    fn download(
+        &self,
+        asset: &Asset,
+        progress: &mut DownloadProgress<'_>,
+    ) -> Result<Vec<u8>, String>;
+}
+
+impl<T: PublicTransport> MirrorSource for GithubSource<T> {
+    fn resolve(&self, project: &Mod, file: &File, flavor: &str) -> Outcome {
+        resolve(self, project, file, flavor)
+    }
+
+    fn download(
+        &self,
+        asset: &Asset,
+        progress: &mut DownloadProgress<'_>,
+    ) -> Result<Vec<u8>, String> {
+        GithubSource::download(self, asset, progress)
+    }
+}
+
+/// Il mirror di un progetto, come lo vede il frontend: `{ repo, tag }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GithubMirror {
+    /// `owner/repo`.
+    pub repo: String,
+    pub tag: String,
+}
+
+/// I campi del mirror in `AddonUpdate` (`githubMirror`, `githubMirrorReason`): entrambi `null`
+/// quando il mirror non è stato calcolato (progetto non bloccato, aggiornato o di un'altra
+/// fonte).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MirrorStatus {
+    pub github_mirror: Option<GithubMirror>,
+    /// Perché il mirror non si può usare (D27, in inglese).
+    pub github_mirror_reason: Option<String>,
+}
+
+impl MirrorStatus {
+    pub(crate) fn of(outcome: &Outcome) -> Self {
+        match outcome {
+            Outcome::Mirror { repo, tag, .. } => Self {
+                github_mirror: Some(GithubMirror {
+                    repo: repo.clone(),
+                    tag: tag.clone(),
+                }),
+                github_mirror_reason: None,
+            },
+            Outcome::Unavailable { reason } => Self {
+                github_mirror: None,
+                github_mirror_reason: Some(reason.message()),
+            },
+        }
+    }
+}
+
+/// Scarica lo zip `asset` del mirror e lo installa al posto di `old_modules`, con l'estrazione
+/// sicura degli aggiornamenti (`updates::install_bytes`). Restituisce le cartelle installate:
+/// il record, CurseForge, lo scrive chi chiama (gli aggiornamenti qui, l'installazione dalla
+/// Search con la issue #164). `check` può rifiutare le cartelle dello zip prima che tocchino il
+/// disco.
+pub(crate) fn install(
+    github: &dyn MirrorSource,
+    asset: &Asset,
+    addons_dir: &Path,
+    old_modules: &[String],
+    check: &dyn Fn(&[String]) -> Result<(), String>,
+    reporter: &Reporter<'_>,
+) -> Result<Vec<String>, String> {
+    reporter.download(0, None);
+    let bytes = github.download(asset, &mut |received, total| {
+        reporter.download(received, total)
+    })?;
+    reporter.downloaded(bytes.len() as u64);
+    updates::install_bytes(&bytes, addons_dir, old_modules, check, reporter)
+}
+
+/// Il messaggio dell'esito di un'installazione dal mirror.
+pub(crate) fn installed_message(repo: &str, tag: &str) -> String {
+    format!("Installed from GitHub ({repo} {tag}): CurseForge blocks third-party downloads.")
+}
 
 /// L'esito della ricerca del mirror.
 #[derive(Debug, Clone, PartialEq, Eq)]

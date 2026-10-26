@@ -20,6 +20,7 @@ use crate::sources::curseforge::{
     CurseForgeClient, CurseForgeError, File, FileModule, FingerprintMatch, FingerprintMatches, Mod,
     Transport, pick_file,
 };
+use crate::sources::github_mirror::{self, MirrorSource, MirrorStatus, Outcome, Reason};
 use crate::sources::{ProjectKey, RecordWriter, Source, SourceKind, UpdateTarget};
 use crate::store::{InstalledRecords, ProjectRecords, SourceRecord, SourceRecords};
 
@@ -184,6 +185,10 @@ pub struct AddonUpdate {
     /// sceglie niente o la fonte non lo usa. Resta nel backend: il JSON non cambia.
     #[serde(skip)]
     pub reinstall_file: Option<FileSummary>,
+    /// Il mirror GitHub di un progetto CurseForge bloccato con un aggiornamento (D34, issue
+    /// #163): `githubMirror` e `githubMirrorReason`, `null` quando non è stato calcolato.
+    #[serde(flatten)]
+    pub mirror: MirrorStatus,
 }
 
 /// Abbina e valuta. `version_type` è il `gameVersionTypeId` dell'installazione; `overrides`
@@ -239,6 +244,7 @@ pub fn evaluate_with(
                 project_folders: Vec::new(),
                 installed_modules: Vec::new(),
                 reinstall_file: None,
+                mirror: MirrorStatus::default(),
             };
             let Some(fingerprint) = addon.fingerprint else {
                 update.source = Some(SourceKind::Curseforge);
@@ -503,6 +509,7 @@ fn unclaimed(addon: &InstalledAddon, status: UpdateStatus) -> AddonUpdate {
         project_folders: Vec::new(),
         installed_modules: Vec::new(),
         reinstall_file: None,
+        mirror: MirrorStatus::default(),
     }
 }
 
@@ -513,6 +520,9 @@ pub struct CurseForgeSource<'a, T: Transport> {
     pub overrides: &'a VersionOverrides,
     /// L'opzione "Beta quando non c'è una Release" (issue #141).
     pub allow_beta: bool,
+    /// GitHub per i progetti che CurseForge non lascia scaricare (D34, issue #163). Senza, quei
+    /// progetti si aggiornano solo dal sito.
+    pub github: Option<&'a dyn MirrorSource>,
 }
 
 impl<T: Transport> Source for CurseForgeSource<'_, T> {
@@ -546,14 +556,18 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
         mod_ids.sort_unstable();
         mod_ids.dedup();
         let mods = self.client.get_mods(&mod_ids).map_err(|e| e.to_string())?;
-        Ok(evaluate_with(
+        let mut updates = evaluate_with(
             offered,
             &matches,
             &mods,
             version_type,
             self.overrides,
             self.allow_beta,
-        ))
+        );
+        if let Some(github) = self.github {
+            attach_mirrors(&mut updates, &matches, &mods, github, &installation.flavor);
+        }
+        Ok(updates)
     }
 
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome {
@@ -570,9 +584,60 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
         let Ok(mod_id) = target.key.parse::<u32>() else {
             return target.not_found(SourceKind::Curseforge);
         };
-        update_project(target, self.client, mod_id, self.allow_beta, record)
+        update_project(
+            target,
+            self.client,
+            self.github,
+            mod_id,
+            self.allow_beta,
+            record,
+        )
     }
 }
+
+/// Il mirror GitHub (D34) dei progetti bloccati con un aggiornamento disponibile, calcolato una
+/// volta per progetto e file. Nessuna richiesta a GitHub per i progetti aggiornati, con una
+/// sola Beta o che CurseForge lascia scaricare.
+fn attach_mirrors(
+    updates: &mut [AddonUpdate],
+    matches: &FingerprintMatches,
+    mods: &[Mod],
+    github: &dyn MirrorSource,
+    flavor: &str,
+) {
+    let mut resolved: HashMap<(u32, u32), MirrorStatus> = HashMap::new();
+    for update in updates {
+        let (Some(project), UpdateStatus::UpdateAvailable { latest }) =
+            (&update.project, &update.status)
+        else {
+            continue;
+        };
+        if project.allow_mod_distribution {
+            continue;
+        }
+        let Some(found) = mods.iter().find(|m| m.id == project.id) else {
+            continue;
+        };
+        let Some(file) = matches
+            .exact_matches
+            .iter()
+            .chain(&matches.partial_matches)
+            .filter(|m| m.id == project.id)
+            .flat_map(|m| &m.latest_files)
+            .find(|f| f.id == latest.id)
+        else {
+            continue;
+        };
+        let status = resolved
+            .entry((project.id, latest.id))
+            .or_insert_with(|| MirrorStatus::of(&github.resolve(found, file, flavor)))
+            .clone();
+        update.mirror = status;
+    }
+}
+
+/// Il motivo di oggi per un progetto bloccato senza GitHub.
+const BLOCKED: &str = "The author does not allow downloads from third-party apps: update it from the CurseForge website.";
 
 // ── Aggiornamento ───────────────────────────────────────────────────────────
 
@@ -730,6 +795,7 @@ pub fn update_addons_with(
 fn update_project<T: Transport>(
     target: &UpdateTarget<'_>,
     client: &CurseForgeClient<T>,
+    github: Option<&dyn MirrorSource>,
     mod_id: u32,
     allow_beta: bool,
     record: &mut RecordWriter<'_>,
@@ -800,12 +866,12 @@ fn update_project<T: Transport>(
         );
     }
     if !project.allow_mod_distribution {
-        return UpdateOutcome::skipped(
-            CF,
-            key,
-            name,
-            "The author does not allow downloads from third-party apps: update it from the CurseForge website.",
-        );
+        return match github {
+            Some(github) => update_from_mirror(
+                target, client, github, mod_id, name, installed, latest, record,
+            ),
+            None => UpdateOutcome::skipped(CF, key, name, BLOCKED),
+        };
     }
 
     let file = match client.get_file(mod_id, latest.id) {
@@ -833,9 +899,81 @@ fn update_project<T: Transport>(
         Ok(folders) => folders,
         Err(message) => return UpdateOutcome::error(CF, key, name, message),
     };
-    // Le cartelle sono già sostituite: se il registro non si salva l'aggiornamento resta
-    // riuscito, e il messaggio lo dice.
-    let message = record(
+    record_curseforge(record, key, name, &file, folders, None)
+}
+
+/// Un progetto CurseForge bloccato (D13) aggiornato o reinstallato dal suo mirror GitHub (D34,
+/// issue #163): il file CurseForge `latest` si rilegge con il progetto, il mirror si ricalcola
+/// (la release è già nella cache di GitHub se il controllo l'ha letta) e lo zip di GitHub
+/// sostituisce le cartelle. Il record resta CurseForge, con l'id del file che combacia.
+#[allow(clippy::too_many_arguments)]
+fn update_from_mirror<T: Transport>(
+    target: &UpdateTarget<'_>,
+    client: &CurseForgeClient<T>,
+    github: &dyn MirrorSource,
+    mod_id: u32,
+    name: &str,
+    installed: &AddonUpdate,
+    latest: &FileSummary,
+    record: &mut RecordWriter<'_>,
+) -> UpdateOutcome {
+    const CF: SourceKind = SourceKind::Curseforge;
+    let key = target.key;
+    let file = match client.get_file(mod_id, latest.id) {
+        Ok(file) => file,
+        Err(error) => return UpdateOutcome::error(CF, key, name, error.to_string()),
+    };
+    let project = match client.get_mods(&[mod_id]) {
+        Ok(mods) => mods.into_iter().find(|m| m.id == mod_id),
+        Err(error) => return UpdateOutcome::error(CF, key, name, error.to_string()),
+    };
+    let Some(project) = project else {
+        return UpdateOutcome::skipped(CF, key, name, BLOCKED);
+    };
+    let (repo, tag, asset) = match github.resolve(&project, &file, target.flavor) {
+        Outcome::Mirror { repo, tag, asset } => (repo, tag, asset),
+        Outcome::Unavailable { reason } => {
+            let message = format!(
+                "The author does not allow downloads from third-party apps and the GitHub copy cannot be used. {}",
+                reason.message()
+            );
+            return match reason {
+                Reason::Failed(_) => UpdateOutcome::error(CF, key, name, message),
+                _ => UpdateOutcome::skipped(CF, key, name, &message),
+            };
+        }
+    };
+    let old_modules = removable_modules(target.addons, target.updates, installed);
+    let reporter = Reporter::new(target.progress, Some(CF), key, name);
+    let folders = match github_mirror::install(
+        github,
+        &asset,
+        target.addons_dir,
+        &old_modules,
+        &|_| Ok(()),
+        &reporter,
+    ) {
+        Ok(folders) => folders,
+        Err(message) => return UpdateOutcome::error(CF, key, name, message),
+    };
+    let note = github_mirror::installed_message(&repo, &tag);
+    record_curseforge(record, key, name, &file, folders, Some(note))
+}
+
+/// Registra il file CurseForge `file` installato nelle cartelle `folders` e restituisce l'esito
+/// `updated`, con `note` nel messaggio. Le cartelle sono già sostituite: se il registro non si
+/// salva l'installazione resta riuscita, e il messaggio lo dice. Lo usano il download da
+/// CurseForge e quello dal mirror GitHub (issue #163, poi l'installazione dalla Search).
+pub(crate) fn record_curseforge(
+    record: &mut RecordWriter<'_>,
+    key: &str,
+    name: &str,
+    file: &File,
+    folders: Vec<String>,
+    note: Option<String>,
+) -> UpdateOutcome {
+    const CF: SourceKind = SourceKind::Curseforge;
+    let failed = record(
         CF,
         key,
         SourceRecord {
@@ -845,7 +983,11 @@ fn update_project<T: Transport>(
     )
     .err()
     .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
-    UpdateOutcome::updated(CF, key, name, FileSummary::from(&file), message)
+    let message = match (note, failed) {
+        (Some(note), Some(failed)) => Some(format!("{note} {failed}")),
+        (note, failed) => note.or(failed),
+    };
+    UpdateOutcome::updated(CF, key, name, FileSummary::from(file), message)
 }
 
 /// Le cartelle del file installato che l'aggiornamento può togliere se il nuovo zip non le ha
@@ -960,6 +1102,7 @@ mod tests {
             client,
             overrides,
             allow_beta: false,
+            github: None,
         };
         check_updates(installation, &[&source], &SourceRecords::new())
     }
@@ -1009,6 +1152,7 @@ mod tests {
             client,
             overrides,
             allow_beta: mode.allow_beta,
+            github: None,
         };
         let projects: Vec<ProjectKey> = mod_ids
             .iter()
@@ -1469,7 +1613,39 @@ mod tests {
                 name: "x".to_owned(),
                 date: "d".to_owned(),
             }),
+            mirror: MirrorStatus::default(),
         };
+        // Senza mirror calcolato i due campi nuovi ci sono, entrambi `null`.
+        let json = serde_json::to_value(&update).unwrap();
+        assert_eq!(json["githubMirror"], serde_json::Value::Null);
+        assert_eq!(json["githubMirrorReason"], serde_json::Value::Null);
+        let mirror = AddonUpdate {
+            mirror: MirrorStatus {
+                github_mirror: Some(github_mirror::GithubMirror {
+                    repo: "Nevcairiel/Bartender4".to_owned(),
+                    tag: "4.18.3.1".to_owned(),
+                }),
+                github_mirror_reason: None,
+            },
+            ..update.clone()
+        };
+        let json = serde_json::to_value(&mirror).unwrap();
+        assert_eq!(
+            json["githubMirror"],
+            serde_json::json!({"repo": "Nevcairiel/Bartender4", "tag": "4.18.3.1"})
+        );
+        assert_eq!(json["githubMirrorReason"], serde_json::Value::Null);
+        let unavailable = AddonUpdate {
+            mirror: MirrorStatus {
+                github_mirror: None,
+                github_mirror_reason: Some("why".to_owned()),
+            },
+            ..update.clone()
+        };
+        let json = serde_json::to_value(&unavailable).unwrap();
+        assert_eq!(json["githubMirror"], serde_json::Value::Null);
+        assert_eq!(json["githubMirrorReason"], "why");
+
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(json["status"], "updateAvailable");
         assert_eq!(json["latest"]["id"], 1);
@@ -2635,6 +2811,7 @@ mod tests {
                         project_folders: vec![a.folder.clone()],
                         installed_modules: Vec::new(),
                         reinstall_file: None,
+                        mirror: Default::default(),
                     })
                     .collect())
             }
@@ -2907,6 +3084,7 @@ mod tests {
                 client: &client,
                 overrides: &overrides,
                 allow_beta: false,
+                github: None,
             };
             let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
             let updates = check_updates(
@@ -2936,6 +3114,7 @@ mod tests {
                 client: &client,
                 overrides: &overrides,
                 allow_beta: false,
+                github: None,
             };
             let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
             let mut written = Vec::new();
@@ -2978,6 +3157,7 @@ mod tests {
                 client: &client,
                 overrides: &overrides,
                 allow_beta: false,
+                github: None,
             };
             let tukui = FakeSource::new(SourceKind::Tukui, &["ElvUI"]);
             let records = record_of(SourceKind::Curseforge, "1", &["ElvUI"]);
@@ -3002,6 +3182,7 @@ mod tests {
                 client: &client,
                 overrides: &overrides,
                 allow_beta: false,
+                github: None,
             };
             let tukui = FakeSource::failing(SourceKind::Tukui, "network down");
             assert_eq!(
@@ -3061,6 +3242,415 @@ mod tests {
                     ),
                 ]
             );
+        }
+
+        // ── Mirror GitHub dei progetti bloccati (D34, issue #163) ───────────
+
+        mod mirror {
+            use super::*;
+            use crate::sources::github::GithubSource;
+            use crate::sources::http::{ApiResponse, PublicTransport};
+
+            const REPO: &str = "owner/Alpha";
+            const SOURCE_URL: &str = "https://github.com/owner/Alpha";
+
+            /// GitHub finto: le release per URL dell'API, gli zip per URL, e le richieste fatte.
+            #[derive(Default)]
+            struct Hub {
+                /// URL dell'API → (stato, corpo, richieste rimaste).
+                api: HashMap<String, (u16, String, u64)>,
+                zips: HashMap<String, Vec<u8>>,
+                calls: Arc<Mutex<Vec<String>>>,
+            }
+
+            impl PublicTransport for Hub {
+                fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
+                    self.calls.lock().unwrap().push(url.to_owned());
+                    reply(None)
+                }
+
+                fn get_api(&self, url: &str, _accept: &str) -> Result<ApiResponse, TransportError> {
+                    self.calls.lock().unwrap().push(url.to_owned());
+                    let (status, body, remaining) =
+                        self.api.get(url).cloned().ok_or(TransportError::Connect)?;
+                    Ok(ApiResponse {
+                        status,
+                        body,
+                        ratelimit_remaining: Some(remaining),
+                        ratelimit_reset: Some(1_793_025_120),
+                    })
+                }
+
+                fn get_bytes(
+                    &self,
+                    url: &str,
+                    _max_len: u64,
+                ) -> Result<BytesResponse, TransportError> {
+                    self.calls.lock().unwrap().push(url.to_owned());
+                    Ok(match self.zips.get(url) {
+                        Some(body) => BytesResponse {
+                            status: 200,
+                            body: body.clone(),
+                        },
+                        None => BytesResponse {
+                            status: 404,
+                            body: Vec::new(),
+                        },
+                    })
+                }
+            }
+
+            fn latest_url() -> String {
+                format!("https://api.github.com/repos/{REPO}/releases/latest")
+            }
+
+            fn asset_url(tag: &str) -> String {
+                format!("https://github.com/{REPO}/releases/download/{tag}/Alpha-{tag}.zip")
+            }
+
+            /// Un GitHub con l'ultima release `tag` e il suo unico zip `zip`.
+            fn hub(tag: &str, zip: Vec<u8>) -> Hub {
+                let body = json!({"tag_name": tag, "assets": [
+                    {"name": format!("Alpha-{tag}.zip"), "browser_download_url": asset_url(tag)}
+                ]});
+                Hub {
+                    api: HashMap::from([(latest_url(), (200, body.to_string(), 59))]),
+                    zips: HashMap::from([(asset_url(tag), zip)]),
+                    ..Hub::default()
+                }
+            }
+
+            /// Un progetto bloccato che dichiara il repository GitHub.
+            fn blocked(mod_id: u32, name: &str) -> Value {
+                json!({"id": mod_id, "name": name, "allowModDistribution": false,
+                       "links": {"sourceUrl": SOURCE_URL}})
+            }
+
+            /// Il file CurseForge `id` senza link di download, come per i progetti bloccati.
+            fn blocked_file(mod_id: u32, id: u32, date: &str, modules: &[(&str, u32)]) -> Value {
+                let mut file = file_json(mod_id, id, date, modules);
+                file["downloadUrl"] = Value::Null;
+                file
+            }
+
+            /// Le risposte CurseForge di un progetto installato (file 10) con l'aggiornamento 11.
+            fn routes(fx: &Fixture, project: Value) -> Routes {
+                Routes {
+                    fingerprints: json!({"data": {"exactMatches": [
+                        installed(fx, 1, &["Alpha"], true)
+                    ]}})
+                    .to_string(),
+                    mods: json!({ "data": [project] }).to_string(),
+                    files: HashMap::from([(
+                        format!("{API}/v1/mods/1/files/11"),
+                        json!({"data": blocked_file(1, 11, "2026-10-01T00:00:00Z", &[])})
+                            .to_string(),
+                    )]),
+                    ..Routes::default()
+                }
+            }
+
+            fn source<'a>(
+                client: &'a CurseForgeClient<Routes>,
+                overrides: &'a VersionOverrides,
+                github: &'a GithubSource<Hub>,
+            ) -> CurseForgeSource<'a, Routes> {
+                CurseForgeSource {
+                    client,
+                    overrides,
+                    allow_beta: false,
+                    github: Some(github),
+                }
+            }
+
+            fn check(
+                fx: &Fixture,
+                client: &CurseForgeClient<Routes>,
+                github: &GithubSource<Hub>,
+            ) -> Vec<AddonUpdate> {
+                let overrides = no_overrides();
+                let cf = source(client, &overrides, github);
+                check_updates(&fx.installation, &[&cf], &SourceRecords::new()).unwrap()
+            }
+
+            type Written = Vec<(SourceKind, String, SourceRecord)>;
+
+            fn update(
+                fx: &Fixture,
+                client: &CurseForgeClient<Routes>,
+                github: &GithubSource<Hub>,
+                reinstall: bool,
+                written: &mut Written,
+            ) -> Vec<UpdateOutcome> {
+                let overrides = no_overrides();
+                let cf = source(client, &overrides, github);
+                update_addons_with(
+                    &fx.installation,
+                    None,
+                    &[&cf],
+                    &SourceRecords::new(),
+                    &[ProjectKey {
+                        source: SourceKind::Curseforge,
+                        key: "1".to_owned(),
+                    }],
+                    reinstall,
+                    &mut |source, key, record| {
+                        written.push((source, key.to_owned(), record));
+                        Ok(())
+                    },
+                    &crate::progress::ignore,
+                )
+                .unwrap()
+            }
+
+            fn alpha_zip(content: &str) -> Vec<u8> {
+                zip_of(&[
+                    ("Alpha/Alpha.toc", "## Title: Alpha\nAlpha.lua\n"),
+                    ("Alpha/Alpha.lua", content),
+                ])
+            }
+
+            #[test]
+            fn a_blocked_project_with_a_mirror_updates_from_github() {
+                let fx = fixture(&[("Alpha", "alpha v1")]);
+                let routes = routes(&fx, blocked(1, "Alpha"));
+                let cf_log = Arc::clone(&routes.log);
+                let client = client(routes);
+                let hub = hub("11", alpha_zip("alpha v2"));
+                let calls = Arc::clone(&hub.calls);
+                let github = GithubSource::new(hub);
+
+                let updates = check(&fx, &client, &github);
+                assert_eq!(
+                    updates[0].mirror,
+                    MirrorStatus {
+                        github_mirror: Some(github_mirror::GithubMirror {
+                            repo: REPO.to_owned(),
+                            tag: "11".to_owned(),
+                        }),
+                        github_mirror_reason: None,
+                    }
+                );
+                let json = serde_json::to_value(&updates[0]).unwrap();
+                assert_eq!(json["githubMirror"], json!({"repo": REPO, "tag": "11"}));
+                assert_eq!(json["githubMirrorReason"], Value::Null);
+
+                let mut written = Written::new();
+                let outcomes = update(&fx, &client, &github, false, &mut written);
+                assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "{outcomes:?}");
+                assert_eq!(outcomes[0].source, SourceKind::Curseforge);
+                assert_eq!(outcomes[0].file.as_ref().map(|f| f.id), Some(11));
+                assert_eq!(
+                    outcomes[0].message.as_deref(),
+                    Some(
+                        "Installed from GitHub (owner/Alpha 11): CurseForge blocks third-party downloads."
+                    )
+                );
+                // Il record resta CurseForge, con l'id del file che combacia.
+                assert_eq!(
+                    written,
+                    [(
+                        SourceKind::Curseforge,
+                        "1".to_owned(),
+                        SourceRecord {
+                            file: "11".to_owned(),
+                            folders: vec!["Alpha".to_owned()],
+                        }
+                    )]
+                );
+                assert_eq!(
+                    fs::read_to_string(fx.addons.join("Alpha").join("Alpha.lua")).unwrap(),
+                    "alpha v2"
+                );
+                // Niente dalla CDN di CurseForge; da GitHub una lettura della release (riusata
+                // tra controllo e aggiornamento) e lo zip.
+                assert!(cf_log.downloads.lock().unwrap().is_empty());
+                let calls = calls.lock().unwrap().clone();
+                assert_eq!(calls, [latest_url(), asset_url("11")]);
+            }
+
+            #[test]
+            fn without_a_matching_release_the_update_is_skipped_with_the_reason() {
+                let fx = fixture(&[("Alpha", "alpha v1")]);
+                let client = client(routes(&fx, blocked(1, "Alpha")));
+                let hub = hub("9", alpha_zip("old"));
+                let calls = Arc::clone(&hub.calls);
+                let github = GithubSource::new(hub);
+
+                let updates = check(&fx, &client, &github);
+                let reason =
+                    "The latest GitHub release (9) is not the CurseForge file (file-11.zip).";
+                assert_eq!(updates[0].mirror.github_mirror, None);
+                assert_eq!(
+                    updates[0].mirror.github_mirror_reason.as_deref(),
+                    Some(reason)
+                );
+                assert!(matches!(
+                    updates[0].status,
+                    UpdateStatus::UpdateAvailable { .. }
+                ));
+
+                let mut written = Written::new();
+                let outcomes = update(&fx, &client, &github, false, &mut written);
+                assert_eq!(outcomes[0].status, OutcomeStatus::Skipped);
+                let message = outcomes[0].message.as_deref().unwrap();
+                assert!(message.contains("third-party"), "{message}");
+                assert!(message.ends_with(reason), "{message}");
+                assert!(written.is_empty());
+                assert!(!calls.lock().unwrap().contains(&asset_url("9")));
+                assert_eq!(
+                    fs::read_to_string(fx.addons.join("Alpha").join("Alpha.lua")).unwrap(),
+                    "alpha v1"
+                );
+            }
+
+            #[test]
+            fn projects_that_need_no_mirror_ask_github_nothing() {
+                let fx = fixture(&[("Alpha", "alpha"), ("Beta", "beta")]);
+                let (beta, _) = up_to_date(&fx, 2, "Beta", 1);
+                let mut free = blocked(1, "Alpha");
+                free["allowModDistribution"] = json!(true);
+                let routes = Routes {
+                    fingerprints: json!({"data": {"exactMatches": [
+                        installed(&fx, 1, &["Alpha"], true),
+                        beta,
+                    ]}})
+                    .to_string(),
+                    mods: json!({"data": [free, blocked(2, "Beta")]}).to_string(),
+                    ..Routes::default()
+                };
+                let client = client(routes);
+                let hub = hub("11", alpha_zip("x"));
+                let calls = Arc::clone(&hub.calls);
+                let github = GithubSource::new(hub);
+
+                let updates = check(&fx, &client, &github);
+                assert_eq!(updates.len(), 2);
+                for update in &updates {
+                    assert_eq!(update.mirror, MirrorStatus::default(), "{update:?}");
+                }
+                assert!(calls.lock().unwrap().is_empty());
+            }
+
+            #[test]
+            fn a_blocked_project_without_a_github_source_says_why() {
+                let fx = fixture(&[("Alpha", "alpha v1")]);
+                let mut project = blocked(1, "Alpha");
+                project["links"] = json!({"sourceUrl": "https://repos.curseforge.com/wow/alpha"});
+                let client = client(routes(&fx, project));
+                let hub = Hub::default();
+                let calls = Arc::clone(&hub.calls);
+                let github = GithubSource::new(hub);
+
+                let updates = check(&fx, &client, &github);
+                assert_eq!(
+                    updates[0].mirror.github_mirror_reason.as_deref(),
+                    Some("The CurseForge project does not link a GitHub repository.")
+                );
+                let outcomes = update(&fx, &client, &github, false, &mut Written::new());
+                assert_eq!(outcomes[0].status, OutcomeStatus::Skipped);
+                assert!(calls.lock().unwrap().is_empty());
+            }
+
+            #[test]
+            fn reinstall_of_a_blocked_project_uses_the_mirror() {
+                let fx = fixture(&[("Alpha", "alpha v1")]);
+                let (found, _) = up_to_date(&fx, 1, "Alpha", 1);
+                let routes = Routes {
+                    fingerprints: json!({"data": {"exactMatches": [found]}}).to_string(),
+                    mods: json!({"data": [blocked(1, "Alpha")]}).to_string(),
+                    files: HashMap::from([(
+                        format!("{API}/v1/mods/1/files/10"),
+                        json!({"data": blocked_file(1, 10, "2026-09-01T00:00:00Z", &[])})
+                            .to_string(),
+                    )]),
+                    ..Routes::default()
+                };
+                let client = client(routes);
+                let hub = hub("10", alpha_zip("alpha v1 again"));
+                let calls = Arc::clone(&hub.calls);
+                let github = GithubSource::new(hub);
+
+                // Aggiornato: il controllo non chiede niente a GitHub.
+                let updates = check(&fx, &client, &github);
+                assert_eq!(updates[0].status, UpdateStatus::UpToDate);
+                assert_eq!(updates[0].mirror, MirrorStatus::default());
+                assert!(calls.lock().unwrap().is_empty());
+
+                let mut written = Written::new();
+                let outcomes = update(&fx, &client, &github, true, &mut written);
+                assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "{outcomes:?}");
+                assert_eq!(
+                    outcomes[0].message.as_deref(),
+                    Some(
+                        "Installed from GitHub (owner/Alpha 10): CurseForge blocks third-party downloads."
+                    )
+                );
+                assert_eq!(written.len(), 1);
+                assert_eq!(written[0].0, SourceKind::Curseforge);
+                assert_eq!(written[0].2.file, "10");
+                assert_eq!(
+                    fs::read_to_string(fx.addons.join("Alpha").join("Alpha.lua")).unwrap(),
+                    "alpha v1 again"
+                );
+                assert_eq!(*calls.lock().unwrap(), [latest_url(), asset_url("10")]);
+            }
+
+            #[test]
+            fn the_rate_limit_is_a_reason_not_an_error() {
+                let fx = fixture(&[("Alpha", "alpha v1")]);
+                let client = client(routes(&fx, blocked(1, "Alpha")));
+                let hub = Hub {
+                    api: HashMap::from([(latest_url(), (403, String::new(), 0))]),
+                    ..Hub::default()
+                };
+                let github = GithubSource::new(hub);
+
+                let updates = check(&fx, &client, &github);
+                assert!(matches!(
+                    updates[0].status,
+                    UpdateStatus::UpdateAvailable { .. }
+                ));
+                let limit = "GitHub's limit of 60 requests an hour has been reached: try again after 14:32 UTC.";
+                assert_eq!(
+                    updates[0].mirror.github_mirror_reason.as_deref(),
+                    Some(limit)
+                );
+
+                let outcomes = update(&fx, &client, &github, false, &mut Written::new());
+                assert_eq!(outcomes[0].status, OutcomeStatus::Skipped);
+                assert!(
+                    outcomes[0].message.as_deref().unwrap().ends_with(limit),
+                    "{outcomes:?}"
+                );
+            }
+
+            #[test]
+            fn a_download_outside_github_is_refused() {
+                let fx = fixture(&[("Alpha", "alpha v1")]);
+                let client = client(routes(&fx, blocked(1, "Alpha")));
+                let evil = "https://evil.example/Alpha-11.zip";
+                let body = json!({"tag_name": "11", "assets": [
+                    {"name": "Alpha-11.zip", "browser_download_url": evil}
+                ]});
+                let hub = Hub {
+                    api: HashMap::from([(latest_url(), (200, body.to_string(), 59))]),
+                    zips: HashMap::from([(evil.to_owned(), alpha_zip("evil"))]),
+                    ..Hub::default()
+                };
+                let calls = Arc::clone(&hub.calls);
+                let github = GithubSource::new(hub);
+
+                let mut written = Written::new();
+                let outcomes = update(&fx, &client, &github, false, &mut written);
+                assert_eq!(outcomes[0].status, OutcomeStatus::Error, "{outcomes:?}");
+                assert!(written.is_empty());
+                assert!(!calls.lock().unwrap().iter().any(|u| u == evil));
+                assert_eq!(
+                    fs::read_to_string(fx.addons.join("Alpha").join("Alpha.lua")).unwrap(),
+                    "alpha v1"
+                );
+            }
         }
     }
 }

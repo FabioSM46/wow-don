@@ -418,6 +418,7 @@ impl<T: PublicTransport> Source for TukuiSource<T> {
                     project_folders: addon.directories.clone(),
                     installed_modules: Vec::new(),
                     reinstall_file: None,
+                    mirror: Default::default(),
                 });
             }
         }
