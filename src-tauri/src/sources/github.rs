@@ -547,6 +547,7 @@ impl<T: PublicTransport> Source for GithubSource<T> {
                     version_override: None,
                     project_folders: record.folders.clone(),
                     installed_modules: Vec::new(),
+                    reinstall_file: None,
                 });
             }
         }
@@ -565,18 +566,16 @@ impl<T: PublicTransport> Source for GithubSource<T> {
             })
             .collect();
         let Some(project) = folders.first().and_then(|u| u.project.as_ref()) else {
-            return UpdateOutcome::skipped(
-                GITHUB,
-                key,
-                "",
-                "Not found among the installed addons.",
-            );
+            return target.not_found(GITHUB);
         };
         let name = project.name.as_str();
-        if !folders
-            .iter()
-            .any(|u| matches!(u.status, UpdateStatus::UpdateAvailable { .. }))
-        {
+        // Con `reinstall` (issue #148) un addon aggiornato si riscarica dalla release installata.
+        let wanted = |status: &UpdateStatus| match status {
+            UpdateStatus::UpdateAvailable { .. } => true,
+            UpdateStatus::UpToDate => target.reinstall,
+            _ => false,
+        };
+        if !folders.iter().any(|u| wanted(&u.status)) {
             let reason = folders.iter().find_map(|u| match &u.status {
                 UpdateStatus::Error { message } => Some(message.as_str()),
                 _ => None,
@@ -591,8 +590,23 @@ impl<T: PublicTransport> Source for GithubSource<T> {
         if !project.allow_mod_distribution {
             return UpdateOutcome::skipped(GITHUB, key, name, WEBSITE_ONLY);
         }
-        let Some((release, asset)) = lock(&self.chosen).get(key).cloned() else {
-            return UpdateOutcome::skipped(GITHUB, key, name, "Check for updates again.");
+        let chosen = lock(&self.chosen).get(key).cloned();
+        let (release, asset) = match chosen {
+            Some(chosen) => chosen,
+            // Per un progetto aggiornato il controllo non sceglie il file (costerebbe una lettura
+            // di `release.json` a ogni controllo): lo si sceglie qui, dalla release già letta.
+            None if target.reinstall => {
+                let release = match self.latest(key) {
+                    Ok(release) => release,
+                    Err(error) => return UpdateOutcome::error(GITHUB, key, name, error),
+                };
+                match self.choose(&release, target.flavor) {
+                    Ok(Some(asset)) => (release, asset),
+                    Ok(None) => return UpdateOutcome::skipped(GITHUB, key, name, WEBSITE_ONLY),
+                    Err(message) => return UpdateOutcome::skipped(GITHUB, key, name, &message),
+                }
+            }
+            None => return UpdateOutcome::skipped(GITHUB, key, name, "Check for updates again."),
         };
         // Le cartelle del progetto sul disco: quelle che il nuovo zip non ha più si tolgono.
         let old_folders: Vec<String> = folders.iter().map(|u| u.folder.clone()).collect();
@@ -1218,6 +1232,58 @@ mod tests {
         .unwrap();
         assert_eq!(outcomes[0].status, updates::OutcomeStatus::Skipped);
         assert_eq!(outcomes[0].message.as_deref(), Some(WEBSITE_ONLY));
+    }
+
+    /// Issue #148: con `reinstall` un progetto aggiornato si riscarica dalla release installata.
+    #[test]
+    fn reinstall_downloads_the_installed_release_again() {
+        let tmp = TempDir::new();
+        let (installation, addons) = game(&tmp);
+        fs::create_dir_all(addons.join("BigWigs")).unwrap();
+        fs::write(addons.join("BigWigs").join("BigWigs.toc"), "broken").unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut fake = fake("v427.8", &["BigWigs-v427.8.zip", MANIFEST]);
+        fake.calls = Arc::clone(&calls);
+        fake.bytes.insert(
+            format!("{DOWNLOADS}/BigWigs-v427.8.zip"),
+            zip_of(&[("BigWigs/BigWigs.toc", "restored")]),
+        );
+        let source = GithubSource::new(fake);
+        let run = |reinstall: bool| {
+            updates::update_addons_with(
+                &installation,
+                None,
+                &[&source],
+                &SourceRecords::from([(GITHUB, records("v427.8"))]),
+                &[super::super::ProjectKey {
+                    source: GITHUB,
+                    key: REPO.to_owned(),
+                }],
+                reinstall,
+                &mut |_, _, _| Ok(()),
+                &progress::ignore,
+            )
+            .unwrap()
+            .remove(0)
+        };
+
+        let plain = run(false);
+        assert_eq!(plain.message.as_deref(), Some("Already up to date."));
+        let again = run(true);
+        assert_eq!(again.status, updates::OutcomeStatus::Updated, "{again:?}");
+        assert_eq!(
+            fs::read_to_string(addons.join("BigWigs").join("BigWigs.toc")).unwrap(),
+            "restored"
+        );
+        // Il controllo di un progetto aggiornato non legge `release.json`: solo la reinstallazione.
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                LATEST.to_owned(),
+                format!("{DOWNLOADS}/{MANIFEST}"),
+                format!("{DOWNLOADS}/BigWigs-v427.8.zip")
+            ]
+        );
     }
 
     #[test]

@@ -854,7 +854,8 @@ pub async fn check_updates(
 }
 
 /// Aggiorna i progetti dell'installazione: `mod_ids` sono progetti CurseForge, `projects` quelli
-/// di qualsiasi fonte (`{source, key}`). Rifà il controllo, scarica e installa, e registra in
+/// di qualsiasi fonte (`{source, key}`). Con `reinstall` (default `false`, issue #148) riscarica
+/// anche i progetti già aggiornati, con lo stesso ciclo e le stesse regole. Rifà il controllo, scarica e installa, e registra in
 /// `installed-addons.json` quello che ha installato. Rete e disco girano fuori dal thread
 /// principale, sotto [`InstallLock`]; il lock del registro si prende solo per scrivere ogni
 /// record.
@@ -864,12 +865,14 @@ pub async fn update_addons(
     installation_id: String,
     mod_ids: Vec<u32>,
     projects: Option<Vec<ProjectKey>>,
+    reinstall: Option<bool>,
     app: AppHandle,
     store: Store<'_>,
     settings: Settings<'_>,
     installed: Installed<'_>,
     config: State<'_, Config>,
 ) -> Result<Vec<UpdateOutcome>, String> {
+    let reinstall = reinstall.unwrap_or(false);
     // Senza chiave CurseForge non controlla niente, ma le fonti libere sì (D31): le cartelle
     // che nessuna riconosce riportano il motivo.
     let key = config.curseforge_api_key.clone();
@@ -908,6 +911,7 @@ pub async fn update_addons(
             &[&curseforge, &tukui, &wowi, &github],
             &records,
             &projects,
+            reinstall,
             &mut |source, key, record| {
                 // Le cartelle appena scritte si ricalcolano alla prossima scansione.
                 cache.forget(&addons_dir, &record.folders);
