@@ -272,12 +272,24 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
             };
             let group = &groups[key.as_str()];
             let record = records.get(key);
+            // Senza record conta il `.toc` di qualunque cartella del progetto che ha già la
+            // versione della risposta: un modulo con una `## Version` propria non deve
+            // proporre per sempre un aggiornamento. Altrimenti la prima versione dichiarata,
+            // prima quelle delle cartelle con il tag.
             let installed_version = record.map(|r| r.file.clone()).or_else(|| {
-                group
-                    .iter()
-                    .filter(|a| a.toc.wowi_id.as_deref().and_then(project_id).as_ref() == Some(key))
-                    .chain(group.iter())
-                    .find_map(|a| a.toc.version.clone())
+                let versions = || group.iter().filter_map(|a| a.toc.version.as_deref());
+                versions()
+                    .find(|v| normalized(v) == normalized(&file.version))
+                    .or_else(|| {
+                        group
+                            .iter()
+                            .filter(|a| {
+                                a.toc.wowi_id.as_deref().and_then(project_id).as_ref() == Some(key)
+                            })
+                            .find_map(|a| a.toc.version.as_deref())
+                    })
+                    .or_else(|| versions().next())
+                    .map(str::to_owned)
             });
             let status = if installed_version
                 .as_deref()
@@ -612,6 +624,28 @@ mod tests {
         assert_eq!(updates[0].project_folders, ["Details", "Details_Compare2"]);
         assert_eq!(updates[2].project_folders, ["Details", "Details_Compare2"]);
         assert_eq!(updates[1].status, UpdateStatus::UpToDate);
+    }
+
+    #[test]
+    fn a_module_with_its_own_version_does_not_hide_an_up_to_date_project() {
+        // Il modulo viene prima nella scansione e dichiara una `## Version` sua.
+        let offered = [
+            addon("Clique_Module", Some("1.0"), Some("5108")),
+            addon("Clique", Some("v5.0.15"), Some("5108")),
+        ];
+        let updates = clique_source("v5.0.15")
+            .check(&installation(), &offered, &ProjectRecords::new())
+            .unwrap();
+        assert_eq!(updates[0].status, UpdateStatus::UpToDate);
+        assert_eq!(updates[0].installed_file, Some(summary("v5.0.15", None)));
+        // Se nessuna cartella ha la versione nuova, c'è un aggiornamento.
+        let updates = clique_source("v5.0.16")
+            .check(&installation(), &offered, &ProjectRecords::new())
+            .unwrap();
+        assert!(matches!(
+            updates[1].status,
+            UpdateStatus::UpdateAvailable { .. }
+        ));
     }
 
     #[test]
