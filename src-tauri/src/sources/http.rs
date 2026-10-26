@@ -16,6 +16,15 @@ pub struct HttpResponse {
     pub body: String,
 }
 
+/// Una risposta JSON con le intestazioni che una fonte legge: oggi solo il limite di richieste
+/// di GitHub (`x-ratelimit-remaining`, `x-ratelimit-reset` in secondi Unix).
+pub struct ApiResponse {
+    pub status: u16,
+    pub body: String,
+    pub ratelimit_remaining: Option<u64>,
+    pub ratelimit_reset: Option<u64>,
+}
+
 pub struct BytesResponse {
     pub status: u16,
     pub body: Vec<u8>,
@@ -99,6 +108,18 @@ pub type DownloadProgress<'a> = dyn FnMut(u64, Option<u64>) + 'a;
 pub trait PublicTransport: Send + Sync {
     /// Una risposta JSON, al massimo [`MAX_JSON_BYTES`]: oltre, [`TransportError::TooLarge`].
     fn get(&self, url: &str) -> Result<HttpResponse, TransportError>;
+    /// Come [`get`](Self::get) con l'intestazione `Accept` data, e con le intestazioni del limite
+    /// di richieste. Senza una versione propria il trasporto non le riporta.
+    fn get_api(&self, url: &str, accept: &str) -> Result<ApiResponse, TransportError> {
+        let _ = accept;
+        let response = self.get(url)?;
+        Ok(ApiResponse {
+            status: response.status,
+            body: response.body,
+            ratelimit_remaining: None,
+            ratelimit_reset: None,
+        })
+    }
     /// Scarica un file. Un corpo più lungo di `max_len` byte dà [`TransportError::TooLarge`]
     /// senza tenerne in memoria più di `max_len`. Chi chiama valida l'URL con
     /// [`is_allowed_url`]; il trasporto reale applica la stessa regola ai redirect.
@@ -145,20 +166,42 @@ impl PublicReqwestTransport {
 
 impl PublicTransport for PublicReqwestTransport {
     fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
+        let response = self.get_api(url, "application/json")?;
+        Ok(HttpResponse {
+            status: response.status,
+            body: response.body,
+        })
+    }
+
+    fn get_api(&self, url: &str, accept: &str) -> Result<ApiResponse, TransportError> {
         let mut response = self
             .client
             .get(url)
-            .header("accept", "application/json")
+            .header("accept", accept)
             .send()
             .map_err(transport_error)?;
         let status = response.status().as_u16();
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.trim().parse::<u64>().ok())
+        };
+        let ratelimit_remaining = header("x-ratelimit-remaining");
+        let ratelimit_reset = header("x-ratelimit-reset");
         let declared = response.content_length();
         if declared.is_some_and(|len| len > MAX_JSON_BYTES) {
             return Err(TransportError::TooLarge);
         }
         let body = read_limited(&mut response, MAX_JSON_BYTES, declared)?;
         let body = String::from_utf8(body).map_err(|_| TransportError::Other)?;
-        Ok(HttpResponse { status, body })
+        Ok(ApiResponse {
+            status,
+            body,
+            ratelimit_remaining,
+            ratelimit_reset,
+        })
     }
 
     fn get_bytes(&self, url: &str, max_len: u64) -> Result<BytesResponse, TransportError> {
