@@ -165,10 +165,17 @@ export function Search({
   const checking = useRef(new Set<string>());
   const mirrorGen = useRef(0);
 
-  // L'opzione della Beta cambia il file che l'app installerebbe, e con lui il mirror.
+  // L'opzione della Beta cambia il file che l'app installerebbe, e con lui il mirror: gli esiti,
+  // le richieste in corso e i motivi già mostrati non valgono più. Una risposta arrivata dopo
+  // si scarta (`mirrorGen`), così un nuovo clic su Install fa subito una richiesta nuova.
   useEffect(() => {
     mirrorGen.current += 1;
+    checking.current.clear();
     setMirrors((previous) => (previous.size === 0 ? previous : new Map()));
+    setRuns((previous) => {
+      if (![...previous.values()].some((run) => run.status === "unavailable")) return previous;
+      return new Map([...previous].filter(([, run]) => run.status !== "unavailable"));
+    });
   }, [betaWhenNoRelease]);
 
   function setRunFor(key: string, run: InstallRun) {
@@ -201,9 +208,11 @@ export function Search({
     if (checking.current.has(key)) return;
     checking.current.add(key);
     const gen = mirrorGen.current;
-    const setCheck = (check: MirrorCheck) => {
-      if (gen === mirrorGen.current) setMirrors((previous) => new Map(previous).set(key, check));
-    };
+    // Una risposta di una generazione vecchia non scrive niente e non installa: il file che ha
+    // controllato non è più quello che `install_addon` sceglierebbe.
+    const current = () => gen === mirrorGen.current;
+    const setCheck = (check: MirrorCheck) =>
+      setMirrors((previous) => new Map(previous).set(key, check));
     setCheck({ status: "checking" });
     if (installAfter) {
       setLastInstall(key);
@@ -220,11 +229,13 @@ export function Search({
       .githubMirror(id, addon.id)
       .then(
         (result) => {
+          if (!current()) return;
           const check: MirrorCheck = { status: "done", result };
           setCheck(check);
           if (installAfter) installChecked(addon, check);
         },
         (err) => {
+          if (!current()) return;
           const message = errorMessage(err);
           setCheck({ status: "failed", message });
           if (installAfter) {
@@ -232,7 +243,9 @@ export function Search({
           }
         },
       )
-      .finally(() => checking.current.delete(key));
+      .finally(() => {
+        if (current()) checking.current.delete(key);
+      });
   }
 
   /** Install: subito per un progetto scaricabile, dal mirror GitHub per uno bloccato. */
