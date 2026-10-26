@@ -202,11 +202,20 @@ impl<T: PublicTransport> TukuiSource<T> {
     }
 }
 
-/// Un progetto Tukui con il suo zip, scaricato e non ancora installato.
-#[derive(Debug, Clone)]
+/// Un progetto Tukui con il suo zip, scaricato e non ancora installato. Né `Clone` né un
+/// `Debug` con i byte: lo zip può pesare decine di MB.
 pub struct TukuiDownload {
     addon: TukuiAddon,
     zip: Vec<u8>,
+}
+
+impl std::fmt::Debug for TukuiDownload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TukuiDownload")
+            .field("addon", &self.addon.id)
+            .field("zip_bytes", &self.zip.len())
+            .finish()
+    }
 }
 
 /// La parte su disco di [`TukuiSource::install_new`]: estrae `download`, controlla il gioco e le

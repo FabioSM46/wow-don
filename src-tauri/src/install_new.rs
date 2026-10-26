@@ -132,7 +132,6 @@ pub fn install_addon<T: Transport>(
     progress: &ProgressSink<'_>,
 ) -> Vec<InstallOutcome> {
     let live = Live {
-        installation,
         client,
         github,
         allow_beta,
@@ -282,12 +281,22 @@ pub(crate) fn version_type_of(
 
 /// Il file scelto per un progetto con il suo zip già scaricato: la parte di rete di
 /// un'installazione, che non tocca il disco (issue #180).
-#[derive(Debug, Clone)]
+/// Né `Clone` né un `Debug` con i byte: lo zip può pesare decine di MB.
 pub(crate) struct Fetched {
     file: File,
     zip: Vec<u8>,
     /// Per lo zip del mirror GitHub, il messaggio dell'esito.
     note: Option<String>,
+}
+
+impl std::fmt::Debug for Fetched {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fetched")
+            .field("file", &self.file.id)
+            .field("zip_bytes", &self.zip.len())
+            .field("note", &self.note)
+            .finish()
+    }
 }
 
 /// Da dove [`install_addon_with`] prende progetti, file e zip.
@@ -296,10 +305,12 @@ pub(crate) trait Fetcher {
     /// richiesta.
     fn mods(&self, ids: &[u32]) -> Result<Vec<Mod>, String>;
 
-    /// Il file da installare per `project` (il file `file_id`, o l'ultimo per `version_type`) e
-    /// il suo zip, oppure l'esito che dice perché non si installa.
+    /// Il file da installare per `project` (il file `file_id`, o l'ultimo per `version_type`)
+    /// nel gioco di `installation` e il suo zip, oppure l'esito che dice perché non si installa.
+    /// L'installazione è quella di chi installa: una sola fonte per scelta e installazione.
     fn fetch(
         &self,
+        installation: &Installation,
         project: &Mod,
         version_type: Option<u32>,
         file_id: Option<u32>,
@@ -315,7 +326,6 @@ pub(crate) trait Fetcher {
 
 /// Le richieste vere, fatte quando servono: l'installazione dalla Search e dai link.
 pub(crate) struct Live<'a, T: Transport> {
-    pub installation: &'a Installation,
     pub client: &'a CurseForgeClient<T>,
     /// Il mirror GitHub dei progetti bloccati (D34); `None` li salta.
     pub github: Option<&'a (dyn MirrorSource + Sync)>,
@@ -327,6 +337,7 @@ impl<T: Transport> Live<'_, T> {
     /// [`Fetcher::fetch`], con il file già letto in blocco se c'è (`known`).
     fn fetch_known(
         &self,
+        installation: &Installation,
         project: &Mod,
         version_type: Option<u32>,
         file_id: Option<u32>,
@@ -335,7 +346,7 @@ impl<T: Transport> Live<'_, T> {
     ) -> Result<Fetched, InstallOutcome> {
         reporter.phase(Phase::Checking);
         let (file, download) = find_file(
-            self.installation,
+            installation,
             self.client,
             self.github,
             project,
@@ -353,17 +364,8 @@ impl<T: Transport> Live<'_, T> {
                 repo,
                 tag,
                 asset,
-            } => {
-                reporter.download(0, None);
-                github
-                    .download(&asset, &mut |received, total| {
-                        reporter.download(received, total)
-                    })
-                    .map(|zip| {
-                        reporter.downloaded(zip.len() as u64);
-                        (zip, Some(github_mirror::installed_message(&repo, &tag)))
-                    })
-            }
+            } => github_mirror::download(github, &asset, reporter)
+                .map(|zip| (zip, Some(github_mirror::installed_message(&repo, &tag)))),
         };
         match downloaded {
             Ok((zip, note)) => Ok(Fetched { file, zip, note }),
@@ -379,12 +381,13 @@ impl<T: Transport> Fetcher for Live<'_, T> {
 
     fn fetch(
         &self,
+        installation: &Installation,
         project: &Mod,
         version_type: Option<u32>,
         file_id: Option<u32>,
         reporter: &Reporter<'_>,
     ) -> Result<Fetched, InstallOutcome> {
-        self.fetch_known(project, version_type, file_id, None, reporter)
+        self.fetch_known(installation, project, version_type, file_id, None, reporter)
     }
 }
 
@@ -414,10 +417,13 @@ impl Installer<'_> {
             &key,
             &project.name,
         );
-        let fetched = match self
-            .fetcher
-            .fetch(project, self.version_type, file_id, &reporter)
-        {
+        let fetched = match self.fetcher.fetch(
+            self.installation,
+            project,
+            self.version_type,
+            file_id,
+            &reporter,
+        ) {
             Ok(fetched) => fetched,
             Err(outcome) => return (outcome, Vec::new()),
         };
