@@ -114,6 +114,8 @@ jobs:
           persist-credentials: false
       # Tauri on Linux links against WebKitGTK and friends. scripts/apt-install-with-fallback.sh
       # survives a flaky Ubuntu mirror and fails fast naming every host it tried.
+      # libayatana-appindicator3-dev backs the tray icon (D35): tray-icon loads the library at
+      # runtime, and the .deb declares libayatana-appindicator3-1 for the same reason.
       - name: Install Tauri system dependencies
         working-directory: ${{ github.workspace }}
         timeout-minutes: 5
