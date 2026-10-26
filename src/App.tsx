@@ -54,6 +54,20 @@ function App() {
     if (theme !== null) applyTheme(document.documentElement, theme);
   }, [theme]);
 
+  // Il menu di default del browser (Reload, Inspect…) non serve in un'app desktop (issue #149):
+  // resta solo nei campi di testo, per Copy e Paste. I menu dell'app si aprono dai loro elementi.
+  useEffect(() => {
+    const suppress = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("input, textarea, [contenteditable]:not([contenteditable='false'])")) {
+        return;
+      }
+      event.preventDefault();
+    };
+    document.addEventListener("contextmenu", suppress);
+    return () => document.removeEventListener("contextmenu", suppress);
+  }, []);
+
   useEffect(() => {
     api
       .getSettings()

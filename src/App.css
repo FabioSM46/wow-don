@@ -17,6 +17,9 @@
   --progress-track: #e4e4e7;
   --progress-height: 4px;
   --radius: 8px;
+  /* Riga selezionata e menu contestuale della tab Installed (issue #149). */
+  --selected: rgb(59 110 245 / 10%);
+  --menu-shadow: 0 4px 16px rgb(0 0 0 / 10%);
 
   --dark-bg: #111113;
   --dark-surface: #18181b;
@@ -28,6 +31,8 @@
   --dark-danger: #ff6b6b;
   --dark-overlay: rgb(17 17 19 / 85%);
   --dark-progress-track: #2a2a2f;
+  --dark-selected: rgb(109 147 255 / 16%);
+  --dark-menu-shadow: 0 4px 16px rgb(0 0 0 / 45%);
 
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -54,6 +59,8 @@
     --danger: var(--dark-danger);
     --overlay: var(--dark-overlay);
     --progress-track: var(--dark-progress-track);
+    --selected: var(--dark-selected);
+    --menu-shadow: var(--dark-menu-shadow);
     color-scheme: dark;
   }
 }
@@ -69,6 +76,8 @@
   --danger: var(--dark-danger);
   --overlay: var(--dark-overlay);
   --progress-track: var(--dark-progress-track);
+  --selected: var(--dark-selected);
+  --menu-shadow: var(--dark-menu-shadow);
   color-scheme: dark;
 }
 
@@ -1158,6 +1167,89 @@ button:focus-visible {
     animation: none;
     left: 32%;
   }
+}
+
+/* Menu contestuale e selezione multipla della tab Installed (issue #149): un menu leggero, la
+   riga selezionata con il colore d'accento, la conferma della rimozione in linea. */
+.addon-table tbody tr[data-row]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.addon-table tbody tr.selected,
+.addon-table tbody tr.selected:hover {
+  background: var(--selected);
+}
+
+.addon-table tbody tr.selected td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.selection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.selection-status .count {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  min-width: 11rem;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--menu-shadow);
+}
+
+.context-item {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 6px 10px;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-item:hover,
+.context-item:focus {
+  outline: none;
+  background: var(--hover);
+}
+
+.context-item.danger {
+  color: var(--danger);
+}
+
+.context-item[aria-disabled="true"] {
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: default;
+}
+
+.remove-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.remove-confirm .muted {
+  font-size: 0.85rem;
 }
 
 /* "Add by link" (issue #110): una riga sotto i filtri, l'anteprima come una riga di tabella. */
