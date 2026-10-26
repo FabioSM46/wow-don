@@ -568,14 +568,18 @@ pub async fn import_addons(
         let github = github_source()?;
         let (availability, lookup_error) =
             import_availability(&decoded.list.addons, &client, has_key, &tukui);
+        let progress = emit_progress(&app, &installation.id);
         let mut installer = CommandInstaller {
-            app: &app,
             installation: &installation,
             client: &client,
             tukui: &tukui,
             github: &github,
             availability: &availability,
             allow_beta,
+            installed: &installed,
+            settings: &settings,
+            cache: &cache,
+            progress: &progress,
         };
         let mut result = addon_import::run_import(
             &addons_dir,
@@ -714,9 +718,9 @@ fn availability_of(
         .unwrap_or(addon_import::Availability::Available)
 }
 
-/// Installa i progetti di un import con le fonti vere.
+/// Installa i progetti di un import con le fonti vere. Non conosce Tauri: lo stato dell'app
+/// arriva per riferimento, così il banco di prova (`import_bench`) usa lo stesso percorso.
 struct CommandInstaller<'a> {
-    app: &'a AppHandle,
     installation: &'a Installation,
     client: &'a CurseForgeClient<ReqwestTransport>,
     tukui: &'a TukuiSource<PublicReqwestTransport>,
@@ -725,6 +729,10 @@ struct CommandInstaller<'a> {
     availability: &'a Availabilities,
     /// L'impostazione "Use beta files when there is no release" (issue #141).
     allow_beta: bool,
+    installed: &'a Mutex<InstalledAddonsStore>,
+    settings: &'a Mutex<AddonSettingsStore>,
+    cache: &'a FingerprintCache,
+    progress: &'a (dyn Fn(Progress) + Sync),
 }
 
 impl addon_import::Installer for CommandInstaller<'_> {
@@ -737,9 +745,9 @@ impl addon_import::Installer for CommandInstaller<'_> {
         }
         let installation = self.installation;
         let addons_dir = installation.path.join("Interface").join("AddOns");
-        let installed = self.app.state::<Mutex<InstalledAddonsStore>>();
-        let cache = self.app.state::<FingerprintCache>();
-        let progress = emit_progress(self.app, &installation.id);
+        let installed = self.installed;
+        let cache = self.cache;
+        let progress = self.progress;
         match entry.source {
             SourceKind::Curseforge => {
                 let Ok(mod_id) = entry.key.parse::<u32>() else {
@@ -749,9 +757,8 @@ impl addon_import::Installer for CommandInstaller<'_> {
                         Some("Invalid CurseForge project id.".to_owned()),
                     );
                 };
-                let settings = self.app.state::<Mutex<AddonSettingsStore>>();
                 let mut note = None;
-                let overrides = match settings.lock() {
+                let overrides = match self.settings.lock() {
                     Ok(mut store) => {
                         if let Some(version_type) = entry.version_type
                             && let Err(error) =
@@ -763,7 +770,7 @@ impl addon_import::Installer for CommandInstaller<'_> {
                     }
                     Err(_) => VersionOverrides::new(),
                 };
-                let records = match locked_installed(&installed)
+                let records = match locked_installed(installed)
                     .and_then(|store| store.records_for(&installation.id))
                 {
                     Ok(records) => records,
@@ -782,16 +789,16 @@ impl addon_import::Installer for CommandInstaller<'_> {
                     self.allow_beta,
                     &mut |mod_id, record| {
                         cache.forget(&addons_dir, &record.folders);
-                        locked_installed(&installed)?.record(&installation.id, mod_id, record)
+                        locked_installed(installed)?.record(&installation.id, mod_id, record)
                     },
-                    &progress,
+                    progress,
                 );
                 import_outcome_from_install(entry, &outcomes, note)
             }
             SourceKind::Tukui | SourceKind::Github => {
                 let mut record = |source, key: &str, record: SourceRecord| {
                     cache.forget(&addons_dir, &record.folders);
-                    locked_installed(&installed)?.record_source(
+                    locked_installed(installed)?.record_source(
                         &installation.id,
                         source,
                         key,
@@ -804,7 +811,7 @@ impl addon_import::Installer for CommandInstaller<'_> {
                         &entry.key,
                         &|_| Ok(()),
                         &mut record,
-                        &progress,
+                        progress,
                     )
                 } else {
                     self.github.install_new(
@@ -812,7 +819,7 @@ impl addon_import::Installer for CommandInstaller<'_> {
                         &entry.key,
                         &|_| Ok(()),
                         &mut record,
-                        &progress,
+                        progress,
                     )
                 };
                 let status = match outcome.status {
@@ -1449,6 +1456,11 @@ pub async fn list_backups(
         .await
         .map_err(|error| format!("Reading the backups was interrupted ({error})."))?
 }
+
+/// Il banco di prova dell'import (issue #180): mai in CI.
+#[cfg(test)]
+#[path = "import_bench.rs"]
+mod import_bench;
 
 #[cfg(test)]
 mod tests {
