@@ -845,7 +845,12 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
                           }}
                           onClick={
                             selection !== null
-                              ? () => setSelection((previous) => toggleRow(previous, addon.folder))
+                              ? (event) => {
+                                  // Un controllo dentro la riga (link, menu della versione,
+                                  // pulsanti) fa la sua azione e non cambia la selezione.
+                                  if (isControl(event.target, event.currentTarget)) return;
+                                  setSelection((previous) => toggleRow(previous, addon.folder));
+                                }
                               : hasOthers
                                 ? () => toggle(addon.folder)
                                 : undefined
@@ -872,6 +877,9 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
                             <span className="addon-title" title={addon.notes ?? undefined}>
                               {displayTitle(addon)}
                             </span>
+                            {/* `aria-selected` su una riga di tabella non è letto da tutti gli
+                                screen reader: lo stato è anche nel testo della riga. */}
+                            {isSelected && <span className="visually-hidden"> (selected)</span>}
                             {error && <span className="addon-error">{error}</span>}
                           </td>
                           <td className="mono">
@@ -981,6 +989,13 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
       )}
     </section>
   );
+}
+
+/** Il clic viene da un controllo dentro la riga, non dalla riga stessa. */
+function isControl(target: EventTarget, row: Element): boolean {
+  const control =
+    target instanceof Element ? target.closest("button, a, select, input, textarea, label") : null;
+  return control !== null && row.contains(control);
 }
 
 /** Il titolo della riga del menu, per il suo nome accessibile. */
