@@ -3279,14 +3279,17 @@ mod tests {
         mod mirror {
             use super::*;
             use crate::sources::github::GithubSource;
-            use crate::sources::http::{ApiResponse, PublicTransport};
+            use crate::sources::http::{ApiResponse, PublicTransport, RedirectResponse};
 
             const REPO: &str = "owner/Alpha";
             const SOURCE_URL: &str = "https://github.com/owner/Alpha";
 
             /// GitHub finto: le release per URL dell'API, gli zip per URL, e le richieste fatte.
+            /// Nessun `release.json`: il sito dà solo il tag, gli asset vengono dall'API.
             #[derive(Default)]
             struct Hub {
+                /// `releases/latest` sul sito → `Location`, quando l'API non basta a dirlo.
+                redirects: HashMap<String, String>,
                 /// URL dell'API → (stato, corpo, richieste rimaste).
                 api: HashMap<String, (u16, String, u64)>,
                 zips: HashMap<String, Vec<u8>>,
@@ -3297,6 +3300,26 @@ mod tests {
                 fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
                     self.calls.lock().unwrap().push(url.to_owned());
                     reply(None)
+                }
+
+                /// Il tag della release che l'API elenca per lo stesso repository; senza, 404.
+                fn get_redirect(&self, url: &str) -> Result<RedirectResponse, TransportError> {
+                    self.calls.lock().unwrap().push(url.to_owned());
+                    let repo = url.trim_end_matches("/releases/latest");
+                    let api = repo.replace("https://github.com/", "https://api.github.com/repos/");
+                    let location = self.redirects.get(url).cloned().or_else(|| {
+                        let (status, body, _) = self.api.get(&format!("{api}/releases/latest"))?;
+                        let release: Value =
+                            serde_json::from_str(body).ok().filter(|_| *status == 200)?;
+                        Some(format!(
+                            "{repo}/releases/tag/{}",
+                            release["tag_name"].as_str()?
+                        ))
+                    });
+                    Ok(RedirectResponse {
+                        status: if location.is_some() { 302 } else { 404 },
+                        location,
+                    })
                 }
 
                 fn get_api(&self, url: &str, _accept: &str) -> Result<ApiResponse, TransportError> {
@@ -3332,6 +3355,16 @@ mod tests {
 
             fn latest_url() -> String {
                 format!("https://api.github.com/repos/{REPO}/releases/latest")
+            }
+
+            /// Le letture di una release senza `release.json`: il tag dal sito, il `release.json`
+            /// che manca, gli asset dall'API.
+            fn release_reads(tag: &str) -> [String; 3] {
+                [
+                    format!("https://github.com/{REPO}/releases/latest"),
+                    format!("https://github.com/{REPO}/releases/download/{tag}/release.json"),
+                    latest_url(),
+                ]
             }
 
             fn asset_url(tag: &str) -> String {
@@ -3497,7 +3530,9 @@ mod tests {
                 // tra controllo e aggiornamento) e lo zip.
                 assert!(cf_log.downloads.lock().unwrap().is_empty());
                 let calls = calls.lock().unwrap().clone();
-                assert_eq!(calls, [latest_url(), asset_url("11")]);
+                let mut expected = release_reads("11").to_vec();
+                expected.push(asset_url("11"));
+                assert_eq!(calls, expected);
             }
 
             #[test]
@@ -3528,7 +3563,13 @@ mod tests {
                 )]);
 
                 let updates = check_updates(&fx.installation, &[&cf, &github], &records).unwrap();
-                assert_eq!(*calls.lock().unwrap(), [gamma.to_owned(), latest_url()]);
+                let mut expected = vec![
+                    "https://github.com/owner/Gamma/releases/latest".to_owned(),
+                    "https://github.com/owner/Gamma/releases/download/2/release.json".to_owned(),
+                    gamma.to_owned(),
+                ];
+                expected.extend(release_reads("11"));
+                assert_eq!(*calls.lock().unwrap(), expected);
                 let alpha = updates.iter().find(|u| u.folder == "Alpha").unwrap();
                 assert_eq!(
                     alpha.mirror.github_mirror.as_ref().map(|m| m.tag.as_str()),
@@ -3661,14 +3702,22 @@ mod tests {
                     fs::read_to_string(fx.addons.join("Alpha").join("Alpha.lua")).unwrap(),
                     "alpha v1 again"
                 );
-                assert_eq!(*calls.lock().unwrap(), [latest_url(), asset_url("10")]);
+                let mut expected = release_reads("10").to_vec();
+                expected.push(asset_url("10"));
+                assert_eq!(*calls.lock().unwrap(), expected);
             }
 
             #[test]
             fn the_rate_limit_is_a_reason_not_an_error() {
                 let fx = fixture(&[("Alpha", "alpha v1")]);
                 let client = client(routes(&fx, blocked(1, "Alpha")));
+                // Il tag combacia; senza `release.json` lo zip si sceglie dall'API, che risponde
+                // con il limite.
                 let hub = Hub {
+                    redirects: HashMap::from([(
+                        format!("https://github.com/{REPO}/releases/latest"),
+                        format!("https://github.com/{REPO}/releases/tag/11"),
+                    )]),
                     api: HashMap::from([(latest_url(), (403, String::new(), 0))]),
                     ..Hub::default()
                 };
