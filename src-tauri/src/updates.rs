@@ -1070,6 +1070,16 @@ pub(crate) fn install_file<T: Transport>(
     check: &dyn Fn(&[String]) -> Result<(), String>,
     reporter: &Reporter<'_>,
 ) -> Result<Vec<String>, String> {
+    let bytes = download_file(client, file, reporter)?;
+    install_bytes(&bytes, addons_dir, old_modules, check, reporter)
+}
+
+/// Scarica lo zip di `file` riportando l'avanzamento: la parte di rete di [`install_file`].
+pub(crate) fn download_file<T: Transport>(
+    client: &CurseForgeClient<T>,
+    file: &File,
+    reporter: &Reporter<'_>,
+) -> Result<Vec<u8>, String> {
     reporter.download(0, None);
     let bytes = client
         .download_with_progress(file, &mut |received, total| {
@@ -1077,7 +1087,7 @@ pub(crate) fn install_file<T: Transport>(
         })
         .map_err(|e| e.to_string())?;
     reporter.downloaded(bytes.len() as u64);
-    install_bytes(&bytes, addons_dir, old_modules, check, reporter)
+    Ok(bytes)
 }
 
 /// Estrae lo zip `bytes` in staging e sostituisce le cartelle, come [`install_file`] dopo il

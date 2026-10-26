@@ -156,71 +156,128 @@ impl<T: PublicTransport> TukuiSource<T> {
         record: &mut RecordWriter<'_>,
         progress: &ProgressSink<'_>,
     ) -> UpdateOutcome {
+        match self.download_new(key, progress) {
+            Ok(download) => {
+                install_downloaded(installation, key, download, check, record, progress)
+            }
+            Err(outcome) => *outcome,
+        }
+    }
+
+    /// La parte di rete di [`install_new`](Self::install_new): il progetto nell'elenco e il suo
+    /// zip, senza toccare il disco. L'import la fa per più progetti insieme (issue #180).
+    pub fn download_new(
+        &self,
+        key: &str,
+        progress: &ProgressSink<'_>,
+    ) -> Result<TukuiDownload, Box<UpdateOutcome>> {
         let addon = match self.cached() {
             Ok(addons) => addons.into_iter().find(|a| a.id.to_string() == key),
-            Err(error) => return UpdateOutcome::error(TUKUI, key, "", error),
+            Err(error) => return Err(Box::new(UpdateOutcome::error(TUKUI, key, "", error))),
         };
         let Some(addon) = addon else {
-            return UpdateOutcome::skipped(TUKUI, key, "", "Tukui does not list this addon.");
+            return Err(Box::new(UpdateOutcome::skipped(
+                TUKUI,
+                key,
+                "",
+                "Tukui does not list this addon.",
+            )));
         };
-        let name = addon.name.as_str();
-        let reporter = Reporter::new(progress, Some(TUKUI), key, name);
+        let reporter = Reporter::new(progress, Some(TUKUI), key, &addon.name);
         reporter.download(0, None);
-        let bytes = match self.download(&addon, &mut |received, total| {
+        match self.download(&addon, &mut |received, total| {
             reporter.download(received, total)
         }) {
-            Ok(bytes) => bytes,
-            Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
-        };
-        reporter.downloaded(bytes.len() as u64);
-        reporter.phase(Phase::Extracting);
-        let addons_dir = installation.path.join("Interface").join("AddOns");
-        let installed = (|| {
-            let staging = install::WorkDir::staging(&addons_dir)?;
-            let folders = install::extract(&bytes, staging.path())?;
-            let listed = addon
-                .patch
-                .iter()
-                .filter_map(|patch| patch_interface(patch))
-                .any(|interface| fits(&installation.flavor, interface));
-            if !listed && !declares_game(staging.path(), &folders, &installation.flavor) {
-                return Ok(None);
+            Ok(zip) => {
+                reporter.downloaded(zip.len() as u64);
+                Ok(TukuiDownload { addon, zip })
             }
-            check(&folders)?;
-            reporter.phase(Phase::Installing);
-            install::replace(&addons_dir, staging.path(), &[])?;
-            Ok::<_, String>(Some(folders))
-        })();
-        let folders = match installed {
-            Ok(Some(folders)) => folders,
-            Ok(None) => {
-                return UpdateOutcome::skipped(
-                    TUKUI,
-                    key,
-                    name,
-                    "Tukui does not offer this addon for this game version.",
-                );
-            }
-            Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
-        };
-        let message = record(
-            TUKUI,
-            key,
-            SourceRecord {
-                file: addon.version.clone(),
-                folders,
-            },
-        )
-        .err()
-        .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
-        UpdateOutcome::updated(
-            TUKUI,
-            key,
-            name,
-            summary(&addon.version, addon.last_update.as_deref()),
-            message,
-        )
+            Err(error) => Err(Box::new(UpdateOutcome::error(
+                TUKUI,
+                key,
+                &addon.name,
+                error,
+            ))),
+        }
     }
+}
+
+/// Un progetto Tukui con il suo zip, scaricato e non ancora installato. Né `Clone` né un
+/// `Debug` con i byte: lo zip può pesare decine di MB.
+pub struct TukuiDownload {
+    addon: TukuiAddon,
+    zip: Vec<u8>,
+}
+
+impl std::fmt::Debug for TukuiDownload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TukuiDownload")
+            .field("addon", &self.addon.id)
+            .field("zip_bytes", &self.zip.len())
+            .finish()
+    }
+}
+
+/// La parte su disco di [`TukuiSource::install_new`]: estrae `download`, controlla il gioco e le
+/// cartelle, lo installa e lo registra.
+pub fn install_downloaded(
+    installation: &Installation,
+    key: &str,
+    download: TukuiDownload,
+    check: &FolderCheck<'_>,
+    record: &mut RecordWriter<'_>,
+    progress: &ProgressSink<'_>,
+) -> UpdateOutcome {
+    let TukuiDownload { addon, zip: bytes } = download;
+    let name = addon.name.as_str();
+    let reporter = Reporter::new(progress, Some(TUKUI), key, name);
+    reporter.phase(Phase::Extracting);
+    let addons_dir = installation.path.join("Interface").join("AddOns");
+    let installed = (|| {
+        let staging = install::WorkDir::staging(&addons_dir)?;
+        let folders = install::extract(&bytes, staging.path())?;
+        let listed = addon
+            .patch
+            .iter()
+            .filter_map(|patch| patch_interface(patch))
+            .any(|interface| fits(&installation.flavor, interface));
+        if !listed && !declares_game(staging.path(), &folders, &installation.flavor) {
+            return Ok(None);
+        }
+        check(&folders)?;
+        reporter.phase(Phase::Installing);
+        install::replace(&addons_dir, staging.path(), &[])?;
+        Ok::<_, String>(Some(folders))
+    })();
+    let folders = match installed {
+        Ok(Some(folders)) => folders,
+        Ok(None) => {
+            return UpdateOutcome::skipped(
+                TUKUI,
+                key,
+                name,
+                "Tukui does not offer this addon for this game version.",
+            );
+        }
+        Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
+    };
+    let message = record(
+        TUKUI,
+        key,
+        SourceRecord {
+            file: addon.version.clone(),
+            folders,
+        },
+    )
+    .err()
+    .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
+    UpdateOutcome::updated(
+        TUKUI,
+        key,
+        name,
+        summary(&addon.version, addon.last_update.as_deref()),
+        message,
+    )
 }
 
 impl<T: PublicTransport> TukuiSource<T> {
@@ -1192,6 +1249,50 @@ mod tests {
         assert_eq!(outcome.name, "ElvUI");
         assert!(addons.join("ElvUI").join("ElvUI.toc").is_file());
         assert_eq!(written, ["-2=16.00:ElvUI,ElvUI_Options"]);
+    }
+
+    #[test]
+    fn the_download_touches_no_disk_and_the_install_uses_it() {
+        // L'import (issue #180): prima lo zip, poi l'installazione con quello zip.
+        let tmp = TempDir::new();
+        let path = tmp.path().join("World of Warcraft").join("_retail_");
+        let addons = path.join("Interface").join("AddOns");
+        fs::create_dir_all(&addons).unwrap();
+        let tukui = TukuiSource::new(Fake {
+            json: Some(Ok(HttpResponse {
+                status: 200,
+                body: body("16.00"),
+            })),
+            zip: Some(zip_of(&[("ElvUI/ElvUI.toc", "## Interface: 120100\n")])),
+            ..Fake::default()
+        });
+        let download = tukui.download_new("-2", &progress::ignore).unwrap();
+        assert!(fs::read_dir(&addons).unwrap().next().is_none());
+        let installation = Installation {
+            id: "test".to_owned(),
+            path,
+            flavor: "retail".to_owned(),
+            name: "Test".to_owned(),
+        };
+        let outcome = install_downloaded(
+            &installation,
+            "-2",
+            download,
+            &|_| Ok(()),
+            &mut |_, _, _| Ok(()),
+            &progress::ignore,
+        );
+        assert_eq!(
+            outcome.status,
+            updates::OutcomeStatus::Updated,
+            "{outcome:?}"
+        );
+        assert!(addons.join("ElvUI").join("ElvUI.toc").is_file());
+        assert!(
+            tukui
+                .download_new("-9", &progress::ignore)
+                .is_err_and(|outcome| outcome.status == updates::OutcomeStatus::Skipped)
+        );
     }
 
     #[test]

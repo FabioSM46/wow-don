@@ -122,12 +122,43 @@ impl InstallOutcome {
 pub fn install_addon<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
-    github: Option<&dyn MirrorSource>,
+    github: Option<&(dyn MirrorSource + Sync)>,
     overrides: &VersionOverrides,
     records: &InstalledRecords,
     mod_id: u32,
     file_id: Option<u32>,
     allow_beta: bool,
+    record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
+    progress: &ProgressSink<'_>,
+) -> Vec<InstallOutcome> {
+    let live = Live {
+        client,
+        github,
+        allow_beta,
+    };
+    install_addon_with(
+        installation,
+        &live,
+        overrides,
+        records,
+        mod_id,
+        file_id,
+        record,
+        progress,
+    )
+}
+
+/// [`install_addon`] con progetti, file e zip presi da `fetcher`: le richieste vere ([`Live`])
+/// oppure, con la seconda parte della issue #180, quelle già fatte dalla prima fase di un
+/// import. Il disco si tocca solo qui, una installazione alla volta.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn install_addon_with(
+    installation: &Installation,
+    fetcher: &dyn Fetcher,
+    overrides: &VersionOverrides,
+    records: &InstalledRecords,
+    mod_id: u32,
+    file_id: Option<u32>,
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
     progress: &ProgressSink<'_>,
 ) -> Vec<InstallOutcome> {
@@ -138,16 +169,11 @@ pub fn install_addon<T: Transport>(
         return vec![InstallOutcome::skipped(mod_id, "", "Already installed.")];
     }
     // La versione del gioco del progetto scelto vale anche per le sue dipendenze.
-    let version_type = overrides
-        .get(&mod_id)
-        .copied()
-        .or_else(|| updates::version_type_for(&installation.flavor));
+    let version_type = version_type_of(installation, overrides, mod_id);
     let mut installer = Installer {
         installation,
-        client,
-        github,
+        fetcher,
         version_type,
-        allow_beta,
         records: records.clone(),
         installed,
         record,
@@ -155,10 +181,12 @@ pub fn install_addon<T: Transport>(
     };
 
     let key = mod_id.to_string();
-    Reporter::new(progress, Some(SourceKind::Curseforge), &key, "").phase(Phase::Checking);
-    let project = match client.get_mods(&[mod_id]) {
+    if fetcher.announces() {
+        Reporter::new(progress, Some(SourceKind::Curseforge), &key, "").phase(Phase::Checking);
+    }
+    let project = match fetcher.mods(&[mod_id]) {
         Ok(mods) => mods.into_iter().find(|m| m.id == mod_id),
-        Err(error) => return vec![InstallOutcome::error(mod_id, "", error.to_string())],
+        Err(error) => return vec![InstallOutcome::error(mod_id, "", error)],
     };
     let Some(project) = project else {
         return vec![InstallOutcome::error(
@@ -177,10 +205,9 @@ pub fn install_addon<T: Transport>(
     let mut depth = 1;
     while !level.is_empty() {
         let ids: Vec<u32> = level.iter().map(|(dependency, _)| *dependency).collect();
-        let projects: Result<HashMap<u32, Mod>, String> = client
-            .get_mods(&ids)
-            .map(|mods| mods.into_iter().map(|m| (m.id, m)).collect())
-            .map_err(|error| error.to_string());
+        let projects: Result<HashMap<u32, Mod>, String> = fetcher
+            .mods(&ids)
+            .map(|mods| mods.into_iter().map(|m| (m.id, m)).collect());
         let mut next = Vec::new();
         for (dependency, parent) in level {
             let project = projects.as_ref().ok().and_then(|p| p.get(&dependency));
@@ -239,16 +266,137 @@ fn enqueue(
     }
 }
 
-/// Lo stato condiviso dalle installazioni di una chiamata a [`install_addon`].
-struct Installer<'a, T: Transport> {
+/// La versione del gioco per cui si sceglie il file di `mod_id`: quella forzata per il progetto
+/// o quella dell'installazione. Vale anche per le dipendenze del progetto.
+pub(crate) fn version_type_of(
+    installation: &Installation,
+    overrides: &VersionOverrides,
+    mod_id: u32,
+) -> Option<u32> {
+    overrides
+        .get(&mod_id)
+        .copied()
+        .or_else(|| updates::version_type_for(&installation.flavor))
+}
+
+/// Il file scelto per un progetto con il suo zip già scaricato: la parte di rete di
+/// un'installazione, che non tocca il disco (issue #180).
+/// Né `Clone` né un `Debug` con i byte: lo zip può pesare decine di MB.
+pub(crate) struct Fetched {
+    file: File,
+    zip: Vec<u8>,
+    /// Per lo zip del mirror GitHub, il messaggio dell'esito.
+    note: Option<String>,
+}
+
+impl std::fmt::Debug for Fetched {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fetched")
+            .field("file", &self.file.id)
+            .field("zip_bytes", &self.zip.len())
+            .field("note", &self.note)
+            .finish()
+    }
+}
+
+/// Da dove [`install_addon_with`] prende progetti, file e zip.
+pub(crate) trait Fetcher {
+    /// I progetti `ids` come `get_mods`: quelli che CurseForge conosce, o l'errore della
+    /// richiesta.
+    fn mods(&self, ids: &[u32]) -> Result<Vec<Mod>, String>;
+
+    /// Il file da installare per `project` (il file `file_id`, o l'ultimo per `version_type`)
+    /// nel gioco di `installation` e il suo zip, oppure l'esito che dice perché non si installa.
+    /// L'installazione è quella di chi installa: una sola fonte per scelta e installazione.
+    fn fetch(
+        &self,
+        installation: &Installation,
+        project: &Mod,
+        version_type: Option<u32>,
+        file_id: Option<u32>,
+        reporter: &Reporter<'_>,
+    ) -> Result<Fetched, InstallOutcome>;
+
+    /// Se la lettura del progetto scelto si annuncia con `checking`: non quando la prima fase
+    /// di un import l'ha già fatta (seconda parte della issue #180).
+    fn announces(&self) -> bool {
+        true
+    }
+}
+
+/// Le richieste vere, fatte quando servono: l'installazione dalla Search e dai link.
+pub(crate) struct Live<'a, T: Transport> {
+    pub client: &'a CurseForgeClient<T>,
+    /// Il mirror GitHub dei progetti bloccati (D34); `None` li salta.
+    pub github: Option<&'a (dyn MirrorSource + Sync)>,
+    /// Una Beta quando la versione non ha una Release (issue #141), anche per le dipendenze.
+    pub allow_beta: bool,
+}
+
+impl<T: Transport> Live<'_, T> {
+    /// [`Fetcher::fetch`], con il file già letto in blocco se c'è (`known`).
+    fn fetch_known(
+        &self,
+        installation: &Installation,
+        project: &Mod,
+        version_type: Option<u32>,
+        file_id: Option<u32>,
+        known: Option<File>,
+        reporter: &Reporter<'_>,
+    ) -> Result<Fetched, InstallOutcome> {
+        reporter.phase(Phase::Checking);
+        let (file, download) = find_file(
+            installation,
+            self.client,
+            self.github,
+            project,
+            version_type,
+            self.allow_beta,
+            file_id,
+            known,
+        )?;
+        let downloaded = match download {
+            Download::Curseforge => {
+                updates::download_file(self.client, &file, reporter).map(|zip| (zip, None))
+            }
+            Download::Mirror {
+                github,
+                repo,
+                tag,
+                asset,
+            } => github_mirror::download(github, &asset, reporter)
+                .map(|zip| (zip, Some(github_mirror::installed_message(&repo, &tag)))),
+        };
+        match downloaded {
+            Ok((zip, note)) => Ok(Fetched { file, zip, note }),
+            Err(message) => Err(InstallOutcome::error(project.id, &project.name, message)),
+        }
+    }
+}
+
+impl<T: Transport> Fetcher for Live<'_, T> {
+    fn mods(&self, ids: &[u32]) -> Result<Vec<Mod>, String> {
+        self.client.get_mods(ids).map_err(|error| error.to_string())
+    }
+
+    fn fetch(
+        &self,
+        installation: &Installation,
+        project: &Mod,
+        version_type: Option<u32>,
+        file_id: Option<u32>,
+        reporter: &Reporter<'_>,
+    ) -> Result<Fetched, InstallOutcome> {
+        self.fetch_known(installation, project, version_type, file_id, None, reporter)
+    }
+}
+
+/// Lo stato condiviso dalle installazioni di una chiamata a [`install_addon_with`].
+struct Installer<'a> {
     installation: &'a Installation,
-    client: &'a CurseForgeClient<T>,
-    /// Il mirror GitHub dei progetti bloccati (D34); `None` li salta come prima.
-    github: Option<&'a dyn MirrorSource>,
+    fetcher: &'a dyn Fetcher,
     /// La versione del gioco del progetto scelto, per i progetti senza `file_id`.
     version_type: Option<u32>,
-    /// Una Beta quando la versione non ha una Release (issue #141), anche per le dipendenze.
-    allow_beta: bool,
     /// I record di partenza più quelli delle installazioni già fatte.
     records: InstalledRecords,
     /// I progetti installati, aggiornato dopo ogni installazione riuscita.
@@ -258,7 +406,7 @@ struct Installer<'a, T: Transport> {
     progress: &'a ProgressSink<'a>,
 }
 
-impl<T: Transport> Installer<'_, T> {
+impl Installer<'_> {
     /// Installa un progetto letto da CurseForge e non ancora installato. Restituisce l'esito
     /// e, se è stato installato, le dipendenze obbligatorie del file.
     fn install(&mut self, project: &Mod, file_id: Option<u32>) -> (InstallOutcome, Vec<u32>) {
@@ -269,25 +417,20 @@ impl<T: Transport> Installer<'_, T> {
             &key,
             &project.name,
         );
-        reporter.phase(Phase::Checking);
-        let (file, download) = match find_file(
+        let fetched = match self.fetcher.fetch(
             self.installation,
-            self.client,
-            self.github,
             project,
             self.version_type,
-            self.allow_beta,
             file_id,
+            &reporter,
         ) {
-            Ok(found) => found,
+            Ok(fetched) => fetched,
             Err(outcome) => return (outcome, Vec::new()),
         };
-        let mut result = install_checked(
+        let mut result = install_fetched(
             self.installation,
-            self.client,
             &mut self.records,
-            &file,
-            &download,
+            &fetched,
             &project.name,
             self.record,
             &reporter,
@@ -295,7 +438,7 @@ impl<T: Transport> Installer<'_, T> {
         if result.0.status == InstallStatus::Installed {
             self.installed.insert(project.id);
             // Una Beta scelta dall'app, non dall'utente nel dettaglio: l'esito lo dice.
-            if file_id.is_none() && file.release_type == RELEASE_TYPE_BETA {
+            if file_id.is_none() && fetched.file.release_type == RELEASE_TYPE_BETA {
                 result.0.message.get_or_insert_with(|| {
                     "Installed the beta: there is no release for this game version.".to_owned()
                 });
@@ -311,7 +454,7 @@ enum Download<'a> {
     Curseforge,
     /// Lo zip della release GitHub che combacia con il file CurseForge (D34).
     Mirror {
-        github: &'a dyn MirrorSource,
+        github: &'a (dyn MirrorSource + Sync),
         repo: String,
         tag: String,
         asset: Asset,
@@ -323,15 +466,17 @@ const BLOCKED: &str = "The author does not allow downloads from third-party apps
 
 /// Il file da installare per il progetto, già controllato: file del progetto, e scaricabile da
 /// CurseForge (distribuzione permessa e un `downloadUrl`) o dal mirror GitHub per un progetto
-/// bloccato. Altrimenti l'esito che spiega perché no.
+/// bloccato. Altrimenti l'esito che spiega perché no. `known` è il file già letto, se c'è.
+#[allow(clippy::too_many_arguments)]
 fn find_file<'a, T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
-    github: Option<&'a dyn MirrorSource>,
+    github: Option<&'a (dyn MirrorSource + Sync)>,
     project: &Mod,
     version_type: Option<u32>,
     allow_beta: bool,
     file_id: Option<u32>,
+    known: Option<File>,
 ) -> Result<(File, Download<'a>), InstallOutcome> {
     let mod_id = project.id;
     let name = project.name.as_str();
@@ -349,6 +494,7 @@ fn find_file<'a, T: Transport>(
         version_type,
         allow_beta,
         file_id,
+        known,
     )
     .map_err(|error| match error {
         FileError::Skipped(message) => InstallOutcome::skipped(mod_id, name, &message),
@@ -401,7 +547,8 @@ enum FileError {
 
 /// Il file CurseForge `file_id` del progetto se indicato, altrimenti l'ultimo per la versione del
 /// gioco (con la regola della Beta), letto da CurseForge e controllato come file del progetto.
-/// Non guarda se il file si può scaricare.
+/// Non guarda se il file si può scaricare. `known` è il file già letto, se c'è: con l'id giusto
+/// evita la richiesta.
 fn chosen_file<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
@@ -409,6 +556,7 @@ fn chosen_file<T: Transport>(
     version_type: Option<u32>,
     allow_beta: bool,
     file_id: Option<u32>,
+    known: Option<File>,
 ) -> Result<File, FileError> {
     let mod_id = project.id;
     let file_id = match file_id {
@@ -425,9 +573,12 @@ fn chosen_file<T: Transport>(
             })?
         }
     };
-    let file = client
-        .get_file(mod_id, file_id)
-        .map_err(|error| FileError::Error(error.to_string()))?;
+    let file = match known.filter(|file| file.id == file_id) {
+        Some(file) => file,
+        None => client
+            .get_file(mod_id, file_id)
+            .map_err(|error| FileError::Error(error.to_string()))?,
+    };
     if file.mod_id != mod_id {
         return Err(FileError::Error(
             "The requested file does not belong to this addon.".to_owned(),
@@ -498,6 +649,7 @@ pub fn github_mirror<T: Transport>(
         version_type,
         allow_beta,
         file_id,
+        None,
     ) {
         Ok(file) => file,
         Err(FileError::Skipped(message) | FileError::Unsupported(message)) => {
@@ -538,43 +690,26 @@ fn latest_file(project: &Mod, version_type: u32, allow_beta: bool) -> Option<u32
     .map(|index| index.file_id)
 }
 
-/// Scarica e installa `file` (da CurseForge o, per un progetto bloccato, lo zip del suo mirror
-/// GitHub), rifiutando le cartelle di altri progetti, poi lo registra sia
-/// con `record` sia nei `records` locali (anche se `record` fallisce: le cartelle sono sul
-/// disco e appartengono al progetto). Su un'installazione riuscita restituisce anche le
-/// dipendenze obbligatorie del file.
-#[allow(clippy::too_many_arguments)]
-fn install_checked<T: Transport>(
+/// Installa lo zip già scaricato di `fetched` (da CurseForge o, per un progetto bloccato, dal
+/// suo mirror GitHub), rifiutando le cartelle di altri progetti, poi lo registra sia con
+/// `record` sia nei `records` locali (anche se `record` fallisce: le cartelle sono sul disco e
+/// appartengono al progetto). Su un'installazione riuscita restituisce anche le dipendenze
+/// obbligatorie del file.
+fn install_fetched(
     installation: &Installation,
-    client: &CurseForgeClient<T>,
     records: &mut InstalledRecords,
-    file: &File,
-    download: &Download<'_>,
+    fetched: &Fetched,
     name: &str,
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
     reporter: &Reporter<'_>,
 ) -> (InstallOutcome, Vec<u32>) {
+    let file = &fetched.file;
     let mod_id = file.mod_id;
     let addons_dir = installation.path.join("Interface").join("AddOns");
     let flavor = installation.flavor.as_str();
     let check =
         |folders: &[String]| check_foreign_folders(&addons_dir, flavor, records, mod_id, folders);
-    let (installed, note) = match download {
-        Download::Curseforge => (
-            updates::install_file(client, file, &addons_dir, &[], &check, reporter),
-            None,
-        ),
-        Download::Mirror {
-            github,
-            repo,
-            tag,
-            asset,
-        } => (
-            github_mirror::install(*github, asset, &addons_dir, &[], &check, reporter),
-            Some(github_mirror::installed_message(repo, tag)),
-        ),
-    };
-    let folders = match installed {
+    let folders = match updates::install_bytes(&fetched.zip, &addons_dir, &[], &check, reporter) {
         Ok(folders) => folders,
         Err(message) => return (InstallOutcome::error(mod_id, name, message), Vec::new()),
     };
@@ -588,17 +723,11 @@ fn install_checked<T: Transport>(
         .err()
         .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
     // Il record resta CurseForge anche dal mirror: l'esito dice che lo zip viene da GitHub.
-    let message = match (note, failed) {
+    let message = match (fetched.note.clone(), failed) {
         (Some(note), Some(failed)) => Some(format!("{note} {failed}")),
         (note, failed) => note.or(failed),
     };
     records.insert(mod_id, installed);
-    let dependencies = file
-        .dependencies
-        .iter()
-        .filter(|dependency| dependency.relation_type == RELATION_REQUIRED_DEPENDENCY)
-        .map(|dependency| dependency.mod_id)
-        .collect();
     (
         InstallOutcome {
             mod_id,
@@ -608,8 +737,17 @@ fn install_checked<T: Transport>(
             file: Some(FileSummary::from(file)),
             dependency_of: None,
         },
-        dependencies,
+        required_dependencies(file),
     )
+}
+
+/// Le dipendenze obbligatorie del file (`relationType = 3`).
+fn required_dependencies(file: &File) -> Vec<u32> {
+    file.dependencies
+        .iter()
+        .filter(|dependency| dependency.relation_type == RELATION_REQUIRED_DEPENDENCY)
+        .map(|dependency| dependency.mod_id)
+        .collect()
 }
 
 /// Rifiuta lo zip se una delle sue cartelle esiste già in `AddOns` e appartiene a un altro

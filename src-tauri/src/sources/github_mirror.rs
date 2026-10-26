@@ -124,12 +124,23 @@ pub(crate) fn install(
     check: &dyn Fn(&[String]) -> Result<(), String>,
     reporter: &Reporter<'_>,
 ) -> Result<Vec<String>, String> {
+    let bytes = download(github, asset, reporter)?;
+    updates::install_bytes(&bytes, addons_dir, old_modules, check, reporter)
+}
+
+/// Scarica lo zip `asset` del mirror riportando l'avanzamento: la parte di rete di [`install`],
+/// che l'installazione di un progetto nuovo usa anche da sola (issue #180).
+pub(crate) fn download(
+    github: &dyn MirrorSource,
+    asset: &Asset,
+    reporter: &Reporter<'_>,
+) -> Result<Vec<u8>, String> {
     reporter.download(0, None);
     let bytes = github.download(asset, &mut |received, total| {
         reporter.download(received, total)
     })?;
     reporter.downloaded(bytes.len() as u64);
-    updates::install_bytes(&bytes, addons_dir, old_modules, check, reporter)
+    Ok(bytes)
 }
 
 /// Il messaggio dell'esito di un'installazione dal mirror.
