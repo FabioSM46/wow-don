@@ -106,7 +106,24 @@ struct ManifestFlavor {
 
 /// Lo zip della release per l'installazione: un asset da scaricare oppure `None`, solo dal
 /// sito. `Err` è il motivo per cui la release non si può usare.
-pub(crate) type Choice = Result<Option<Asset>, String>;
+type Choice = Result<Option<Asset>, String>;
+
+/// Perché lo zip di una release non si sceglie, con il tipo dell'errore (issue #162).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ChoiceError {
+    /// Il `release.json` non ha una voce per il gioco, o la voce nomina un asset che manca.
+    NoFileForGame(String),
+    /// Il `release.json` non si legge: rete, risposta illeggibile o un altro errore HTTP.
+    Other(String),
+}
+
+impl ChoiceError {
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            Self::NoFileForGame(message) | Self::Other(message) => message,
+        }
+    }
+}
 
 /// Quanto vale una release letta per i comandi successivi: ogni "Reload" rifà il controllo, e
 /// senza questa memoria N progetti GitHub costerebbero N delle 60 richieste l'ora a ogni giro.
@@ -265,7 +282,17 @@ impl<T: PublicTransport> GithubSource<T> {
     }
 
     /// Lo zip di `release` per il gioco `flavor` (vedi la documentazione del modulo).
-    pub(crate) fn choose(&self, release: &Release, flavor: &str) -> Choice {
+    fn choose(&self, release: &Release, flavor: &str) -> Choice {
+        self.choose_zip(release, flavor)
+            .map_err(|error| error.message().to_owned())
+    }
+
+    /// Come [`choose`](Self::choose), con il tipo dell'errore.
+    pub(crate) fn choose_zip(
+        &self,
+        release: &Release,
+        flavor: &str,
+    ) -> Result<Option<Asset>, ChoiceError> {
         let Some(manifest) = release.assets.iter().find(|a| a.name == MANIFEST) else {
             let mut zips = release.assets.iter().filter(|a| {
                 let name = a.name.to_ascii_lowercase();
@@ -276,8 +303,14 @@ impl<T: PublicTransport> GithubSource<T> {
                 _ => None,
             });
         };
-        let manifest = self.manifest(&manifest.browser_download_url)?;
-        let no_file = || "The latest GitHub release has no file for this game version.".to_owned();
+        let manifest = self
+            .manifest(&manifest.browser_download_url)
+            .map_err(ChoiceError::Other)?;
+        let no_file = || {
+            ChoiceError::NoFileForGame(
+                "The latest GitHub release has no file for this game version.".to_owned(),
+            )
+        };
         let wanted = packager_flavor(flavor).ok_or_else(no_file)?;
         let file = manifest
             .releases
@@ -292,10 +325,10 @@ impl<T: PublicTransport> GithubSource<T> {
             .cloned()
             .map(Some)
             .ok_or_else(|| {
-                format!(
+                ChoiceError::NoFileForGame(format!(
                     "The latest GitHub release does not include {}.",
                     file.filename
-                )
+                ))
             })
     }
 

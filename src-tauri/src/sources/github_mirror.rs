@@ -20,7 +20,7 @@
 #![allow(dead_code)]
 
 use super::curseforge::{File, Mod};
-use super::github::{Asset, GithubSource, ReleaseError};
+use super::github::{Asset, ChoiceError, GithubSource, ReleaseError};
 use super::http::PublicTransport;
 use crate::install_link;
 use crate::sources::SourceKind;
@@ -56,7 +56,7 @@ pub(crate) enum Reason {
     DifferentVersion { github: String, curseforge: String },
     /// Il limite di richieste di GitHub, con l'ora di sblocco.
     RateLimited(String),
-    /// Rete o risposta illeggibile.
+    /// Rete o risposta illeggibile, della release o del suo `release.json`.
     Failed(String),
 }
 
@@ -115,9 +115,10 @@ pub(crate) fn resolve<T: PublicTransport>(
             curseforge: curseforge_version(file),
         })
     };
-    let asset = match github.choose(&release, flavor) {
+    let asset = match github.choose_zip(&release, flavor) {
         Ok(Some(asset)) => asset,
-        // Senza zip per il gioco una release diversa resta il motivo più utile.
+        // Senza zip per il gioco una release diversa resta il motivo più utile: il tag basta a
+        // dirlo, anche quando il `release.json` non si legge.
         Ok(None) if !same_version(&tag, None, file) => return different(),
         Err(_) if !same_version(&tag, None, file) => return different(),
         Ok(None) => {
@@ -125,7 +126,8 @@ pub(crate) fn resolve<T: PublicTransport>(
                 "The latest GitHub release has no single zip for this game version.".to_owned(),
             ));
         }
-        Err(message) => return unavailable(Reason::NoZip(message)),
+        Err(ChoiceError::NoFileForGame(message)) => return unavailable(Reason::NoZip(message)),
+        Err(ChoiceError::Other(message)) => return unavailable(Reason::Failed(message)),
     };
     if !same_version(&tag, Some(&asset.name), file) {
         return different();
@@ -436,12 +438,23 @@ mod tests {
             "https://gitlab.com/owner/repo",
             "https://github.com/Nevcairiel",
             "https://github.com/orgs/Nevcairiel",
+            // Host che somigliano a GitHub senza esserlo.
+            "https://evilgithub.com/Nevcairiel/Bartender4",
+            "https://github.com.evil.example/Nevcairiel/Bartender4",
+            "https://api.github.com/repos/Nevcairiel/Bartender4",
             "",
             "   ",
             "not a link",
         ] {
             assert_eq!(repo(Some(url)), None, "{url}");
         }
+        // Credenziali nell'URL: l'host vero è quello dopo la chiocciola (composto qui perché il
+        // controllo di privacy non lo scambi per un indirizzo email).
+        let userinfo = format!(
+            "https://github.com{}evil.example/Nevcairiel/Bartender4",
+            '@'
+        );
+        assert_eq!(repo(Some(&userinfo)), None);
         assert_eq!(repo(None), None);
     }
 
@@ -595,6 +608,34 @@ mod tests {
             )),
             Reason::NoZip(_)
         ));
+    }
+
+    #[test]
+    fn an_unreadable_release_json_is_a_failure_not_a_missing_zip() {
+        let mut fake = Fake::default();
+        release(
+            &mut fake,
+            BARTENDER,
+            "4.18.3.1",
+            &["Bartender4-4.18.3.1.zip"],
+            &["forever"],
+        );
+        fake.json.insert(
+            format!("{}/release.json", downloads(BARTENDER, "4.18.3.1")),
+            "not json".to_owned(),
+        );
+        assert_eq!(
+            reason(resolve_with(
+                fake,
+                &project(
+                    Some(false),
+                    Some("https://github.com/Nevcairiel/Bartender4")
+                ),
+                &file("Bartender4-4.18.3.1.zip", "4.18.3.1"),
+                "classic_beta",
+            )),
+            Reason::Failed("The release.json of the latest GitHub release is unreadable.".into())
+        );
     }
 
     #[test]
