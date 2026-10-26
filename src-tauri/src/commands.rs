@@ -22,8 +22,11 @@ use crate::install_local::{self, LocalInstall};
 use crate::install_new::{self, InstallOutcome, MirrorAvailability};
 use crate::installations::Installation;
 use crate::progress::{self, Progress, ProgressEvent};
-use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
+use crate::sources::curseforge::{
+    self, CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder,
+};
 use crate::sources::github::{self, GithubSource};
+use crate::sources::github_mirror;
 use crate::sources::http::PublicReqwestTransport;
 use crate::sources::tukui::{self, TukuiSource};
 use crate::sources::wowinterface::{self, WowInterfaceSource};
@@ -645,13 +648,7 @@ fn import_availability(
                         let by_id: HashMap<u32, _> = mods.into_iter().map(|m| (m.id, m)).collect();
                         for id in chunk {
                             let state = match by_id.get(id) {
-                                Some(found) if found.allow_mod_distribution == Some(true) => {
-                                    Availability::Available
-                                }
-                                Some(found) => not_downloadable(
-                                    "The author does not allow downloads from third-party apps: install it from the CurseForge website.",
-                                    found.links.website_url.clone(),
-                                ),
+                                Some(found) => curseforge_availability(found),
                                 None => not_downloadable("Addon not found on CurseForge.", None),
                             };
                             availability.insert((SourceKind::Curseforge, id.to_string()), state);
@@ -704,6 +701,21 @@ fn import_availability(
     (availability, error)
 }
 
+/// Se un progetto CurseForge della stringa si può installare: sì se CurseForge permette il
+/// download, e anche se lo blocca ma il progetto dichiara un repository GitHub (issue #179):
+/// l'installazione prova il mirror (D34) e, se non si può usare, dice il motivo. Nessuna rete.
+fn curseforge_availability(found: &curseforge::Mod) -> addon_import::Availability {
+    if found.allow_mod_distribution == Some(true)
+        || github_mirror::github_repo(found.links.source_url.as_deref()).is_some()
+    {
+        return addon_import::Availability::Available;
+    }
+    addon_import::Availability::NotDownloadable {
+        message: "The author does not allow downloads from third-party apps: install it from the CurseForge website.".to_owned(),
+        url: found.links.website_url.clone(),
+    }
+}
+
 fn availability_of(
     availability: &Availabilities,
     entry: &addon_list::ListEntry,
@@ -720,7 +732,8 @@ struct CommandInstaller<'a> {
     installation: &'a Installation,
     client: &'a CurseForgeClient<ReqwestTransport>,
     tukui: &'a TukuiSource<PublicReqwestTransport>,
-    /// Senza un controllo nell'anteprima: ogni release costa una delle 60 richieste l'ora.
+    /// Per i progetti GitHub e per il mirror dei progetti CurseForge bloccati (issue #179).
+    /// L'anteprima non legge le release.
     github: &'a GithubSource<PublicReqwestTransport>,
     availability: &'a Availabilities,
     /// L'impostazione "Use beta files when there is no release" (issue #141).
@@ -769,12 +782,13 @@ impl addon_import::Installer for CommandInstaller<'_> {
                     Ok(records) => records,
                     Err(error) => return EntryOutcome::new(entry, EntryStatus::Error, Some(error)),
                 };
-                // L'importazione non chiede il mirror GitHub (issue #164): un elenco lungo
-                // consumerebbe il limite di 60 richieste l'ora.
+                // Un progetto bloccato da CurseForge si installa dal mirror GitHub (D34): le
+                // release si leggono senza l'API (issue #179), quindi un elenco lungo non consuma
+                // il limite di 60 richieste l'ora.
                 let outcomes = install_new::install_addon(
                     installation,
                     self.client,
-                    None,
+                    Some(self.github),
                     &overrides,
                     &records,
                     mod_id,
@@ -1471,6 +1485,43 @@ mod tests {
             AppSettingsStore::load(file).get().unwrap().theme,
             Theme::Light
         );
+    }
+
+    /// Issue #179: un progetto bloccato con un repository GitHub si importa dal mirror.
+    #[test]
+    fn a_blocked_project_with_a_github_repository_can_be_imported() {
+        let project = |allow: Option<bool>, source_url: Option<&str>| -> curseforge::Mod {
+            serde_json::from_value(serde_json::json!({
+                "id": 13501, "name": "Bartender4", "slug": "bartender4",
+                "allowModDistribution": allow,
+                "links": {"websiteUrl": "https://www.curseforge.com/wow/addons/bartender4",
+                          "sourceUrl": source_url},
+            }))
+            .unwrap()
+        };
+        let github = Some("https://github.com/Nevcairiel/Bartender4");
+        for allowed in [
+            project(Some(true), None),
+            project(Some(false), github),
+            project(None, github),
+        ] {
+            assert_eq!(
+                curseforge_availability(&allowed),
+                addon_import::Availability::Available
+            );
+        }
+        for blocked in [
+            project(Some(false), None),
+            project(Some(false), Some("https://gitlab.com/someone/addon")),
+        ] {
+            assert_eq!(
+                curseforge_availability(&blocked),
+                addon_import::Availability::NotDownloadable {
+                    message: "The author does not allow downloads from third-party apps: install it from the CurseForge website.".to_owned(),
+                    url: Some("https://www.curseforge.com/wow/addons/bartender4".to_owned()),
+                }
+            );
+        }
     }
 
     #[test]
