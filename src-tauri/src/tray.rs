@@ -2,8 +2,9 @@
 //!
 //! All'avvio [`create`] costruisce l'icona con il menu "Show WoW-don" / "Quit". Se la creazione
 //! fallisce (su Linux, per esempio, senza la libreria AppIndicator) l'errore si scrive su stderr
-//! e [`TrayStatus`] resta spento: la X chiude l'app anche con `closeToTray` attiva, così
-//! l'utente non resta mai con una finestra nascosta e nessuna icona per riaprirla.
+//! e [`TrayStatus`] resta spento; su Linux l'icona conta come disponibile solo se sul bus di
+//! sessione c'è chi la mostra. Senza icona visibile la X chiude l'app anche con `closeToTray`
+//! attiva, così l'utente non resta mai con una finestra nascosta e nessuna icona per riaprirla.
 //!
 //! [`on_window_event`] intercetta la chiusura della finestra principale; [`on_run_event`]
 //! riapre la finestra su macOS dal clic sull'icona nel Dock.
@@ -29,12 +30,17 @@ const MENU_QUIT: &str = "quit";
 pub struct TrayStatus(AtomicBool);
 
 impl TrayStatus {
+    /// Se l'icona c'è e qualcuno la mostra adesso: solo allora la finestra si può nascondere.
     pub fn available(&self) -> bool {
+        self.created() && host_shows_tray_icons()
+    }
+
+    fn created(&self) -> bool {
         self.0.load(Ordering::Relaxed)
     }
 
-    fn set_available(&self, available: bool) {
-        self.0.store(available, Ordering::Relaxed);
+    fn set_created(&self, created: bool) {
+        self.0.store(created, Ordering::Relaxed);
     }
 }
 
@@ -52,7 +58,7 @@ pub fn create<R: Runtime>(app: &AppHandle<R>) {
             false
         }
     };
-    app.state::<TrayStatus>().set_available(available);
+    app.state::<TrayStatus>().set_created(available);
 }
 
 fn build<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -160,10 +166,10 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
 
 /// Su Linux l'icona usa libayatana-appindicator (o libappindicator), caricata a runtime da
 /// tray-icon: senza la libreria la creazione va in panic, e con `panic = "abort"` chiuderebbe
-/// l'app all'avvio. Si controlla prima che il file esista nelle cartelle del linker dinamico.
+/// l'app all'avvio. Si chiede prima allo stesso loader dinamico se la libreria si carica.
 #[cfg(target_os = "linux")]
 fn platform_supports_tray() -> bool {
-    appindicator_in(&linux_library_dirs())
+    linux::appindicator_loads()
 }
 
 /// Su Windows e macOS l'icona usa le API del sistema: non manca niente.
@@ -172,58 +178,120 @@ fn platform_supports_tray() -> bool {
     true
 }
 
-#[cfg(any(target_os = "linux", test))]
-const APPINDICATOR_LIBRARIES: [&str; 2] =
-    ["libayatana-appindicator3.so.1", "libappindicator3.so.1"];
-
-/// Se una delle librerie AppIndicator sta in una delle cartelle.
-#[cfg(any(target_os = "linux", test))]
-fn appindicator_in(dirs: &[std::path::PathBuf]) -> bool {
-    dirs.iter().any(|dir| {
-        APPINDICATOR_LIBRARIES
-            .iter()
-            .any(|name| dir.join(name).exists())
-    })
+/// Se in questo momento c'è qualcuno che mostra l'icona. Su Linux AppIndicator la pubblica come
+/// StatusNotifierItem: senza un `org.kde.StatusNotifierWatcher` sul bus di sessione (GNOME
+/// senza l'estensione AppIndicator) l'icona esiste ma nessuno la disegna, e nascondere la
+/// finestra la renderebbe irraggiungibile. Si chiede a ogni uso e non all'avvio: con l'avvio
+/// automatico l'app può partire prima che la shell registri il watcher.
+#[cfg(target_os = "linux")]
+fn host_shows_tray_icons() -> bool {
+    linux::status_notifier_watcher_present()
 }
 
-/// Le cartelle dove il linker dinamico cerca le librerie: `LD_LIBRARY_PATH`, le cartelle
-/// standard e quelle multiarch di Debian e Ubuntu (`/usr/lib/x86_64-linux-gnu`). Una libreria
-/// in una cartella non elencata spegne la tray: un falso negativo lascia la X che chiude, un
-/// falso positivo chiuderebbe l'app.
-#[cfg(target_os = "linux")]
-fn linux_library_dirs() -> Vec<std::path::PathBuf> {
-    use std::path::PathBuf;
+/// Su Windows e macOS l'area di notifica e la barra dei menu ci sono sempre.
+#[cfg(not(target_os = "linux"))]
+fn host_shows_tray_icons() -> bool {
+    true
+}
 
-    let mut dirs: Vec<PathBuf> = std::env::var_os("LD_LIBRARY_PATH")
-        .map(|value| std::env::split_paths(&value).collect())
-        .unwrap_or_default();
-    for base in [
-        "/usr/lib",
-        "/usr/lib64",
-        "/lib",
-        "/lib64",
-        "/usr/local/lib",
-        "/run/current-system/sw/lib",
-        "/app/lib",
-    ] {
-        let base = PathBuf::from(base);
-        if let Ok(entries) = std::fs::read_dir(&base) {
-            dirs.extend(
-                entries
-                    .flatten()
-                    .filter(|entry| entry.file_name().to_string_lossy().contains("-linux-"))
-                    .map(|entry| entry.path()),
-            );
-        }
-        dirs.push(base);
+/// Le chiamate alle librerie di sistema che il processo carica già: `dlopen` (glibc, usata
+/// anche da tray-icon per AppIndicator) e GIO/GLib (collegate da GTK). Nessuna crate in più.
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::ffi::{CStr, c_char, c_int, c_void};
+    use std::ptr;
+
+    /// Gli stessi nomi, nello stesso ordine, che prova `libappindicator-sys`.
+    const APPINDICATOR_LIBRARIES: [&CStr; 2] =
+        [c"libayatana-appindicator3.so.1", c"libappindicator3.so.1"];
+    /// `RTLD_LAZY | RTLD_LOCAL`, come `libloading::Library::new`.
+    const RTLD_LAZY: c_int = 1;
+    const G_BUS_TYPE_SESSION: c_int = 2;
+    const G_DBUS_CALL_FLAGS_NONE: c_int = 0;
+    const DBUS_TIMEOUT_MS: c_int = 500;
+
+    unsafe extern "C" {
+        fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+        fn g_bus_get_sync(
+            bus_type: c_int,
+            cancellable: *mut c_void,
+            error: *mut *mut c_void,
+        ) -> *mut c_void;
+        #[allow(clippy::too_many_arguments)]
+        fn g_dbus_connection_call_sync(
+            connection: *mut c_void,
+            bus_name: *const c_char,
+            object_path: *const c_char,
+            interface_name: *const c_char,
+            method_name: *const c_char,
+            parameters: *mut c_void,
+            reply_type: *const c_void,
+            flags: c_int,
+            timeout_msec: c_int,
+            cancellable: *mut c_void,
+            error: *mut *mut c_void,
+        ) -> *mut c_void;
+        fn g_variant_new_string(string: *const c_char) -> *mut c_void;
+        fn g_variant_new_tuple(children: *const *mut c_void, n_children: usize) -> *mut c_void;
+        fn g_variant_get_child_value(value: *mut c_void, index: usize) -> *mut c_void;
+        fn g_variant_get_boolean(value: *mut c_void) -> c_int;
+        fn g_variant_unref(value: *mut c_void);
+        fn g_object_unref(object: *mut c_void);
     }
-    dirs
+
+    /// Se una delle librerie AppIndicator si carica davvero: un file presente ma con una
+    /// dipendenza mancante o di un'altra architettura risponde no, come risponderebbe a
+    /// tray-icon. La libreria caricata resta in memoria: tray-icon la riapre subito dopo.
+    pub fn appindicator_loads() -> bool {
+        APPINDICATOR_LIBRARIES.iter().any(|name| {
+            // SAFETY: `name` is a NUL-terminated string; a null handle means "not loadable".
+            !unsafe { dlopen(name.as_ptr(), RTLD_LAZY) }.is_null()
+        })
+    }
+
+    /// `org.freedesktop.DBus.NameHasOwner("org.kde.StatusNotifierWatcher")` sul bus di sessione.
+    /// Ogni errore (nessun bus, timeout, risposta inattesa) vale "no": la X chiude.
+    pub fn status_notifier_watcher_present() -> bool {
+        // SAFETY: plain GIO calls with valid NUL-terminated strings. `g_variant_new_tuple`
+        // sinks the floating string, `g_dbus_connection_call_sync` sinks the floating tuple,
+        // and every returned reference is released exactly once. The reply type `(b)` is
+        // checked by GIO before the reply is returned.
+        unsafe {
+            let bus = g_bus_get_sync(G_BUS_TYPE_SESSION, ptr::null_mut(), ptr::null_mut());
+            if bus.is_null() {
+                return false;
+            }
+            let name = g_variant_new_string(c"org.kde.StatusNotifierWatcher".as_ptr());
+            let parameters = g_variant_new_tuple(&name, 1);
+            let reply = g_dbus_connection_call_sync(
+                bus,
+                c"org.freedesktop.DBus".as_ptr(),
+                c"/org/freedesktop/DBus".as_ptr(),
+                c"org.freedesktop.DBus".as_ptr(),
+                c"NameHasOwner".as_ptr(),
+                parameters,
+                c"(b)".as_ptr().cast(),
+                G_DBUS_CALL_FLAGS_NONE,
+                DBUS_TIMEOUT_MS,
+                ptr::null_mut(),
+                ptr::null_mut(),
+            );
+            g_object_unref(bus);
+            if reply.is_null() {
+                return false;
+            }
+            let value = g_variant_get_child_value(reply, 0);
+            let present = g_variant_get_boolean(value) != 0;
+            g_variant_unref(value);
+            g_variant_unref(reply);
+            present
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::TempDir;
 
     #[test]
     fn the_window_hides_only_with_the_option_on_and_a_tray_icon() {
@@ -238,29 +306,20 @@ mod tests {
     }
 
     #[test]
-    fn the_tray_status_starts_unavailable() {
+    fn a_tray_icon_that_was_not_created_is_never_available() {
         let status = TrayStatus::default();
+        assert!(!status.created());
         assert!(!status.available());
-        status.set_available(true);
-        assert!(status.available());
+        status.set_created(true);
+        assert!(status.created());
     }
 
+    /// Calls the real loader and the real session bus: it must answer without crashing
+    /// whatever the machine has (CI runners have neither a session bus nor a tray).
+    #[cfg(target_os = "linux")]
     #[test]
-    fn appindicator_is_found_only_where_a_library_file_exists() {
-        let tmp = TempDir::new();
-        let empty = tmp.path().join("empty");
-        let ayatana = tmp.path().join("ayatana");
-        let legacy = tmp.path().join("legacy");
-        for dir in [&empty, &ayatana, &legacy] {
-            std::fs::create_dir_all(dir).unwrap();
-        }
-        std::fs::write(ayatana.join("libayatana-appindicator3.so.1"), b"").unwrap();
-        std::fs::write(legacy.join("libappindicator3.so.1"), b"").unwrap();
-
-        assert!(!appindicator_in(&[]));
-        assert!(!appindicator_in(std::slice::from_ref(&empty)));
-        assert!(!appindicator_in(&[tmp.path().join("missing")]));
-        assert!(appindicator_in(&[empty.clone(), ayatana]));
-        assert!(appindicator_in(&[empty, legacy]));
+    fn the_linux_probes_answer_without_crashing() {
+        let _ = linux::appindicator_loads();
+        let _ = linux::status_notifier_watcher_present();
     }
 }

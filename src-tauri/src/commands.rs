@@ -99,8 +99,9 @@ fn beta_when_no_release(settings: &Mutex<AppSettingsStore>) -> bool {
 }
 
 /// Le impostazioni come le riceve il frontend: quelle salvate in `settings.json` più
-/// `trayAvailable`, che non si salva perché dice solo se in questo avvio l'icona nella tray
-/// c'è (issue #158). Senza icona `closeToTray` resta salvata ma non ha effetto: la X chiude.
+/// `trayAvailable`, che non si salva perché dice solo se adesso l'icona nella tray c'è e
+/// qualcuno la mostra (issue #158). Senza icona `closeToTray` resta salvata ma non ha effetto:
+/// la X chiude.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsView {
