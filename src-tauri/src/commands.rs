@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::addon_import;
 use crate::addon_list;
+use crate::addon_remove;
 use crate::addons::cache::FingerprintCache;
 use crate::addons::scan::{self, ListedAddon};
 use crate::backup::{self, BackupInfo};
@@ -1015,6 +1016,35 @@ pub async fn install_zip(
     })
     .await
     .map_err(|error| format!("The installation was interrupted ({error})."))?
+}
+
+/// Toglie dall'installazione le cartelle `folders` di `Interface/AddOns` (issue #147), con un
+/// esito per cartella: un nome non valido o una cartella che non si toglie non ferma le altre.
+/// Le cartelle tolte escono dai record e dalla cache dei fingerprint. Niente backup (scelta
+/// dell'utente) e niente fuori da `AddOns`. Tiene `InstallLock` come gli altri comandi che
+/// scrivono in `AddOns`; il disco si tocca fuori dal thread principale.
+#[tauri::command]
+pub async fn remove_addons(
+    installation_id: String,
+    folders: Vec<String>,
+    app: AppHandle,
+    store: Store<'_>,
+) -> Result<addon_remove::RemoveResult, String> {
+    let installation = find_installation(&store, &installation_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = app.state::<InstallLock>();
+        let _held = lock.hold();
+        let addons_dir = installation.path.join("Interface").join("AddOns");
+        addon_remove::remove_addons(
+            &addons_dir,
+            &installation.id,
+            &folders,
+            &app.state::<Mutex<InstalledAddonsStore>>(),
+            &app.state::<FingerprintCache>(),
+        )
+    })
+    .await
+    .map_err(|error| format!("The removal was interrupted ({error})."))
 }
 
 /// Una pagina della ricerca nel catalogo di CurseForge per l'installazione (50 risultati da
