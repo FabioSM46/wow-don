@@ -134,7 +134,6 @@ pub fn install_addon<T: Transport>(
     progress: &ProgressSink<'_>,
 ) -> Vec<InstallOutcome> {
     let live = Live {
-        installation,
         client,
         github,
         allow_beta,
@@ -284,12 +283,22 @@ pub(crate) fn version_type_of(
 
 /// Il file scelto per un progetto con il suo zip già scaricato: la parte di rete di
 /// un'installazione, che non tocca il disco (issue #180).
-#[derive(Debug, Clone)]
+/// Né `Clone` né un `Debug` con i byte: lo zip può pesare decine di MB.
 pub(crate) struct Fetched {
     file: File,
     zip: Vec<u8>,
     /// Per lo zip del mirror GitHub, il messaggio dell'esito.
     note: Option<String>,
+}
+
+impl std::fmt::Debug for Fetched {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fetched")
+            .field("file", &self.file.id)
+            .field("zip_bytes", &self.zip.len())
+            .field("note", &self.note)
+            .finish()
+    }
 }
 
 /// Da dove [`install_addon_with`] prende progetti, file e zip.
@@ -298,10 +307,12 @@ pub(crate) trait Fetcher {
     /// richiesta.
     fn mods(&self, ids: &[u32]) -> Result<Vec<Mod>, String>;
 
-    /// Il file da installare per `project` (il file `file_id`, o l'ultimo per `version_type`) e
-    /// il suo zip, oppure l'esito che dice perché non si installa.
+    /// Il file da installare per `project` (il file `file_id`, o l'ultimo per `version_type`)
+    /// nel gioco di `installation` e il suo zip, oppure l'esito che dice perché non si installa.
+    /// L'installazione è quella di chi installa: una sola fonte per scelta e installazione.
     fn fetch(
         &self,
+        installation: &Installation,
         project: &Mod,
         version_type: Option<u32>,
         file_id: Option<u32>,
@@ -317,7 +328,6 @@ pub(crate) trait Fetcher {
 
 /// Le richieste vere, fatte quando servono: l'installazione dalla Search e dai link.
 pub(crate) struct Live<'a, T: Transport> {
-    pub installation: &'a Installation,
     pub client: &'a CurseForgeClient<T>,
     /// Il mirror GitHub dei progetti bloccati (D34); `None` li salta.
     pub github: Option<&'a (dyn MirrorSource + Sync)>,
@@ -329,6 +339,7 @@ impl<T: Transport> Live<'_, T> {
     /// [`Fetcher::fetch`], con il file già letto in blocco se c'è (`known`).
     fn fetch_known(
         &self,
+        installation: &Installation,
         project: &Mod,
         version_type: Option<u32>,
         file_id: Option<u32>,
@@ -337,7 +348,7 @@ impl<T: Transport> Live<'_, T> {
     ) -> Result<Fetched, InstallOutcome> {
         reporter.phase(Phase::Checking);
         let (file, download) = find_file(
-            self.installation,
+            installation,
             self.client,
             self.github,
             project,
@@ -355,17 +366,8 @@ impl<T: Transport> Live<'_, T> {
                 repo,
                 tag,
                 asset,
-            } => {
-                reporter.download(0, None);
-                github
-                    .download(&asset, &mut |received, total| {
-                        reporter.download(received, total)
-                    })
-                    .map(|zip| {
-                        reporter.downloaded(zip.len() as u64);
-                        (zip, Some(github_mirror::installed_message(&repo, &tag)))
-                    })
-            }
+            } => github_mirror::download(github, &asset, reporter)
+                .map(|zip| (zip, Some(github_mirror::installed_message(&repo, &tag)))),
         };
         match downloaded {
             Ok((zip, note)) => Ok(Fetched { file, zip, note }),
@@ -381,12 +383,13 @@ impl<T: Transport> Fetcher for Live<'_, T> {
 
     fn fetch(
         &self,
+        installation: &Installation,
         project: &Mod,
         version_type: Option<u32>,
         file_id: Option<u32>,
         reporter: &Reporter<'_>,
     ) -> Result<Fetched, InstallOutcome> {
-        self.fetch_known(project, version_type, file_id, None, reporter)
+        self.fetch_known(installation, project, version_type, file_id, None, reporter)
     }
 }
 
@@ -422,6 +425,7 @@ fn lock<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
 /// scaricarle: la seconda fase ne chiede il nome con lo stesso livello. Riporta `checking`, il
 /// download e `downloaded` per ogni progetto scaricato.
 pub(crate) fn prefetch<T: Transport>(
+    installation: &Installation,
     live: &Live<'_, T>,
     installed: &HashSet<u32>,
     projects: &[(u32, Option<u32>)],
@@ -491,7 +495,8 @@ pub(crate) fn prefetch<T: Transport>(
             let reporter =
                 Reporter::new(progress, Some(SourceKind::Curseforge), &key, &project.name);
             let known = file_id.and_then(|id| known.get(&id).cloned());
-            let fetched = live.fetch_known(project, *version_type, None, known, &reporter);
+            let fetched =
+                live.fetch_known(installation, project, *version_type, None, known, &reporter);
             if fetched.is_ok() {
                 reporter.phase(Phase::Downloaded);
             }
@@ -535,6 +540,7 @@ impl<T: Transport> Fetcher for Cached<'_, T> {
 
     fn fetch(
         &self,
+        installation: &Installation,
         project: &Mod,
         version_type: Option<u32>,
         file_id: Option<u32>,
@@ -552,7 +558,8 @@ impl<T: Transport> Fetcher for Cached<'_, T> {
                 None => {}
             }
         }
-        self.live.fetch(project, version_type, file_id, reporter)
+        self.live
+            .fetch(installation, project, version_type, file_id, reporter)
     }
 
     fn announces(&self) -> bool {
@@ -586,10 +593,13 @@ impl Installer<'_> {
             &key,
             &project.name,
         );
-        let fetched = match self
-            .fetcher
-            .fetch(project, self.version_type, file_id, &reporter)
-        {
+        let fetched = match self.fetcher.fetch(
+            self.installation,
+            project,
+            self.version_type,
+            file_id,
+            &reporter,
+        ) {
             Ok(fetched) => fetched,
             Err(outcome) => return (outcome, Vec::new()),
         };
@@ -2027,13 +2037,13 @@ mod tests {
         let log = Arc::clone(&routes.log);
         let client = client(routes);
         let live = Live {
-            installation: &fx.installation,
             client: &client,
             github: None,
             allow_beta: false,
         };
         let prefetched = Prefetched::default();
         prefetch(
+            &fx.installation,
             &live,
             &catalog::installed_projects(&fx.installation, &records),
             &projects_with(fx, entries, overrides),
@@ -2086,7 +2096,6 @@ mod tests {
         write_folder(&sequential.addons, "P3", "");
         let client_one = client(graph(&nodes));
         let live = Live {
-            installation: &sequential.installation,
             client: &client_one,
             github: None,
             allow_beta: false,
@@ -2133,7 +2142,6 @@ mod tests {
         let sequential = fixture();
         let client_one = client(import_graph());
         let live = Live {
-            installation: &sequential.installation,
             client: &client_one,
             github: None,
             allow_beta: false,
@@ -2145,7 +2153,6 @@ mod tests {
         let log = Arc::clone(&routes.log);
         let client = client(routes);
         let live = Live {
-            installation: &fx.installation,
             client: &client,
             github: None,
             allow_beta: false,
@@ -2153,6 +2160,7 @@ mod tests {
         let prefetched = Prefetched::default();
         let events = Mutex::new(Vec::new());
         prefetch(
+            &fx.installation,
             &live,
             &HashSet::new(),
             &projects(&fx, &entries),
@@ -2209,7 +2217,6 @@ mod tests {
             ..graph(&nodes)
         });
         let live = Live {
-            installation: &fx.installation,
             client: &client,
             github: None,
             allow_beta: false,
@@ -2217,6 +2224,7 @@ mod tests {
         let prefetched = Prefetched::default();
         let start = std::time::Instant::now();
         prefetch(
+            &fx.installation,
             &live,
             &HashSet::new(),
             &projects(&fx, &entries),
@@ -2236,7 +2244,6 @@ mod tests {
         let log = Arc::clone(&routes.log);
         let client = client(routes);
         let live = Live {
-            installation: &fx.installation,
             client: &client,
             github: None,
             allow_beta: false,
@@ -2244,6 +2251,7 @@ mod tests {
         let prefetched = Prefetched::default();
         // 4 e 3 ci sono già: si scaricano solo 1 e la sua dipendenza 2.
         prefetch(
+            &fx.installation,
             &live,
             &HashSet::from([3, 4]),
             &projects(&fx, &[1, 4]),
@@ -2426,13 +2434,13 @@ mod tests {
         let mirror = FakeMirror::default().with_release(1, &[("Alpha/Alpha.toc", "")]);
         let client = client(blocked_routes(1, 10));
         let live = Live {
-            installation: &fx.installation,
             client: &client,
             github: Some(&mirror),
             allow_beta: false,
         };
         let prefetched = Prefetched::default();
         prefetch(
+            &fx.installation,
             &live,
             &HashSet::new(),
             &projects(&fx, &[1]),

@@ -595,11 +595,20 @@ impl<T: PublicTransport> GithubSource<T> {
     }
 }
 
-/// La release di un progetto GitHub con il suo zip, scaricato e non ancora installato.
-#[derive(Debug, Clone)]
+/// La release di un progetto GitHub con il suo zip, scaricato e non ancora installato. Né
+/// `Clone` né un `Debug` con i byte: lo zip può pesare decine di MB.
 pub struct GithubDownload {
     release: Release,
     zip: Vec<u8>,
+}
+
+impl std::fmt::Debug for GithubDownload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GithubDownload")
+            .field("tag", &self.release.tag_name)
+            .field("zip_bytes", &self.zip.len())
+            .finish()
+    }
 }
 
 /// Il nome del progetto `owner/repo` negli esiti e nell'avanzamento: il repository.

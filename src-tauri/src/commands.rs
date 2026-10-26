@@ -772,7 +772,6 @@ impl CommandInstaller<'_> {
     /// Le richieste vere a CurseForge, per la prima fase e per quello che non ha letto.
     fn live(&self) -> install_new::Live<'_, ReqwestTransport> {
         install_new::Live {
-            installation: self.installation,
             client: self.client,
             // Un progetto bloccato da CurseForge si installa dal mirror GitHub (D34): le release
             // si leggono senza l'API (issue #179), quindi un elenco lungo non consuma il limite
@@ -827,6 +826,7 @@ impl addon_import::Installer for CommandInstaller<'_> {
         {
             let installed = catalog::installed_projects(installation, &records);
             install_new::prefetch(
+                installation,
                 &self.live(),
                 &installed,
                 &projects,
