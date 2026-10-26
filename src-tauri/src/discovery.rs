@@ -7,7 +7,8 @@
 //!   Linux: le cartelle del gioco dentro i prefissi Wine della home, issue #88);
 //! - [`examine`] è comune a tutte le piattaforme: legge solo le cartelle candidate e i loro
 //!   figli diretti, e tiene le cartelle `_<flavor>_` valide secondo
-//!   [`installations::validate`], la stessa regola dell'aggiunta manuale.
+//!   [`installations::validate`], la stessa regola dell'aggiunta manuale, che contengono
+//!   ancora il gioco ([`has_game_files`]).
 //!
 //! Il modulo suggerisce soltanto: non scrive mai `installations.json`. Non scrive log, così
 //! nessun percorso della macchina finisce in un messaggio.
@@ -68,6 +69,9 @@ pub fn examine(candidates: &[Candidate], known: &[Installation]) -> Vec<Discover
     let mut found = Vec::new();
     for candidate in candidates {
         for child in flavor_children(&candidate.path) {
+            if !has_game_files(&child) {
+                continue;
+            }
             let Ok(installation) = installations::validate(&child) else {
                 continue;
             };
@@ -77,6 +81,26 @@ pub fn examine(candidates: &[Candidate], known: &[Installation]) -> Vec<Discover
         }
     }
     found
+}
+
+/// Se la cartella `_<flavor>_` contiene ancora il gioco: il file `.flavor.info` che il launcher
+/// scrive in ogni cartella installata, un eseguibile `Wow*.exe` (Windows e Wine: `Wow.exe`,
+/// `WowClassic.exe`, `WowB.exe`, `WowT.exe`) o un bundle `*.app` (macOS: il bundle sta dentro
+/// la cartella, per esempio `_retail_/World of Warcraft.app`, ed è una cartella, non un file
+/// che un residuo potrebbe imitare). Disinstallando una
+/// versione, il launcher lascia la cartella con qualche file residuo (librerie, `D3D12`) ma
+/// senza nessuno di questi: non è un'installazione da suggerire. Nomi senza distinguere
+/// maiuscole e minuscole, come il gioco.
+fn has_game_files(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        name == ".flavor.info"
+            || (name.starts_with("wow") && name.ends_with(".exe"))
+            || (name.ends_with(".app") && entry.file_type().is_ok_and(|kind| kind.is_dir()))
+    })
 }
 
 /// I figli diretti di `root` con un nome `_<flavor>_`, ordinati per nome. Una sola lettura
@@ -343,9 +367,16 @@ mod tests {
     use super::*;
     use crate::test_support::TempDir;
 
+    /// Crea le cartelle; quelle con un nome `_<flavor>_` ricevono anche il `.flavor.info` di
+    /// un'installazione vera.
     fn make_dirs(root: &Path, dirs: &[&str]) {
         for dir in dirs {
-            std::fs::create_dir_all(root.join(dir)).unwrap();
+            let path = root.join(dir);
+            std::fs::create_dir_all(&path).unwrap();
+            let name = path.file_name().unwrap().to_str().unwrap();
+            if installations::flavor_from_dir_name(name).is_some() {
+                std::fs::write(path.join(".flavor.info"), b"").unwrap();
+            }
         }
     }
 
@@ -376,6 +407,43 @@ mod tests {
             installations::validate(&game.join("_retail_"))
                 .unwrap()
                 .path
+        );
+    }
+
+    #[test]
+    fn a_folder_left_by_an_uninstall_is_not_suggested() {
+        let tmp = TempDir::new();
+        let game = tmp.path().join(GAME_DIR);
+        // I residui reali di un `_retail_` disinstallato.
+        let leftover = game.join("_retail_");
+        std::fs::create_dir_all(leftover.join("D3D12")).unwrap();
+        for file in ["icudt78l.dat", "libxell.dll", "wow_loader.dll"] {
+            std::fs::write(leftover.join(file), b"").unwrap();
+        }
+        // Ogni segno del gioco basta da solo.
+        for (dir, marker) in [
+            ("_classic_era_", "WowClassic.exe"),
+            ("_forever_", "Wow.exe"),
+            ("_classic_beta_", "WOWB.EXE"),
+        ] {
+            std::fs::create_dir_all(game.join(dir)).unwrap();
+            std::fs::write(game.join(dir).join(marker), b"").unwrap();
+        }
+        std::fs::create_dir_all(game.join("_classic_").join("World of Warcraft Classic.app"))
+            .unwrap();
+        // Un file `.app` non è un bundle.
+        std::fs::create_dir_all(game.join("_ptr_")).unwrap();
+        std::fs::write(game.join("_ptr_").join("World of Warcraft.app"), b"").unwrap();
+
+        let found = examine(&[Candidate::new(game, "Program Files")], &[]);
+        assert_eq!(
+            flavors(&found),
+            [
+                ("classic", "Program Files"),
+                ("classic_beta", "Program Files"),
+                ("classic_era", "Program Files"),
+                ("forever", "Program Files"),
+            ]
         );
     }
 
