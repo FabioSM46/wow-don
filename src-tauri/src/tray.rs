@@ -256,6 +256,10 @@ mod linux {
     /// bus di sessione: un watcher senza host registrato possiede il nome ma non mostra niente, e
     /// senza watcher la chiamata fallisce, quindi una chiamata risponde a entrambe le domande.
     /// Ogni errore (nessun bus, timeout, risposta inattesa) vale "no": la X chiude.
+    /// Non si scorcia su `DBUS_SESSION_BUS_ADDRESS`: se manca, GIO prova `$XDG_RUNTIME_DIR/bus`
+    /// e solo dopo l'autolaunch X11, che senza `DISPLAY` fallisce subito. La variabile assente
+    /// non vuol dire "nessun bus": un controllo lì darebbe falsi negativi (avvio automatico e
+    /// launcher che la tolgono).
     pub fn status_notifier_host_present() -> bool {
         // SAFETY: plain GIO calls with valid NUL-terminated strings. `g_variant_new_tuple`
         // sinks the floating strings, `g_dbus_connection_call_sync` sinks the floating tuple,
