@@ -142,15 +142,16 @@ function App() {
         // Un avviso del backend (per esempio record non aggiornati) si mostra come errore.
         error: Boolean(result.warning),
       });
-      // Gli addon sul disco sono cambiati: le tab Installed e Search si rileggono.
+      // Gli addon sul disco sono cambiati: la tab Installed si rilegge.
       setInstalledStale(true);
-      markSearchStale(target.id);
     } catch (err) {
       setZipMessage({
         text: `Could not install ${fileName(picked.path)}: ${errorMessage(err)}`,
         error: true,
       });
     } finally {
+      // Anche uno zip fallito può aver cambiato il disco: la Search rilegge i suoi risultati.
+      markSearchStale(target.id);
       setZipBusy(false);
       // Non c'è una fase finale: la barra si chiude quando il comando restituisce l'esito.
       zipRunning.current = false;

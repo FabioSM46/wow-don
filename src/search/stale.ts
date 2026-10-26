@@ -2,6 +2,8 @@
 // importazione): quali installazioni hanno risultati da rileggere e quale stato della sessione
 // non vale più. Funzioni pure, senza React né I/O.
 
+import type { InstallRun } from "./InstallAction";
+
 /** Installazioni e progetti installati valgono per installazione: la chiave le tiene insieme. */
 export function installKey(installationId: string, modId: number): string {
   return `${installationId}:${modId}`;
@@ -43,7 +45,7 @@ export function forgetInstalled(
  * esito di prima non descrive più gli addon sul disco. Quelle in corso restano. La stessa mappa
  * se non cambia.
  */
-export function forgetFinishedRuns<R extends { status: string }>(
+export function forgetFinishedRuns<R extends { status: InstallRun["status"] }>(
   runs: Map<string, R>,
   stale: ReadonlySet<string>,
 ): Map<string, R> {

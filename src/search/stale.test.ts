@@ -40,7 +40,7 @@ describe("forgetting session state", () => {
   });
 
   it("drops finished runs of the stale installations and keeps running ones", () => {
-    const runs = new Map<string, { status: string }>([
+    const runs = new Map<string, { status: "running" | "done" | "failed" }>([
       [installKey("a", 1), { status: "done" }],
       [installKey("a", 2), { status: "running" }],
       [installKey("a", 3), { status: "failed" }],

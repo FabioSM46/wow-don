@@ -289,9 +289,15 @@ export function Search({
     if (!active || !stale || stale.size === 0) return;
     setInstalledKeys((previous) => forgetInstalled(previous, stale));
     setRuns((previous) => forgetFinishedRuns(previous, stale));
-    if (stale.has(installation.id)) {
+    // Prima ricerca mai partita (la tab si apre ora): l'effetto della ricerca la fa in questo
+    // stesso passaggio, già con gli addon nuovi; un `refresh` ne farebbe una seconda uguale.
+    const firstSearch = load.results === null && !load.loading && load.error === null;
+    if (stale.has(installation.id) && !firstSearch) {
       setRefresh((n) => n + 1);
-      // Il dettaglio aperto prende il segno dalla sua rilettura, non dalla riga di prima.
+      // Il segno "installato" della riga è una copia di prima: il dettaglio lo riprende dal
+      // `AddonDetail` riletto (`detail.installed || addon.installed` in AddonDetailView), che
+      // per un addon ancora presente (Update, Reinstall) resta vero. Senza questo un addon
+      // rimosso resterebbe "Installed" per via della copia.
       setSelection((previous) =>
         previous && stale.has(previous.installationId) && previous.addon.installed
           ? { ...previous, addon: { ...previous.addon, installed: false } }
