@@ -19,22 +19,13 @@ where
     R: Send,
     F: Fn(&T) -> R + Sync,
 {
-    map_with(items, DOWNLOADS_AT_ONCE, f)
-}
-
-fn map_with<T, R, F>(items: &[T], workers: usize, f: F) -> Vec<R>
-where
-    T: Sync,
-    R: Send,
-    F: Fn(&T) -> R + Sync,
-{
     if items.len() <= 1 {
         return items.iter().map(f).collect();
     }
     let next = AtomicUsize::new(0);
     let results: Mutex<Vec<Option<R>>> = Mutex::new(items.iter().map(|_| None).collect());
     thread::scope(|scope| {
-        for _ in 0..workers.clamp(1, items.len()) {
+        for _ in 0..DOWNLOADS_AT_ONCE.min(items.len()) {
             scope.spawn(|| {
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
@@ -87,14 +78,6 @@ mod tests {
         let elapsed = start.elapsed();
         assert!(elapsed < Duration::from_millis(150 * 5), "{elapsed:?}");
         assert_eq!(peak.load(Ordering::SeqCst), DOWNLOADS_AT_ONCE);
-    }
-
-    #[test]
-    fn one_worker_is_sequential() {
-        let order = Mutex::new(Vec::new());
-        let items: Vec<u32> = (0..5).collect();
-        map_with(&items, 1, |n| order.lock().unwrap().push(*n));
-        assert_eq!(*order.lock().unwrap(), items);
     }
 
     #[test]
