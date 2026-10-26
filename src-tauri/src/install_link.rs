@@ -368,7 +368,7 @@ mod tests {
     use super::*;
     use crate::progress;
     use crate::sources::curseforge::TransportError;
-    use crate::sources::http::{ApiResponse, BytesResponse, HttpResponse};
+    use crate::sources::http::{ApiResponse, BytesResponse, HttpResponse, RedirectResponse};
     use crate::sources::tukui::ADDONS_URL;
     use crate::sources::wowinterface::DETAILS_URL;
     use crate::store::{ProjectRecords, SourceRecord};
@@ -497,6 +497,29 @@ mod tests {
                 None => HttpResponse {
                     status: 404,
                     body: r#"{"ERROR":"No AddOn found."}"#.to_owned(),
+                },
+            })
+        }
+
+        /// `releases/latest` sul sito rimanda al tag della release che l'API elenca per lo
+        /// stesso repository; senza release, 404.
+        fn get_redirect(&self, url: &str) -> Result<RedirectResponse, TransportError> {
+            self.calls.lock().unwrap().push(url.to_owned());
+            let api = url.replace("https://github.com/", "https://api.github.com/repos/");
+            let tag = self
+                .json
+                .get(&api)
+                .and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok())
+                .and_then(|release| release["tag_name"].as_str().map(str::to_owned));
+            let repo = url.trim_end_matches("/releases/latest");
+            Ok(match tag {
+                Some(tag) => RedirectResponse {
+                    status: 302,
+                    location: Some(format!("{repo}/releases/tag/{tag}")),
+                },
+                None => RedirectResponse {
+                    status: 404,
+                    location: None,
                 },
             })
         }
@@ -717,7 +740,9 @@ mod tests {
             assert_eq!(preview.message, None);
             assert!(!preview.installed);
             assert!(preview.url.starts_with("https://"), "{}", preview.url);
-            assert_eq!(sources.calls().len(), 1, "{:?}", sources.calls());
+            // GitHub legge il tag senza l'API, poi, senza `release.json`, gli asset dall'API.
+            let requests = if source == SourceKind::Github { 3 } else { 1 };
+            assert_eq!(sources.calls().len(), requests, "{:?}", sources.calls());
         }
     }
 
