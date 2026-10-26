@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage, type AppStatus, type Installation, type Theme } from "./api";
 import { AddonTable } from "./addons/AddonTable";
@@ -14,6 +14,7 @@ import { SystemOptions } from "./options/SystemOptions";
 import { ImportExport } from "./options/ImportExport";
 import { applyTheme } from "./options/theme";
 import { Search } from "./search/Search";
+import { clearStale, markStale } from "./search/stale";
 import "./App.css";
 
 /** Le tab dell'app, nell'ordine in cui compaiono. */
@@ -36,6 +37,19 @@ function App() {
   // la lista si rilegge (`reload` cambia), una volta sola per quante installazioni ci sono state.
   const [installedStale, setInstalledStale] = useState(false);
   const [reload, setReload] = useState(0);
+  // Il contrario: un addon tolto, reinstallato o installato fuori dalla Search (tab Installed,
+  // zip, importazione) rende vecchi i risultati della Search per quell'installazione. La Search
+  // li rilegge quando torna visibile.
+  const [searchStale, setSearchStale] = useState<ReadonlySet<string>>(() => new Set());
+  const markSearchStale = useCallback(
+    (installationId: string) => setSearchStale((previous) => markStale(previous, installationId)),
+    [],
+  );
+  const searchRefreshed = useCallback(
+    (installationIds: ReadonlySet<string>) =>
+      setSearchStale((previous) => clearStale(previous, installationIds)),
+    [],
+  );
   const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
   // Il tema salvato dal backend; finché non arriva vale quello del sistema (niente localStorage:
   // lo stato sta nel backend, un breve lampo all'avvio è accettato).
@@ -136,6 +150,8 @@ function App() {
         error: true,
       });
     } finally {
+      // Anche uno zip fallito può aver cambiato il disco: la Search rilegge i suoi risultati.
+      markSearchStale(target.id);
       setZipBusy(false);
       // Non c'è una fase finale: la barra si chiude quando il comando restituisce l'esito.
       zipRunning.current = false;
@@ -275,6 +291,7 @@ function App() {
               reload={reload}
               onInstallZip={() => void chooseZip()}
               zipBusy={zipBusy}
+              onChanged={markSearchStale}
             />
           )}
           {installations !== null && installations.length === 0 && (
@@ -301,6 +318,8 @@ function App() {
               keyConfigured={status?.curseforgeKeyConfigured ?? null}
               betaWhenNoRelease={betaWhenNoRelease}
               onInstalled={() => setInstalledStale(true)}
+              stale={searchStale}
+              onRefreshed={searchRefreshed}
             />
           )}
           {installations !== null && installations.length === 0 && (
@@ -346,7 +365,13 @@ function App() {
           />
           <SystemOptions active={tab === "options"} />
           {installations !== null && (
-            <ImportExport installation={active ?? null} onImported={() => setInstalledStale(true)} />
+            <ImportExport
+              installation={active ?? null}
+              onImported={(installationId) => {
+                setInstalledStale(true);
+                markSearchStale(installationId);
+              }}
+            />
           )}
         </div>
       </main>

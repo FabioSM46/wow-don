@@ -68,6 +68,9 @@ type Props = {
   onInstallZip?: () => void;
   /** Un'installazione da zip è in corso. */
   zipBusy?: boolean;
+  /** Rimozione, aggiornamento o reinstallazione hanno (forse) cambiato gli addon sul disco
+   * dell'installazione `installationId`: la tab Search rilegge i suoi risultati. */
+  onChanged?: (installationId: string) => void;
 };
 
 /**
@@ -134,7 +137,13 @@ function formatModified(ms: number | null): string {
   return Number.isNaN(date.getTime()) ? "—" : dateFormat.format(date);
 }
 
-export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = false }: Props) {
+export function AddonTable({
+  installation,
+  reload = 0,
+  onInstallZip,
+  zipBusy = false,
+  onChanged,
+}: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<Sort>(defaultSort);
@@ -325,6 +334,8 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
         return rescan();
       })
       .finally(() => {
+        // Anche un comando fallito può aver cambiato qualcosa sul disco.
+        onChanged?.(id);
         updateRuns.delete(id);
         reinstallRuns.delete(id);
         // Non c'è una fase finale: la barra si chiude quando il comando restituisce gli esiti.
@@ -364,6 +375,7 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
         setRemovalResult({ error: errorMessage(err) });
       })
       .finally(() => {
+        onChanged?.(id);
         if (mounted.current && currentId.current === id) setRemoving(false);
       });
   }

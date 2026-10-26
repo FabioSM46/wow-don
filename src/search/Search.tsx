@@ -25,6 +25,7 @@ import {
 } from "../addons/progress";
 import { projectId } from "../addons/sources";
 import { installedIds, summarizeInstall, withInstalled } from "./install";
+import { forgetFinishedRuns, forgetInstalled, installKey } from "./stale";
 import {
   RequestTracker,
   SEARCH_DELAY_MS,
@@ -52,6 +53,11 @@ type Props = {
   betaWhenNoRelease?: boolean | null;
   /** Un'installazione ha messo almeno un progetto nell'installazione (la tab Installed). */
   onInstalled?: () => void;
+  /** Le installazioni i cui addon sono cambiati altrove (tab Installed, zip, importazione):
+   * quando la tab è visibile, i loro risultati si rileggono. */
+  stale?: ReadonlySet<string>;
+  /** Le installazioni di `stale` sono state rilette (o lo saranno alla prossima ricerca). */
+  onRefreshed?: (installationIds: ReadonlySet<string>) => void;
 };
 
 /** I risultati: quelli mostrati restano visibili mentre arriva una ricerca nuova. */
@@ -67,17 +73,14 @@ type VersionChoice = { installationId: string; versionType: number | null };
 /** L'addon aperto nel dettaglio vale per l'installazione in cui è stato aperto. */
 type Selection = { installationId: string; addon: CatalogAddon };
 
-/** Installazioni e progetti installati valgono per installazione: la chiave le tiene insieme. */
-function installKey(installationId: string, modId: number): string {
-  return `${installationId}:${modId}`;
-}
-
 export function Search({
   installation,
   active,
   keyConfigured,
   betaWhenNoRelease,
   onInstalled,
+  stale,
+  onRefreshed,
 }: Props) {
   const [started, setStarted] = useState(active);
   if (active && !started) setStarted(true);
@@ -94,6 +97,9 @@ export function Search({
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  // Cambia quando gli addon dell'installazione sono cambiati: ricerca e dettaglio si rileggono
+  // con gli stessi filtri, lasciando in vista quello che c'è.
+  const [refresh, setRefresh] = useState(0);
   const tracker = useRef(new RequestTracker());
 
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
@@ -273,7 +279,33 @@ export function Search({
         if (!tracker.current.isLatest(id)) return;
         setLoad({ results: null, loading: false, error: errorMessage(err) });
       });
-  }, [started, missingKey, installation.id, params, retry, betaWhenNoRelease]);
+  }, [started, missingKey, installation.id, params, retry, refresh, betaWhenNoRelease]);
+
+  // Addon tolti, reinstallati o installati fuori dalla Search: il segno "installato" dei
+  // risultati, i progetti installati nella sessione e gli esiti finiti non valgono più. Le
+  // installazioni in corso restano. Le altre installazioni rileggono comunque la ricerca quando
+  // si torna su di loro.
+  useEffect(() => {
+    if (!active || !stale || stale.size === 0) return;
+    setInstalledKeys((previous) => forgetInstalled(previous, stale));
+    setRuns((previous) => forgetFinishedRuns(previous, stale));
+    // Prima ricerca mai partita (la tab si apre ora): l'effetto della ricerca la fa in questo
+    // stesso passaggio, già con gli addon nuovi; un `refresh` ne farebbe una seconda uguale.
+    const firstSearch = load.results === null && !load.loading && load.error === null;
+    if (stale.has(installation.id) && !firstSearch) {
+      setRefresh((n) => n + 1);
+      // Il segno "installato" della riga è una copia di prima: il dettaglio lo riprende dal
+      // `AddonDetail` riletto (`detail.installed || addon.installed` in AddonDetailView), che
+      // per un addon ancora presente (Update, Reinstall) resta vero. Senza questo un addon
+      // rimosso resterebbe "Installed" per via della copia.
+      setSelection((previous) =>
+        previous && stale.has(previous.installationId) && previous.addon.installed
+          ? { ...previous, addon: { ...previous.addon, installed: false } }
+          : previous,
+      );
+    }
+    onRefreshed?.(stale);
+  }, [active, stale, installation.id, onRefreshed]);
 
   function loadMore() {
     const results = load.results;
@@ -312,7 +344,15 @@ export function Search({
   // "Add by link" non usa CurseForge: resta anche senza la chiave. Il suo stato vale per
   // l'installazione, quindi si rimonta quando cambia.
   const addByLink = (
-    <AddByLink key={installation.id} installationId={installation.id} onInstalled={onInstalled} />
+    <AddByLink
+      key={installation.id}
+      installationId={installation.id}
+      onInstalled={() => {
+        onInstalled?.();
+        // Il progetto installato dal link può essere nei risultati.
+        setRefresh((n) => n + 1);
+      }}
+    />
   );
 
   if (missingKey) {
@@ -344,6 +384,7 @@ export function Search({
           addon={withInstalled(selected, installedHere)}
           versionType={versionType}
           versionTypes={versionTypes}
+          refresh={refresh}
           active={active}
           onBack={closeDetail}
           renderActions={renderInstall("detail")}
