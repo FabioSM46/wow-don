@@ -179,13 +179,13 @@ fn platform_supports_tray() -> bool {
 }
 
 /// Se in questo momento c'è qualcuno che mostra l'icona. Su Linux AppIndicator la pubblica come
-/// StatusNotifierItem: senza un `org.kde.StatusNotifierWatcher` sul bus di sessione (GNOME
-/// senza l'estensione AppIndicator) l'icona esiste ma nessuno la disegna, e nascondere la
+/// StatusNotifierItem: senza un `org.kde.StatusNotifierWatcher` con un host registrato sul bus
+/// di sessione (GNOME senza l'estensione AppIndicator) l'icona esiste ma nessuno la disegna, e nascondere la
 /// finestra la renderebbe irraggiungibile. Si chiede a ogni uso e non all'avvio: con l'avvio
 /// automatico l'app può partire prima che la shell registri il watcher.
 #[cfg(target_os = "linux")]
 fn host_shows_tray_icons() -> bool {
-    linux::status_notifier_watcher_present()
+    linux::status_notifier_host_present()
 }
 
 /// Su Windows e macOS l'area di notifica e la barra dei menu ci sono sempre.
@@ -204,11 +204,12 @@ mod linux {
     /// Gli stessi nomi, nello stesso ordine, che prova `libappindicator-sys`.
     const APPINDICATOR_LIBRARIES: [&CStr; 2] =
         [c"libayatana-appindicator3.so.1", c"libappindicator3.so.1"];
-    /// `RTLD_LAZY | RTLD_LOCAL`, come `libloading::Library::new`.
-    const RTLD_LAZY: c_int = 1;
+    /// `RTLD_LAZY | RTLD_LOCAL` (= 1, perché `RTLD_LOCAL` vale 0), come
+    /// `libloading::Library::new`.
+    const DLOPEN_FLAGS: c_int = 1;
     const G_BUS_TYPE_SESSION: c_int = 2;
     const G_DBUS_CALL_FLAGS_NONE: c_int = 0;
-    const DBUS_TIMEOUT_MS: c_int = 500;
+    const DBUS_TIMEOUT_MS: c_int = 200;
 
     unsafe extern "C" {
         fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
@@ -234,6 +235,8 @@ mod linux {
         fn g_variant_new_string(string: *const c_char) -> *mut c_void;
         fn g_variant_new_tuple(children: *const *mut c_void, n_children: usize) -> *mut c_void;
         fn g_variant_get_child_value(value: *mut c_void, index: usize) -> *mut c_void;
+        fn g_variant_get_variant(value: *mut c_void) -> *mut c_void;
+        fn g_variant_is_of_type(value: *mut c_void, variant_type: *const c_void) -> c_int;
         fn g_variant_get_boolean(value: *mut c_void) -> c_int;
         fn g_variant_unref(value: *mut c_void);
         fn g_object_unref(object: *mut c_void);
@@ -245,32 +248,38 @@ mod linux {
     pub fn appindicator_loads() -> bool {
         APPINDICATOR_LIBRARIES.iter().any(|name| {
             // SAFETY: `name` is a NUL-terminated string; a null handle means "not loadable".
-            !unsafe { dlopen(name.as_ptr(), RTLD_LAZY) }.is_null()
+            !unsafe { dlopen(name.as_ptr(), DLOPEN_FLAGS) }.is_null()
         })
     }
 
-    /// `org.freedesktop.DBus.NameHasOwner("org.kde.StatusNotifierWatcher")` sul bus di sessione.
+    /// `Properties.Get("org.kde.StatusNotifierWatcher", "IsStatusNotifierHostRegistered")` sul
+    /// bus di sessione: un watcher senza host registrato possiede il nome ma non mostra niente, e
+    /// senza watcher la chiamata fallisce, quindi una chiamata risponde a entrambe le domande.
     /// Ogni errore (nessun bus, timeout, risposta inattesa) vale "no": la X chiude.
-    pub fn status_notifier_watcher_present() -> bool {
+    pub fn status_notifier_host_present() -> bool {
         // SAFETY: plain GIO calls with valid NUL-terminated strings. `g_variant_new_tuple`
-        // sinks the floating string, `g_dbus_connection_call_sync` sinks the floating tuple,
-        // and every returned reference is released exactly once. The reply type `(b)` is
-        // checked by GIO before the reply is returned.
+        // sinks the floating strings, `g_dbus_connection_call_sync` sinks the floating tuple,
+        // and every returned reference is released exactly once. The reply type `(v)` is
+        // checked by GIO before the reply is returned; the boxed value is checked to be a
+        // boolean before it is read.
         unsafe {
             let bus = g_bus_get_sync(G_BUS_TYPE_SESSION, ptr::null_mut(), ptr::null_mut());
             if bus.is_null() {
                 return false;
             }
-            let name = g_variant_new_string(c"org.kde.StatusNotifierWatcher".as_ptr());
-            let parameters = g_variant_new_tuple(&name, 1);
+            let arguments = [
+                g_variant_new_string(c"org.kde.StatusNotifierWatcher".as_ptr()),
+                g_variant_new_string(c"IsStatusNotifierHostRegistered".as_ptr()),
+            ];
+            let parameters = g_variant_new_tuple(arguments.as_ptr(), arguments.len());
             let reply = g_dbus_connection_call_sync(
                 bus,
-                c"org.freedesktop.DBus".as_ptr(),
-                c"/org/freedesktop/DBus".as_ptr(),
-                c"org.freedesktop.DBus".as_ptr(),
-                c"NameHasOwner".as_ptr(),
+                c"org.kde.StatusNotifierWatcher".as_ptr(),
+                c"/StatusNotifierWatcher".as_ptr(),
+                c"org.freedesktop.DBus.Properties".as_ptr(),
+                c"Get".as_ptr(),
                 parameters,
-                c"(b)".as_ptr().cast(),
+                c"(v)".as_ptr().cast(),
                 G_DBUS_CALL_FLAGS_NONE,
                 DBUS_TIMEOUT_MS,
                 ptr::null_mut(),
@@ -280,9 +289,12 @@ mod linux {
             if reply.is_null() {
                 return false;
             }
-            let value = g_variant_get_child_value(reply, 0);
-            let present = g_variant_get_boolean(value) != 0;
+            let boxed = g_variant_get_child_value(reply, 0);
+            let value = g_variant_get_variant(boxed);
+            let present = g_variant_is_of_type(value, c"b".as_ptr().cast()) != 0
+                && g_variant_get_boolean(value) != 0;
             g_variant_unref(value);
+            g_variant_unref(boxed);
             g_variant_unref(reply);
             present
         }
@@ -320,6 +332,6 @@ mod tests {
     #[test]
     fn the_linux_probes_answer_without_crashing() {
         let _ = linux::appindicator_loads();
-        let _ = linux::status_notifier_watcher_present();
+        let _ = linux::status_notifier_host_present();
     }
 }
