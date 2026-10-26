@@ -1,5 +1,6 @@
 mod addon_import;
 mod addon_list;
+mod addon_remove;
 mod addons;
 mod backup;
 mod catalog;
@@ -78,6 +79,7 @@ pub fn run() {
             commands::update_addons,
             commands::install_addon,
             commands::install_zip,
+            commands::remove_addons,
             commands::search_catalog,
             commands::list_categories,
             commands::addon_detail,
