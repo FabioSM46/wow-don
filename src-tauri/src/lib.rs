@@ -13,6 +13,7 @@ mod install_link;
 mod install_local;
 mod install_new;
 mod installations;
+mod parallel;
 mod progress;
 mod sources;
 mod store;

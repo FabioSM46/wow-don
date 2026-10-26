@@ -2,6 +2,7 @@
 // e risultato. Funzioni pure, senza React né I/O.
 
 import type { ExportResult, ImportPreview, ImportResult, PreviewEntry } from "../api";
+import { PHASE_ORDER, type ProgressPhase } from "../addons/progress.ts";
 import { projectId } from "../addons/sources.ts";
 
 function plural(count: number, one: string, many: string): string {
@@ -51,14 +52,34 @@ export function newProjects(preview: ImportPreview): string[] {
   return preview.entries.filter((entry) => entry.state === "new").map(projectId);
 }
 
+/** La fase più avanzata tra quella già vista per un progetto e quella di un nuovo evento. */
+export function furthestPhase(seen: ProgressPhase | undefined, phase: ProgressPhase): ProgressPhase {
+  return seen !== undefined && PHASE_ORDER.indexOf(seen) > PHASE_ORDER.indexOf(phase) ? seen : phase;
+}
+
 /**
- * "Importing 3 of 12": la posizione è il numero di progetti nuovi di cui è già arrivato un
- * evento di avanzamento (il backend li installa uno alla volta), almeno 1 appena parte.
+ * "Downloading 7 of 12", poi "Installing 3 of 12" (issue #180): il backend scarica più progetti
+ * nuovi insieme, poi li installa uno alla volta. `reached` è la fase più avanzata vista per ogni
+ * progetto, `current` quella dell'ultimo evento: dice se l'import sta scaricando o installando.
+ * "Downloading" conta gli zip già scaricati; "Installing" la posizione di quello in corso,
+ * almeno 1.
  */
-export function importProgressText(seen: ReadonlySet<string>, fresh: readonly string[]): string {
+export function importProgressText(
+  reached: ReadonlyMap<string, ProgressPhase>,
+  fresh: readonly string[],
+  current?: ProgressPhase,
+): string {
   if (fresh.length === 0) return "Importing…";
-  const started = fresh.filter((id) => seen.has(id)).length;
-  return `Importing ${Math.min(fresh.length, Math.max(1, started))} of ${fresh.length}`;
+  const atLeast = (phase: ProgressPhase) =>
+    fresh.filter((id) => {
+      const seen = reached.get(id);
+      return seen !== undefined && PHASE_ORDER.indexOf(seen) >= PHASE_ORDER.indexOf(phase);
+    }).length;
+  if (current === "extracting" || current === "installing") {
+    const position = Math.min(fresh.length, Math.max(1, atLeast("extracting")));
+    return `Installing ${position} of ${fresh.length}`;
+  }
+  return `Downloading ${atLeast("downloaded")} of ${fresh.length}`;
 }
 
 export type ImportSummary = {

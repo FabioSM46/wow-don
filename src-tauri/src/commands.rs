@@ -21,6 +21,7 @@ use crate::install_link::{self, LinkPreview, LinkSources};
 use crate::install_local::{self, LocalInstall};
 use crate::install_new::{self, InstallOutcome, MirrorAvailability};
 use crate::installations::Installation;
+use crate::parallel;
 use crate::progress::{self, Progress, ProgressEvent};
 use crate::sources::curseforge::{
     self, CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder,
@@ -583,6 +584,7 @@ pub async fn import_addons(
             settings: &settings,
             cache: &cache,
             progress: &progress,
+            prepared: Prepared::default(),
         };
         let mut result = addon_import::run_import(
             &addons_dir,
@@ -746,9 +748,130 @@ struct CommandInstaller<'a> {
     settings: &'a Mutex<AddonSettingsStore>,
     cache: &'a FingerprintCache,
     progress: &'a (dyn Fn(Progress) + Sync),
+    /// Quello che la prima fase ha scaricato e la seconda non ha ancora installato (issue #180).
+    prepared: Prepared,
+}
+
+/// Gli zip scaricati dalla prima fase di un import, in attesa della loro installazione.
+#[derive(Default)]
+struct Prepared {
+    curseforge: install_new::Prefetched,
+    /// Per chiave Tukui, lo zip o l'esito che dice perché non c'è.
+    tukui: HashMap<String, Result<tukui::TukuiDownload, Box<updates::UpdateOutcome>>>,
+    /// Per repository GitHub, la release con lo zip o l'esito che dice perché non c'è.
+    github: HashMap<String, Result<github::GithubDownload, Box<updates::UpdateOutcome>>>,
+}
+
+/// Uno zip di una fonte libera scaricato dalla prima fase.
+enum FreeDownload {
+    Tukui(Result<tukui::TukuiDownload, Box<updates::UpdateOutcome>>),
+    Github(Result<github::GithubDownload, Box<updates::UpdateOutcome>>),
+}
+
+impl CommandInstaller<'_> {
+    /// Le richieste vere a CurseForge, per la prima fase e per quello che non ha letto.
+    fn live(&self) -> install_new::Live<'_, ReqwestTransport> {
+        install_new::Live {
+            client: self.client,
+            // Un progetto bloccato da CurseForge si installa dal mirror GitHub (D34): le release
+            // si leggono senza l'API (issue #179), quindi un elenco lungo non consuma il limite
+            // di 60 richieste l'ora.
+            github: Some(self.github),
+            allow_beta: self.allow_beta,
+        }
+    }
 }
 
 impl addon_import::Installer for CommandInstaller<'_> {
+    /// Risolve e scarica le voci del gruppo, più voci insieme ([`parallel::DOWNLOADS_AT_ONCE`]);
+    /// il disco e i record non si toccano.
+    fn prepare(&mut self, entries: &[&addon_list::ListEntry]) {
+        let installation = self.installation;
+        let availability = self.availability;
+        let available = |source: SourceKind| {
+            entries.iter().filter(move |entry| {
+                entry.source == source
+                    && matches!(
+                        availability_of(availability, entry),
+                        addon_import::Availability::Available
+                    )
+            })
+        };
+        let overrides = self
+            .settings
+            .lock()
+            .ok()
+            .and_then(|store| store.overrides_for(&installation.id).ok())
+            .unwrap_or_default();
+        // La versione del gioco che l'installazione userà, con la stessa funzione: `install`
+        // salva quella della voce come versione forzata prima di rileggerle, quindi qui vale come
+        // già salvata.
+        let projects: Vec<(u32, Option<u32>)> = available(SourceKind::Curseforge)
+            .filter_map(|entry| {
+                let mod_id = entry.key.parse::<u32>().ok()?;
+                let mut overrides = overrides.clone();
+                if let Some(version_type) = entry.version_type {
+                    overrides.insert(mod_id, version_type);
+                }
+                Some((
+                    mod_id,
+                    install_new::version_type_of(installation, &overrides, mod_id),
+                ))
+            })
+            .collect();
+        // Senza record l'installazione si ferma comunque: niente da scaricare.
+        if !projects.is_empty()
+            && let Ok(records) = locked_installed(self.installed)
+                .and_then(|store| store.records_for(&installation.id))
+        {
+            let installed = catalog::installed_projects(installation, &records);
+            install_new::prefetch(
+                installation,
+                &self.live(),
+                &installed,
+                &projects,
+                &self.prepared.curseforge,
+                self.progress,
+            );
+        }
+        // Tukui e GitHub insieme, con lo stesso limite.
+        let free: Vec<(SourceKind, &str)> = available(SourceKind::Tukui)
+            .chain(available(SourceKind::Github))
+            .map(|entry| (entry.source, entry.key.as_str()))
+            .collect();
+        let progress = self.progress;
+        let (tukui, github) = (self.tukui, self.github);
+        let downloads = parallel::map(&free, |(source, key)| {
+            let downloaded = |name: &str| {
+                progress::Reporter::new(progress, Some(*source), key, name)
+                    .phase(progress::Phase::Downloaded);
+            };
+            if *source == SourceKind::Tukui {
+                let download = tukui.download_new(key, progress);
+                if let Ok(download) = &download {
+                    downloaded(download.name());
+                }
+                FreeDownload::Tukui(download)
+            } else {
+                let download = github.download_new(installation, key, progress);
+                if download.is_ok() {
+                    downloaded(github::project_name(key));
+                }
+                FreeDownload::Github(download)
+            }
+        });
+        for ((_, key), download) in free.into_iter().zip(downloads) {
+            match download {
+                FreeDownload::Tukui(download) => {
+                    self.prepared.tukui.insert(key.to_owned(), download);
+                }
+                FreeDownload::Github(download) => {
+                    self.prepared.github.insert(key.to_owned(), download);
+                }
+            }
+        }
+    }
+
     fn install(&mut self, entry: &addon_list::ListEntry) -> addon_import::EntryOutcome {
         use addon_import::{EntryOutcome, EntryStatus};
         if let addon_import::Availability::NotDownloadable { message, .. } =
@@ -789,18 +912,18 @@ impl addon_import::Installer for CommandInstaller<'_> {
                     Ok(records) => records,
                     Err(error) => return EntryOutcome::new(entry, EntryStatus::Error, Some(error)),
                 };
-                // Un progetto bloccato da CurseForge si installa dal mirror GitHub (D34): le
-                // release si leggono senza l'API (issue #179), quindi un elenco lungo non consuma
-                // il limite di 60 richieste l'ora.
-                let outcomes = install_new::install_addon(
+                let live = self.live();
+                let cached = install_new::Cached {
+                    live: &live,
+                    prefetched: &self.prepared.curseforge,
+                };
+                let outcomes = install_new::install_addon_with(
                     installation,
-                    self.client,
-                    Some(self.github),
+                    &cached,
                     &overrides,
                     &records,
                     mod_id,
                     None,
-                    self.allow_beta,
                     &mut |mod_id, record| {
                         cache.forget(&addons_dir, &record.folders);
                         locked_installed(installed)?.record(&installation.id, mod_id, record)
@@ -820,21 +943,43 @@ impl addon_import::Installer for CommandInstaller<'_> {
                     )
                 };
                 let outcome = if entry.source == SourceKind::Tukui {
-                    self.tukui.install_new(
-                        installation,
-                        &entry.key,
-                        &|_| Ok(()),
-                        &mut record,
-                        progress,
-                    )
+                    match self.prepared.tukui.remove(&entry.key) {
+                        Some(Ok(download)) => tukui::install_downloaded(
+                            installation,
+                            &entry.key,
+                            download,
+                            &|_| Ok(()),
+                            &mut record,
+                            progress,
+                        ),
+                        Some(Err(outcome)) => *outcome,
+                        None => self.tukui.install_new(
+                            installation,
+                            &entry.key,
+                            &|_| Ok(()),
+                            &mut record,
+                            progress,
+                        ),
+                    }
                 } else {
-                    self.github.install_new(
-                        installation,
-                        &entry.key,
-                        &|_| Ok(()),
-                        &mut record,
-                        progress,
-                    )
+                    match self.prepared.github.remove(&entry.key) {
+                        Some(Ok(download)) => github::install_downloaded(
+                            installation,
+                            &entry.key,
+                            &download,
+                            &|_| Ok(()),
+                            &mut record,
+                            progress,
+                        ),
+                        Some(Err(outcome)) => *outcome,
+                        None => self.github.install_new(
+                            installation,
+                            &entry.key,
+                            &|_| Ok(()),
+                            &mut record,
+                            progress,
+                        ),
+                    }
                 };
                 let status = match outcome.status {
                     updates::OutcomeStatus::Updated => EntryStatus::Installed,

@@ -10,9 +10,16 @@ import {
   type Installation,
 } from "../api";
 import { ProgressBar, useInstallProgress } from "../addons/ProgressBar";
-import { progressKey, progressLabel, progressPercent, type InstallProgress } from "../addons/progress";
+import {
+  progressKey,
+  progressLabel,
+  progressPercent,
+  type InstallProgress,
+  type ProgressPhase,
+} from "../addons/progress";
 import {
   exportSummary,
+  furthestPhase,
   importProgressText,
   importSummary,
   newProjects,
@@ -52,7 +59,7 @@ export function ImportExport({ installation, onImported }: Props) {
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<Load<ImportResult>>({ state: "idle" });
   const [progress, setProgress] = useState<InstallProgress | undefined>();
-  const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
+  const [reached, setReached] = useState<ReadonlyMap<string, ProgressPhase>>(new Map());
   const cancelRef = useRef<HTMLButtonElement>(null);
   const importRef = useRef<HTMLButtonElement>(null);
   // Una risposta vale solo per l'installazione e il testo da cui è partita la richiesta.
@@ -67,7 +74,10 @@ export function ImportExport({ installation, onImported }: Props) {
     if (!importing) return;
     setProgress(event);
     const key = progressKey(event);
-    setSeen((previous) => (previous.has(key) ? previous : new Set(previous).add(key)));
+    setReached((previous) => {
+      const phase = furthestPhase(previous.get(key), event.phase);
+      return previous.get(key) === phase ? previous : new Map(previous).set(key, phase);
+    });
   });
 
   // Un'altra installazione: export e anteprima non valgono più.
@@ -155,7 +165,7 @@ export function ImportExport({ installation, onImported }: Props) {
     setConfirming(false);
     setImporting(true);
     setProgress(undefined);
-    setSeen(new Set());
+    setReached(new Map());
     setResult({ state: "loading" });
     try {
       const value = await api.importAddons(requested, text, mode, confirmed);
@@ -394,7 +404,7 @@ export function ImportExport({ installation, onImported }: Props) {
 
         {importing && (
           <div className="import-progress">
-            <span className="muted">{importProgressText(seen, fresh)}</span>
+            <span className="muted">{importProgressText(reached, fresh, progress?.phase)}</span>
             <ProgressBar
               value={progressPercent(progress)}
               label={progressLabel(progress, "Preparing…")}

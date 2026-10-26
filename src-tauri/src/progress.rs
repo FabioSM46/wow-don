@@ -24,6 +24,9 @@ pub enum Phase {
     Checking,
     /// Download dello zip: `received` e `total` valgono solo qui.
     Downloading,
+    /// Zip scaricato, in attesa del suo turno: solo l'import, che scarica più voci insieme e le
+    /// installa una alla volta nell'ordine della lista (issue #180).
+    Downloaded,
     /// Estrazione e controllo dello zip in una cartella temporanea.
     Extracting,
     /// Sostituzione delle cartelle in `AddOns`.

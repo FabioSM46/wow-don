@@ -8,7 +8,20 @@ import { projectId } from "./sources.ts";
 /** Il nome dell'evento Tauri, come `progress::EVENT` nel backend. */
 export const PROGRESS_EVENT = "install-progress";
 
-export type ProgressPhase = "checking" | "downloading" | "extracting" | "installing";
+/**
+ * `downloaded` arriva solo dall'import (issue #180): lo zip è scaricato e aspetta il suo turno,
+ * perché il backend scarica più progetti insieme e li installa uno alla volta.
+ */
+export type ProgressPhase = "checking" | "downloading" | "downloaded" | "extracting" | "installing";
+
+/** Le fasi nell'ordine in cui le attraversa un progetto. */
+export const PHASE_ORDER: readonly ProgressPhase[] = [
+  "checking",
+  "downloading",
+  "downloaded",
+  "extracting",
+  "installing",
+];
 
 /**
  * Il payload di `install-progress`. `source` è `null` e `key` vuoto per uno zip scelto
@@ -49,6 +62,8 @@ export function progressLabel(event: InstallProgress | undefined, idle = "Waitin
       const percent = progressPercent(event);
       return percent === null ? "Downloading…" : `Downloading ${percent}%`;
     }
+    case "downloaded":
+      return "Waiting to install…";
     case "extracting":
       return "Extracting…";
     case "installing":

@@ -25,12 +25,14 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
 
 use crate::catalog;
 use crate::installations::Installation;
-use crate::progress::{Phase, ProgressSink, Reporter};
+use crate::parallel;
+use crate::progress::{Phase, Progress, ProgressSink, Reporter};
 use crate::sources::SourceKind;
 use crate::sources::curseforge::{
     CurseForgeClient, File, Mod, RELATION_REQUIRED_DEPENDENCY, RELEASE_TYPE_BETA, Transport,
@@ -148,9 +150,9 @@ pub fn install_addon<T: Transport>(
     )
 }
 
-/// [`install_addon`] con progetti, file e zip presi da `fetcher`: le richieste vere ([`Live`])
-/// oppure, con la seconda parte della issue #180, quelle già fatte dalla prima fase di un
-/// import. Il disco si tocca solo qui, una installazione alla volta.
+/// [`install_addon`] con progetti, file e zip presi da `fetcher`: le richieste vere
+/// ([`Live`]) oppure quelle già fatte dalla prima fase di un import ([`Cached`], issue #180).
+/// Il disco si tocca solo qui, una installazione alla volta.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn install_addon_with(
     installation: &Installation,
@@ -318,7 +320,7 @@ pub(crate) trait Fetcher {
     ) -> Result<Fetched, InstallOutcome>;
 
     /// Se la lettura del progetto scelto si annuncia con `checking`: non quando la prima fase
-    /// di un import l'ha già fatta (seconda parte della issue #180).
+    /// di un import l'ha già fatta.
     fn announces(&self) -> bool {
         true
     }
@@ -388,6 +390,180 @@ impl<T: Transport> Fetcher for Live<'_, T> {
         reporter: &Reporter<'_>,
     ) -> Result<Fetched, InstallOutcome> {
         self.fetch_known(installation, project, version_type, file_id, None, reporter)
+    }
+}
+
+/// Il file con lo zip di un progetto, o l'esito che dice perché non c'è.
+type FetchResult = Result<Fetched, InstallOutcome>;
+
+/// Quante voci si chiedono in una sola `get_mods` o `get_files`.
+const IDS_PER_REQUEST: usize = 100;
+
+/// La prima fase di un import (issue #180): progetti, file e zip letti in anticipo da
+/// [`prefetch`], che [`Cached`] restituisce all'installazione.
+#[derive(Default)]
+pub(crate) struct Prefetched {
+    /// Ogni progetto letto con `get_mods`: `None` se CurseForge non lo conosce. Un progetto
+    /// la cui richiesta è fallita manca, così la seconda fase lo richiede.
+    mods: Mutex<HashMap<u32, Option<Mod>>>,
+    /// Per (progetto, versione del gioco), il file con lo zip o l'esito che dice perché no. Uno
+    /// zip esce quando lo prende la sua installazione; un esito resta per chi lo chiede ancora.
+    files: Mutex<HashMap<(u32, Option<u32>), FetchResult>>,
+}
+
+fn lock<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Risolve e scarica in parallelo, senza toccare il disco, i progetti `projects` (id e versione
+/// del gioco) e le loro dipendenze obbligatorie, come le installerebbe [`install_addon_with`]:
+/// fino a [`MAX_DEPENDENCY_DEPTH`] livelli, con la versione del gioco del progetto che le
+/// richiede. Un livello alla volta: una `get_mods` e una `get_files` per tutto il livello, poi
+/// al massimo [`parallel::DOWNLOADS_AT_ONCE`] download insieme. Ogni progetto si scarica una
+/// volta sola anche se più voci lo richiedono; quelli in `installed` non si scaricano. Si
+/// leggono anche le dipendenze già installate e quelle un livello oltre il limite, senza
+/// scaricarle: la seconda fase ne chiede il nome con lo stesso livello. Riporta `checking`, il
+/// download e `downloaded` per ogni progetto scaricato.
+pub(crate) fn prefetch<T: Transport>(
+    installation: &Installation,
+    live: &Live<'_, T>,
+    installed: &HashSet<u32>,
+    projects: &[(u32, Option<u32>)],
+    prefetched: &Prefetched,
+    progress: &(dyn Fn(Progress) + Sync),
+) {
+    let mut visited = HashSet::new();
+    let mut level: Vec<(u32, Option<u32>)> = projects
+        .iter()
+        .filter(|(id, _)| !installed.contains(id))
+        .filter(|project| visited.insert(**project))
+        .copied()
+        .collect();
+    let mut depth = 0;
+    while !level.is_empty() {
+        let missing: Vec<u32> = {
+            let mods = lock(&prefetched.mods);
+            let mut ids: Vec<u32> = level
+                .iter()
+                .map(|(id, _)| *id)
+                .filter(|id| !mods.contains_key(id))
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
+        for chunk in missing.chunks(IDS_PER_REQUEST) {
+            // Un pezzo che fallisce non si ricorda: la seconda fase lo richiede.
+            if let Ok(found) = live.mods(chunk) {
+                let mut by_id: HashMap<u32, Mod> = found.into_iter().map(|m| (m.id, m)).collect();
+                let mut mods = lock(&prefetched.mods);
+                for id in chunk {
+                    mods.insert(*id, by_id.remove(id));
+                }
+            }
+        }
+        // Oltre il limite servono solo i nomi.
+        if depth > MAX_DEPENDENCY_DEPTH {
+            break;
+        }
+        // I progetti trovati e non ancora scaricati, con l'id del file che si sceglierebbe.
+        let todo: Vec<(Mod, Option<u32>, Option<u32>)> = {
+            let mods = lock(&prefetched.mods);
+            let files = lock(&prefetched.files);
+            level
+                .iter()
+                .filter(|(id, _)| !installed.contains(id))
+                .filter(|project| !files.contains_key(project))
+                .filter_map(|(id, version_type)| {
+                    let project = mods.get(id)?.as_ref()?;
+                    let file_id = version_type
+                        .and_then(|version| latest_file(project, version, live.allow_beta));
+                    Some((project.clone(), *version_type, file_id))
+                })
+                .collect()
+        };
+        let file_ids: Vec<u32> = todo.iter().filter_map(|(_, _, file)| *file).collect();
+        // Un file che manca qui (o una richiesta fallita) si legge da solo durante il download.
+        let known: HashMap<u32, File> = file_ids
+            .chunks(IDS_PER_REQUEST)
+            .filter_map(|chunk| live.client.get_files(chunk).ok())
+            .flatten()
+            .map(|file| (file.id, file))
+            .collect();
+        let results = parallel::map(&todo, |(project, version_type, file_id)| {
+            let key = project.id.to_string();
+            let reporter =
+                Reporter::new(progress, Some(SourceKind::Curseforge), &key, &project.name);
+            let known = file_id.and_then(|id| known.get(&id).cloned());
+            let fetched =
+                live.fetch_known(installation, project, *version_type, None, known, &reporter);
+            if fetched.is_ok() {
+                reporter.phase(Phase::Downloaded);
+            }
+            fetched
+        });
+        let mut next = Vec::new();
+        let mut files = lock(&prefetched.files);
+        for ((project, version_type, _), fetched) in todo.into_iter().zip(results) {
+            if let Ok(fetched) = &fetched {
+                for dependency in required_dependencies(&fetched.file) {
+                    let item = (dependency, version_type);
+                    if visited.insert(item) {
+                        next.push(item);
+                    }
+                }
+            }
+            files.insert((project.id, version_type), fetched);
+        }
+        level = next;
+        depth += 1;
+    }
+}
+
+/// [`Prefetched`] davanti alle richieste vere: quello che la prima fase non ha letto (un file
+/// scelto a mano, un progetto oltre il limite di profondità) si chiede a `live`.
+pub(crate) struct Cached<'a, T: Transport> {
+    pub live: &'a Live<'a, T>,
+    pub prefetched: &'a Prefetched,
+}
+
+impl<T: Transport> Fetcher for Cached<'_, T> {
+    fn mods(&self, ids: &[u32]) -> Result<Vec<Mod>, String> {
+        {
+            let mods = lock(&self.prefetched.mods);
+            if ids.iter().all(|id| mods.contains_key(id)) {
+                return Ok(ids.iter().filter_map(|id| mods[id].clone()).collect());
+            }
+        }
+        self.live.mods(ids)
+    }
+
+    fn fetch(
+        &self,
+        installation: &Installation,
+        project: &Mod,
+        version_type: Option<u32>,
+        file_id: Option<u32>,
+        reporter: &Reporter<'_>,
+    ) -> Result<Fetched, InstallOutcome> {
+        if file_id.is_none() {
+            let key = (project.id, version_type);
+            let mut files = lock(&self.prefetched.files);
+            match files.remove(&key) {
+                Some(Ok(fetched)) => return Ok(fetched),
+                Some(Err(outcome)) => {
+                    files.insert(key, Err(outcome.clone()));
+                    return Err(outcome);
+                }
+                None => {}
+            }
+        }
+        self.live
+            .fetch(installation, project, version_type, file_id, reporter)
+    }
+
+    fn announces(&self) -> bool {
+        false
     }
 }
 
@@ -843,6 +1019,8 @@ mod tests {
         zips: HashMap<String, Vec<u8>>,
         /// Gli indirizzi per cui `get` fallisce come senza rete.
         broken: Vec<String>,
+        /// Quanto dura ogni download: per vedere i download in parallelo.
+        delay: std::time::Duration,
         /// Condiviso con il test, che non può rileggere il trasporto dal client.
         log: Arc<Log>,
     }
@@ -882,6 +1060,21 @@ mod tests {
             body: String,
         ) -> Result<HttpResponse, TransportError> {
             self.log.requests.lock().unwrap().push(url.to_owned());
+            if url == format!("{API}/v1/mods/files") {
+                // I file chiesti tra quelli di `files`, come li darebbe `get_file`.
+                let ids: Value = serde_json::from_str::<Value>(&body).unwrap()["fileIds"].clone();
+                let data: Vec<Value> = ids
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|id| {
+                        let suffix = format!("/files/{id}");
+                        let body = self.files.iter().find(|(url, _)| url.ends_with(&suffix))?.1;
+                        Some(serde_json::from_str::<Value>(body).unwrap()["data"].clone())
+                    })
+                    .collect();
+                return reply(Some(&json!({ "data": data }).to_string()));
+            }
             if url != format!("{API}/v1/mods") {
                 return reply(None);
             }
@@ -901,6 +1094,7 @@ mod tests {
         }
 
         fn get_bytes(&self, url: &str, _max: u64) -> Result<BytesResponse, TransportError> {
+            std::thread::sleep(self.delay);
             self.log.downloads.lock().unwrap().push(url.to_owned());
             Ok(match self.zips.get(url) {
                 Some(body) => BytesResponse {
@@ -1758,6 +1952,317 @@ mod tests {
         assert!(log.downloads.lock().unwrap().is_empty());
     }
 
+    /// [`summary`] degli esiti di una voce.
+    type Summary = Vec<(u32, InstallStatus, Option<u32>)>;
+
+    /// Le dipendenze di `graph` per [`two_phase_imports_match_the_sequential_install`]: 1 e 4
+    /// richiedono entrambi 3, che richiede 6; 7 non esiste.
+    fn import_graph() -> Routes {
+        graph(&[
+            (1, &[(2, REQUIRED), (3, REQUIRED)]),
+            (2, &[]),
+            (3, &[(6, REQUIRED)]),
+            (4, &[(3, REQUIRED)]),
+            (6, &[]),
+        ])
+    }
+
+    /// Installa `entries` una dopo l'altra con `fetcher`, come l'import: ogni voce vede i record
+    /// delle precedenti.
+    fn install_entries(fx: &Fixture, fetcher: &dyn Fetcher, entries: &[u32]) -> Vec<Summary> {
+        install_entries_with(
+            fx,
+            fetcher,
+            entries,
+            InstalledRecords::new(),
+            &VersionOverrides::new(),
+        )
+    }
+
+    /// [`install_entries`] partendo da `records` e con le versioni forzate `overrides`.
+    fn install_entries_with(
+        fx: &Fixture,
+        fetcher: &dyn Fetcher,
+        entries: &[u32],
+        mut records: InstalledRecords,
+        overrides: &VersionOverrides,
+    ) -> Vec<Summary> {
+        entries
+            .iter()
+            .map(|mod_id| {
+                let mut written = Vec::new();
+                let outcomes = install_addon_with(
+                    &fx.installation,
+                    fetcher,
+                    overrides,
+                    &records,
+                    *mod_id,
+                    None,
+                    &mut |id, r| {
+                        written.push((id, r));
+                        Ok(())
+                    },
+                    &progress::ignore,
+                );
+                records.extend(written);
+                summary(&outcomes)
+            })
+            .collect()
+    }
+
+    fn projects(fx: &Fixture, entries: &[u32]) -> Vec<(u32, Option<u32>)> {
+        projects_with(fx, entries, &VersionOverrides::new())
+    }
+
+    fn projects_with(
+        fx: &Fixture,
+        entries: &[u32],
+        overrides: &VersionOverrides,
+    ) -> Vec<(u32, Option<u32>)> {
+        entries
+            .iter()
+            .map(|id| (*id, version_type_of(&fx.installation, overrides, *id)))
+            .collect()
+    }
+
+    /// La prima e la seconda fase di `entries` su `fx`, partendo da `records` e con
+    /// `overrides`: gli esiti della seconda e le richieste e i download che ha fatto.
+    fn two_phases(
+        fx: &Fixture,
+        routes: Routes,
+        entries: &[u32],
+        records: InstalledRecords,
+        overrides: &VersionOverrides,
+    ) -> (Vec<Summary>, usize, usize) {
+        let log = Arc::clone(&routes.log);
+        let client = client(routes);
+        let live = Live {
+            client: &client,
+            github: None,
+            allow_beta: false,
+        };
+        let prefetched = Prefetched::default();
+        prefetch(
+            &fx.installation,
+            &live,
+            &catalog::installed_projects(&fx.installation, &records),
+            &projects_with(fx, entries, overrides),
+            &prefetched,
+            &|_| {},
+        );
+        let requests = log.requests.lock().unwrap().len();
+        let downloads = log.downloads.lock().unwrap().len();
+        let cached = Cached {
+            live: &live,
+            prefetched: &prefetched,
+        };
+        let outcomes = install_entries_with(fx, &cached, entries, records, overrides);
+        (
+            outcomes,
+            log.requests.lock().unwrap().len() - requests,
+            log.downloads.lock().unwrap().len() - downloads,
+        )
+    }
+
+    #[test]
+    fn installed_and_too_deep_dependencies_need_no_request_in_the_second_phase() {
+        // 3 è già installato; la catena 10 → 11 → … → 17 va oltre il limite di profondità.
+        let chain: Vec<(u32, Vec<(u32, u8)>)> = (10..=17)
+            .map(|id| {
+                (
+                    id,
+                    if id < 17 {
+                        vec![(id + 1, REQUIRED)]
+                    } else {
+                        vec![]
+                    },
+                )
+            })
+            .collect();
+        let mut nodes: Vec<(u32, &[(u32, u8)])> = vec![
+            (1, &[(2, REQUIRED), (3, REQUIRED)]),
+            (2, &[]),
+            (3, &[(6, REQUIRED)]),
+            (4, &[(3, REQUIRED)]),
+            (6, &[]),
+        ];
+        nodes.extend(chain.iter().map(|(id, deps)| (*id, deps.as_slice())));
+        let entries = [1, 4, 10];
+        let fx = fixture();
+        write_folder(&fx.addons, "P3", "");
+        let records = InstalledRecords::from([(3, record(30, &["P3"]))]);
+
+        let sequential = fixture();
+        write_folder(&sequential.addons, "P3", "");
+        let client_one = client(graph(&nodes));
+        let live = Live {
+            client: &client_one,
+            github: None,
+            allow_beta: false,
+        };
+        let expected = install_entries_with(
+            &sequential,
+            &live,
+            &entries,
+            records.clone(),
+            &VersionOverrides::new(),
+        );
+
+        let (actual, requests, downloads) = two_phases(
+            &fx,
+            graph(&nodes),
+            &entries,
+            records,
+            &VersionOverrides::new(),
+        );
+        assert_eq!(actual, expected);
+        assert!(actual[0].contains(&(3, Skipped, Some(1))));
+        assert!(actual[2].iter().any(|o| o.0 == 16 && o.1 == Skipped));
+        assert_eq!((requests, downloads), (0, 0));
+    }
+
+    #[test]
+    fn a_forced_game_version_is_downloaded_once() {
+        let fx = fixture();
+        let overrides = VersionOverrides::from([(1, CLASSIC_ERA)]);
+        let (actual, requests, downloads) = two_phases(
+            &fx,
+            import_graph(),
+            &[1],
+            InstalledRecords::new(),
+            &overrides,
+        );
+        assert_eq!(actual[0][0], (1, Installed, None));
+        assert_eq!((requests, downloads), (0, 0));
+    }
+
+    #[test]
+    fn two_phase_imports_match_the_sequential_install() {
+        let entries = [1, 7, 4, 3];
+        let sequential = fixture();
+        let client_one = client(import_graph());
+        let live = Live {
+            client: &client_one,
+            github: None,
+            allow_beta: false,
+        };
+        let expected = install_entries(&sequential, &live, &entries);
+
+        let fx = fixture();
+        let routes = import_graph();
+        let log = Arc::clone(&routes.log);
+        let client = client(routes);
+        let live = Live {
+            client: &client,
+            github: None,
+            allow_beta: false,
+        };
+        let prefetched = Prefetched::default();
+        let events = Mutex::new(Vec::new());
+        prefetch(
+            &fx.installation,
+            &live,
+            &HashSet::new(),
+            &projects(&fx, &entries),
+            &prefetched,
+            &|p: Progress| events.lock().unwrap().push((p.key, p.phase)),
+        );
+        // Ogni zip una volta sola, anche 3 che serve a 1, a 4 e alla lista; i file in blocco.
+        let mut downloads = log.downloads.lock().unwrap().clone();
+        downloads.sort();
+        let mut unique = downloads.clone();
+        unique.dedup();
+        assert_eq!(downloads, unique);
+        assert_eq!(downloads.len(), 5);
+        let requests = log.requests.lock().unwrap().clone();
+        assert!(
+            requests.iter().all(|url| !url.contains("/files/")),
+            "{requests:?}"
+        );
+        // La prima fase non tocca il disco.
+        assert!(names(&fx.addons).is_empty());
+        assert!(events.lock().unwrap().iter().all(|(_, phase)| {
+            matches!(
+                phase,
+                Phase::Checking | Phase::Downloading | Phase::Downloaded
+            )
+        }));
+
+        let cached = Cached {
+            live: &live,
+            prefetched: &prefetched,
+        };
+        let before = log.requests.lock().unwrap().len();
+        let actual = install_entries(&fx, &cached, &entries);
+        assert_eq!(actual, expected);
+        assert_eq!(names(&fx.addons), names(&sequential.addons));
+        // La seconda fase non chiede niente alla rete.
+        assert_eq!(log.requests.lock().unwrap().len(), before);
+        assert_eq!(log.downloads.lock().unwrap().len(), 5);
+        assert_eq!(
+            actual[1],
+            [(7, Failed, None)],
+            "an unknown project does not stop the others"
+        );
+    }
+
+    #[test]
+    fn the_first_phase_downloads_in_parallel() {
+        let fx = fixture();
+        let entries: Vec<u32> = (1..=parallel::DOWNLOADS_AT_ONCE as u32).collect();
+        let nodes: Vec<(u32, &[(u32, u8)])> = entries.iter().map(|id| (*id, &[][..])).collect();
+        let delay = std::time::Duration::from_millis(200);
+        let client = client(Routes {
+            delay,
+            ..graph(&nodes)
+        });
+        let live = Live {
+            client: &client,
+            github: None,
+            allow_beta: false,
+        };
+        let prefetched = Prefetched::default();
+        let start = std::time::Instant::now();
+        prefetch(
+            &fx.installation,
+            &live,
+            &HashSet::new(),
+            &projects(&fx, &entries),
+            &prefetched,
+            &|_| {},
+        );
+        // Vicino al download più lento, non alla somma.
+        let elapsed = start.elapsed();
+        assert!(elapsed < delay * 3, "{elapsed:?}");
+        assert_eq!(lock(&prefetched.files).len(), entries.len());
+    }
+
+    #[test]
+    fn installed_projects_are_not_prefetched() {
+        let fx = fixture();
+        let routes = import_graph();
+        let log = Arc::clone(&routes.log);
+        let client = client(routes);
+        let live = Live {
+            client: &client,
+            github: None,
+            allow_beta: false,
+        };
+        let prefetched = Prefetched::default();
+        // 4 e 3 ci sono già: si scaricano solo 1 e la sua dipendenza 2.
+        prefetch(
+            &fx.installation,
+            &live,
+            &HashSet::from([3, 4]),
+            &projects(&fx, &[1, 4]),
+            &prefetched,
+            &|_| {},
+        );
+        let mut downloads = log.downloads.lock().unwrap().clone();
+        downloads.sort();
+        assert_eq!(downloads, [download_url(10), download_url(20)]);
+    }
+
     #[test]
     fn the_outcome_payload_is_camel_case() {
         let json = serde_json::to_value(InstallOutcome::skipped(7, "Foo", "why")).unwrap();
@@ -1920,6 +2425,55 @@ mod tests {
         assert!(log.downloads.lock().unwrap().is_empty());
         assert_eq!(names(&fx.addons), ["Alpha"]);
         assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
+    }
+
+    #[test]
+    fn the_first_phase_of_an_import_downloads_the_mirror_zip() {
+        // Issue #180: il mirror GitHub si risolve e si scarica nella prima fase.
+        let fx = fixture();
+        let mirror = FakeMirror::default().with_release(1, &[("Alpha/Alpha.toc", "")]);
+        let client = client(blocked_routes(1, 10));
+        let live = Live {
+            client: &client,
+            github: Some(&mirror),
+            allow_beta: false,
+        };
+        let prefetched = Prefetched::default();
+        prefetch(
+            &fx.installation,
+            &live,
+            &HashSet::new(),
+            &projects(&fx, &[1]),
+            &prefetched,
+            &|_| {},
+        );
+        assert_eq!(*mirror.downloads.lock().unwrap(), [asset_url(1)]);
+        assert!(names(&fx.addons).is_empty());
+        let cached = Cached {
+            live: &live,
+            prefetched: &prefetched,
+        };
+        let outcomes = install_addon_with(
+            &fx.installation,
+            &cached,
+            &VersionOverrides::new(),
+            &InstalledRecords::new(),
+            1,
+            None,
+            &mut |_, _| Ok(()),
+            &progress::ignore,
+        );
+        assert_eq!(summary(&outcomes), [(1, Installed, None)]);
+        assert_eq!(
+            outcomes[0].message.as_deref(),
+            Some(
+                "Installed from GitHub (owner/alpha v1): CurseForge blocks third-party downloads."
+            )
+        );
+        // La seconda fase non chiede di nuovo a GitHub.
+        assert_eq!(mirror.resolved.lock().unwrap().len(), 1);
+        assert_eq!(mirror.downloads.lock().unwrap().len(), 1);
+        assert_eq!(names(&fx.addons), ["Alpha"]);
     }
 
     #[test]

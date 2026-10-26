@@ -490,34 +490,38 @@ impl<T: PublicTransport> GithubSource<T> {
         record: &mut RecordWriter<'_>,
         progress: &ProgressSink<'_>,
     ) -> UpdateOutcome {
+        match self.fetch_asset(key, asset, progress) {
+            Ok(zip) => install_zip(
+                key,
+                release,
+                &zip,
+                addons_dir,
+                old_folders,
+                check,
+                record,
+                progress,
+            ),
+            Err(outcome) => *outcome,
+        }
+    }
+
+    /// Scarica `asset` riportando l'avanzamento: la parte di rete di un'installazione.
+    fn fetch_asset(
+        &self,
+        key: &str,
+        asset: &Asset,
+        progress: &ProgressSink<'_>,
+    ) -> Result<Vec<u8>, Box<UpdateOutcome>> {
         let name = repo_name(key);
         let reporter = Reporter::new(progress, Some(GITHUB), key, name);
         reporter.download(0, None);
-        let bytes = match self.download(asset, &mut |received, total| {
-            reporter.download(received, total)
-        }) {
-            Ok(bytes) => bytes,
-            Err(error) => return UpdateOutcome::error(GITHUB, key, name, error),
-        };
-        reporter.downloaded(bytes.len() as u64);
-        let folders =
-            match updates::install_bytes(&bytes, addons_dir, old_folders, check, &reporter) {
-                Ok(folders) => folders,
-                Err(error) => return UpdateOutcome::error(GITHUB, key, name, error),
-            };
-        // Le cartelle sono già sostituite: se il registro non si salva l'installazione resta
-        // riuscita, e il messaggio lo dice.
-        let message = record(
-            GITHUB,
-            key,
-            SourceRecord {
-                file: release.tag_name.clone(),
-                folders,
-            },
-        )
-        .err()
-        .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
-        UpdateOutcome::updated(GITHUB, key, name, summary_of(release), message)
+        let zip = self
+            .download(asset, &mut |received, total| {
+                reporter.download(received, total)
+            })
+            .map_err(|error| Box::new(UpdateOutcome::error(GITHUB, key, name, error)))?;
+        reporter.downloaded(zip.len() as u64);
+        Ok(zip)
     }
 
     /// Installa un progetto GitHub che non c'è ancora (l'import, issue #134, e i link, issue
@@ -531,27 +535,43 @@ impl<T: PublicTransport> GithubSource<T> {
         record: &mut RecordWriter<'_>,
         progress: &ProgressSink<'_>,
     ) -> UpdateOutcome {
+        match self.download_new(installation, key, progress) {
+            Ok(download) => {
+                install_downloaded(installation, key, &download, check, record, progress)
+            }
+            Err(outcome) => *outcome,
+        }
+    }
+
+    /// La parte di rete di [`install_new`](Self::install_new): l'ultima release, lo zip per il
+    /// gioco e il suo download, senza toccare il disco. L'import la fa per più progetti insieme
+    /// (issue #180).
+    pub fn download_new(
+        &self,
+        installation: &Installation,
+        key: &str,
+        progress: &ProgressSink<'_>,
+    ) -> Result<GithubDownload, Box<UpdateOutcome>> {
         let name = repo_name(key);
-        let release = match self.latest(key) {
-            Ok(release) => release,
-            Err(error) => return UpdateOutcome::error(GITHUB, key, name, error),
-        };
+        let release = self
+            .latest(key)
+            .map_err(|error| Box::new(UpdateOutcome::error(GITHUB, key, name, error)))?;
         let asset = match self.choose(&release, &installation.flavor) {
             Ok(Some(asset)) => asset,
-            Ok(None) => return UpdateOutcome::skipped(GITHUB, key, name, WEBSITE_ONLY),
-            Err(error) => return UpdateOutcome::skipped(GITHUB, key, name, &error),
+            Ok(None) => {
+                return Err(Box::new(UpdateOutcome::skipped(
+                    GITHUB,
+                    key,
+                    name,
+                    WEBSITE_ONLY,
+                )));
+            }
+            Err(error) => {
+                return Err(Box::new(UpdateOutcome::skipped(GITHUB, key, name, &error)));
+            }
         };
-        let addons_dir = installation.path.join("Interface").join("AddOns");
-        self.install(
-            key,
-            &release,
-            &asset,
-            &addons_dir,
-            &[],
-            check,
-            record,
-            progress,
-        )
+        let zip = self.fetch_asset(key, &asset, progress)?;
+        Ok(GithubDownload { release, zip })
     }
 
     /// L'anteprima di un link (issue #109): l'ultima release e se ha uno zip per il gioco
@@ -573,6 +593,82 @@ impl<T: PublicTransport> GithubSource<T> {
             url: format!("https://github.com/{key}"),
         })
     }
+}
+
+/// La release di un progetto GitHub con il suo zip, scaricato e non ancora installato. Né
+/// `Clone` né un `Debug` con i byte: lo zip può pesare decine di MB.
+pub struct GithubDownload {
+    release: Release,
+    zip: Vec<u8>,
+}
+
+impl std::fmt::Debug for GithubDownload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GithubDownload")
+            .field("tag", &self.release.tag_name)
+            .field("zip_bytes", &self.zip.len())
+            .finish()
+    }
+}
+
+/// Il nome del progetto `owner/repo` negli esiti e nell'avanzamento: il repository.
+pub fn project_name(key: &str) -> &str {
+    repo_name(key)
+}
+
+/// La parte su disco di [`GithubSource::install_new`]: installa `download` e registra il tag.
+pub fn install_downloaded(
+    installation: &Installation,
+    key: &str,
+    download: &GithubDownload,
+    check: &FolderCheck<'_>,
+    record: &mut RecordWriter<'_>,
+    progress: &ProgressSink<'_>,
+) -> UpdateOutcome {
+    let addons_dir = installation.path.join("Interface").join("AddOns");
+    install_zip(
+        key,
+        &download.release,
+        &download.zip,
+        &addons_dir,
+        &[],
+        check,
+        record,
+        progress,
+    )
+}
+
+/// Installa lo zip già scaricato di `release` al posto di `old_folders`, poi registra il tag.
+#[allow(clippy::too_many_arguments)]
+fn install_zip(
+    key: &str,
+    release: &Release,
+    zip: &[u8],
+    addons_dir: &std::path::Path,
+    old_folders: &[String],
+    check: &FolderCheck<'_>,
+    record: &mut RecordWriter<'_>,
+    progress: &ProgressSink<'_>,
+) -> UpdateOutcome {
+    let name = repo_name(key);
+    let reporter = Reporter::new(progress, Some(GITHUB), key, name);
+    let folders = match updates::install_bytes(zip, addons_dir, old_folders, check, &reporter) {
+        Ok(folders) => folders,
+        Err(error) => return UpdateOutcome::error(GITHUB, key, name, error),
+    };
+    // Le cartelle sono già sostituite: se il registro non si salva l'installazione resta
+    // riuscita, e il messaggio lo dice.
+    let message = record(
+        GITHUB,
+        key,
+        SourceRecord {
+            file: release.tag_name.clone(),
+            folders,
+        },
+    )
+    .err()
+    .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
+    UpdateOutcome::updated(GITHUB, key, name, summary_of(release), message)
 }
 
 const WEBSITE_ONLY: &str = "The latest GitHub release has no single zip WoW-don can pick: download it from the release page, then drop the zip into this window.";
@@ -1998,6 +2094,38 @@ mod tests {
         assert_eq!(outcome.name, "BigWigs");
         assert!(addons.join("BigWigs_Core").is_dir());
         assert_eq!(written, ["BigWigsMods/BigWigs=v427.8:BigWigs,BigWigs_Core"]);
+    }
+
+    #[test]
+    fn the_download_touches_no_disk_and_the_install_uses_it() {
+        // L'import (issue #180): prima release e zip, poi l'installazione con quello zip.
+        let tmp = TempDir::new();
+        let (installation, addons) = game(&tmp);
+        let mut fake = fake("v427.8", &["BigWigs-v427.8.zip", MANIFEST]);
+        fake.bytes.insert(
+            format!("{DOWNLOADS}/BigWigs-v427.8.zip"),
+            zip_of(&[("BigWigs/BigWigs.toc", "new")]),
+        );
+        let source = GithubSource::new(fake);
+        let download = source
+            .download_new(&installation, REPO, &progress::ignore)
+            .unwrap();
+        assert!(!addons.join("BigWigs").exists());
+        let outcome = install_downloaded(
+            &installation,
+            REPO,
+            &download,
+            &|_| Ok(()),
+            &mut |_, _, _| Ok(()),
+            &progress::ignore,
+        );
+        assert_eq!(
+            outcome.status,
+            updates::OutcomeStatus::Updated,
+            "{outcome:?}"
+        );
+        assert!(addons.join("BigWigs").is_dir());
+        assert_eq!(project_name(REPO), "BigWigs");
     }
 
     /// Legge GitHub vero, senza l'API: `cargo test --locked live_github_release -- --ignored`.

@@ -4,9 +4,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { ExportResult, ImportPreview, ImportResult, PreviewEntry } from "../api";
-import { progressKey } from "../addons/progress.ts";
+import { progressKey, type ProgressPhase } from "../addons/progress.ts";
 import {
   exportSummary,
+  furthestPhase,
   importProgressText,
   importSummary,
   newProjects,
@@ -77,23 +78,70 @@ describe("importProgressText", () => {
       source: "curseforge" as const,
       key: "3",
       name: "Addon 3",
-      phase: "downloading" as const,
+      phase: "downloaded" as const,
     };
     assert.equal(progressKey(event), fresh[1]);
-    assert.equal(importProgressText(new Set([progressKey(event)]), fresh), "Importing 1 of 2");
     assert.equal(
-      importProgressText(new Set([progressKey({ ...event, key: "1" }), progressKey(event)]), fresh),
-      "Importing 2 of 2",
+      importProgressText(new Map([[progressKey(event), event.phase]]), fresh, event.phase),
+      "Downloading 1 of 2",
     );
   });
 
-  it("counts the projects that have started, at least the first", () => {
-    assert.equal(importProgressText(new Set(), fresh), "Importing 1 of 2");
-    assert.equal(importProgressText(new Set(["curseforge:1"]), fresh), "Importing 1 of 2");
-    assert.equal(importProgressText(new Set(["curseforge:1", "curseforge:3"]), fresh), "Importing 2 of 2");
-    // Una dipendenza non conta come progetto della lista.
-    assert.equal(importProgressText(new Set(["curseforge:99"]), fresh), "Importing 1 of 2");
-    assert.equal(importProgressText(new Set(), []), "Importing…");
+  it("counts the downloaded zips, then the position of the install", () => {
+    const reached = (entries: [string, ProgressPhase][]) => new Map(entries);
+    assert.equal(importProgressText(reached([]), fresh), "Downloading 0 of 2");
+    assert.equal(
+      importProgressText(reached([["curseforge:1", "downloading"]]), fresh, "downloading"),
+      "Downloading 0 of 2",
+    );
+    assert.equal(
+      importProgressText(
+        reached([
+          ["curseforge:1", "downloaded"],
+          ["curseforge:3", "downloading"],
+        ]),
+        fresh,
+        "downloading",
+      ),
+      "Downloading 1 of 2",
+    );
+    assert.equal(
+      importProgressText(
+        reached([
+          ["curseforge:1", "extracting"],
+          ["curseforge:3", "downloaded"],
+        ]),
+        fresh,
+        "extracting",
+      ),
+      "Installing 1 of 2",
+    );
+    assert.equal(
+      importProgressText(
+        reached([
+          ["curseforge:1", "installing"],
+          ["curseforge:3", "installing"],
+        ]),
+        fresh,
+        "installing",
+      ),
+      "Installing 2 of 2",
+    );
+    // Una dipendenza non conta come progetto della lista, ma la sua installazione sì come fase.
+    assert.equal(
+      importProgressText(reached([["curseforge:99", "installing"]]), fresh, "installing"),
+      "Installing 1 of 2",
+    );
+    assert.equal(importProgressText(reached([]), []), "Importing…");
+  });
+});
+
+describe("furthestPhase", () => {
+  it("never goes back", () => {
+    assert.equal(furthestPhase(undefined, "checking"), "checking");
+    assert.equal(furthestPhase("downloaded", "downloading"), "downloaded");
+    assert.equal(furthestPhase("downloaded", "extracting"), "extracting");
+    assert.equal(furthestPhase("installing", "checking"), "installing");
   });
 });
 
