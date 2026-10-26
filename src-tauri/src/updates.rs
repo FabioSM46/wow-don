@@ -954,10 +954,7 @@ fn update_from_mirror<T: Transport>(
     let (repo, tag, asset) = match github.resolve(&project, &file, target.flavor) {
         Outcome::Mirror { repo, tag, asset } => (repo, tag, asset),
         Outcome::Unavailable { reason } => {
-            let message = format!(
-                "The author does not allow downloads from third-party apps and the GitHub copy cannot be used. {}",
-                reason.message()
-            );
+            let message = github_mirror::unavailable_message(&reason);
             return match reason {
                 Reason::Failed(_) => UpdateOutcome::error(CF, key, name, message),
                 _ => UpdateOutcome::skipped(CF, key, name, &message),

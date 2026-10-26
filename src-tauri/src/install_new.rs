@@ -13,6 +13,12 @@
 //! Come in WowUp, dopo un'installazione riuscita si installano le dipendenze del file con
 //! `relationType = 3` (RequiredDependency), e ricorsivamente le loro, con le stesse regole.
 //!
+//! Un progetto che CurseForge non lascia scaricare (D13) si installa dal suo mirror GitHub
+//! (D34, issue #164) quando la release è la stessa del file CurseForge scelto: si scarica lo zip
+//! di GitHub con le stesse regole e lo stesso controllo delle cartelle, e il record resta
+//! **CurseForge**, con l'id del file che combacia. [`github_mirror`] dà lo stesso esito su
+//! richiesta, senza installare: la ricerca non interroga GitHub.
+//!
 //! Bloccante: va chiamato fuori dal thread principale.
 
 use std::collections::{HashMap, HashSet};
@@ -30,6 +36,8 @@ use crate::sources::curseforge::{
     CurseForgeClient, File, Mod, RELATION_REQUIRED_DEPENDENCY, RELEASE_TYPE_BETA, Transport,
     pick_file,
 };
+use crate::sources::github::Asset;
+use crate::sources::github_mirror::{self, MirrorSource, Outcome, Reason};
 use crate::store::{InstalledRecord, InstalledRecords};
 use crate::updates::{self, FileSummary, VersionOverrides};
 
@@ -105,12 +113,16 @@ impl InstallOutcome {
 /// fatta, così una dipendenza appena installata conta come installata e le sue cartelle come
 /// registrate.
 ///
+/// Un progetto bloccato da CurseForge (anche una dipendenza) si installa dal mirror GitHub con
+/// `github` (D34); senza `github`, o senza un mirror utilizzabile, resta saltato con il motivo.
+///
 /// Restituisce l'esito del progetto scelto seguito da uno per ogni dipendenza visitata, mai
 /// `Err`: un errore su una dipendenza non tocca il progetto scelto né le altre dipendenze.
 #[allow(clippy::too_many_arguments)]
 pub fn install_addon<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
+    github: Option<&dyn MirrorSource>,
     overrides: &VersionOverrides,
     records: &InstalledRecords,
     mod_id: u32,
@@ -133,6 +145,7 @@ pub fn install_addon<T: Transport>(
     let mut installer = Installer {
         installation,
         client,
+        github,
         version_type,
         allow_beta,
         records: records.clone(),
@@ -230,6 +243,8 @@ fn enqueue(
 struct Installer<'a, T: Transport> {
     installation: &'a Installation,
     client: &'a CurseForgeClient<T>,
+    /// Il mirror GitHub dei progetti bloccati (D34); `None` li salta come prima.
+    github: Option<&'a dyn MirrorSource>,
     /// La versione del gioco del progetto scelto, per i progetti senza `file_id`.
     version_type: Option<u32>,
     /// Una Beta quando la versione non ha una Release (issue #141), anche per le dipendenze.
@@ -255,15 +270,16 @@ impl<T: Transport> Installer<'_, T> {
             &project.name,
         );
         reporter.phase(Phase::Checking);
-        let file = match find_file(
+        let (file, download) = match find_file(
             self.installation,
             self.client,
+            self.github,
             project,
             self.version_type,
             self.allow_beta,
             file_id,
         ) {
-            Ok(file) => file,
+            Ok(found) => found,
             Err(outcome) => return (outcome, Vec::new()),
         };
         let mut result = install_checked(
@@ -271,6 +287,7 @@ impl<T: Transport> Installer<'_, T> {
             self.client,
             &mut self.records,
             &file,
+            &download,
             &project.name,
             self.record,
             &reporter,
@@ -288,59 +305,68 @@ impl<T: Transport> Installer<'_, T> {
     }
 }
 
-/// Il file da installare per il progetto, già controllato: distribuzione permessa, file del
-/// progetto e con un `downloadUrl`. Altrimenti l'esito che spiega perché no.
-fn find_file<T: Transport>(
+/// Da dove si scarica il file scelto.
+enum Download<'a> {
+    /// Il `downloadUrl` del file CurseForge.
+    Curseforge,
+    /// Lo zip della release GitHub che combacia con il file CurseForge (D34).
+    Mirror {
+        github: &'a dyn MirrorSource,
+        repo: String,
+        tag: String,
+        asset: Asset,
+    },
+}
+
+/// Il messaggio di un progetto bloccato senza mirror GitHub da chiedere.
+const BLOCKED: &str = "The author does not allow downloads from third-party apps: install it from the CurseForge website.";
+
+/// Il file da installare per il progetto, già controllato: file del progetto, e scaricabile da
+/// CurseForge (distribuzione permessa e un `downloadUrl`) o dal mirror GitHub per un progetto
+/// bloccato. Altrimenti l'esito che spiega perché no.
+fn find_file<'a, T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
+    github: Option<&'a dyn MirrorSource>,
     project: &Mod,
     version_type: Option<u32>,
     allow_beta: bool,
     file_id: Option<u32>,
-) -> Result<File, InstallOutcome> {
+) -> Result<(File, Download<'a>), InstallOutcome> {
     let mod_id = project.id;
     let name = project.name.as_str();
     // D13: sconosciuto vale `false`.
-    if project.allow_mod_distribution != Some(true) {
-        return Err(InstallOutcome::skipped(
-            mod_id,
-            name,
-            "The author does not allow downloads from third-party apps: install it from the CurseForge website.",
-        ));
-    }
-
-    let file_id = match file_id {
-        Some(id) => id,
-        None => {
-            let Some(version_type) = version_type else {
-                return Err(InstallOutcome::error(
-                    mod_id,
-                    name,
-                    format!(
-                        "Installing addons does not support the game version \"{}\" yet.",
-                        installation.name
-                    ),
-                ));
-            };
-            latest_file(project, version_type, allow_beta).ok_or_else(|| {
-                InstallOutcome::skipped(
-                    mod_id,
-                    name,
-                    "There is no release file for this game version.",
-                )
-            })?
-        }
+    let blocked = project.allow_mod_distribution != Some(true);
+    let mirror = match (blocked, github) {
+        (false, _) => None,
+        (true, Some(github)) => Some(github),
+        (true, None) => return Err(InstallOutcome::skipped(mod_id, name, BLOCKED)),
     };
-
-    let file = client
-        .get_file(mod_id, file_id)
-        .map_err(|error| InstallOutcome::error(mod_id, name, error.to_string()))?;
-    if file.mod_id != mod_id {
-        return Err(InstallOutcome::error(
-            mod_id,
-            name,
-            "The requested file does not belong to this addon.".to_owned(),
-        ));
+    let file = chosen_file(
+        installation,
+        client,
+        project,
+        version_type,
+        allow_beta,
+        file_id,
+    )
+    .map_err(|error| match error {
+        FileError::Skipped(message) => InstallOutcome::skipped(mod_id, name, &message),
+        FileError::Error(message) => InstallOutcome::error(mod_id, name, message),
+    })?;
+    if let Some(github) = mirror {
+        return match github.resolve(project, &file, &installation.flavor) {
+            Outcome::Mirror { repo, tag, asset } => Ok((
+                file,
+                Download::Mirror {
+                    github,
+                    repo,
+                    tag,
+                    asset,
+                },
+            )),
+            Outcome::Unavailable { reason } => Err(unavailable(mod_id, name, &reason)),
+        };
     }
     if file.download_url.is_none() {
         return Err(InstallOutcome::skipped(
@@ -349,7 +375,141 @@ fn find_file<T: Transport>(
             "CurseForge does not provide a download link for this file: install it from the CurseForge website.",
         ));
     }
+    Ok((file, Download::Curseforge))
+}
+
+/// L'esito di un progetto bloccato senza un mirror utilizzabile: saltato con il motivo, oppure
+/// un errore quando GitHub non ha risposto (come negli aggiornamenti).
+fn unavailable(mod_id: u32, name: &str, reason: &Reason) -> InstallOutcome {
+    let message = github_mirror::unavailable_message(reason);
+    match reason {
+        Reason::Failed(_) => InstallOutcome::error(mod_id, name, message),
+        _ => InstallOutcome::skipped(mod_id, name, &message),
+    }
+}
+
+/// Perché non c'è un file da installare: un esito `skipped` o un errore.
+enum FileError {
+    Skipped(String),
+    Error(String),
+}
+
+/// Il file CurseForge `file_id` del progetto se indicato, altrimenti l'ultimo per la versione del
+/// gioco (con la regola della Beta), letto da CurseForge e controllato come file del progetto.
+/// Non guarda se il file si può scaricare.
+fn chosen_file<T: Transport>(
+    installation: &Installation,
+    client: &CurseForgeClient<T>,
+    project: &Mod,
+    version_type: Option<u32>,
+    allow_beta: bool,
+    file_id: Option<u32>,
+) -> Result<File, FileError> {
+    let mod_id = project.id;
+    let file_id = match file_id {
+        Some(id) => id,
+        None => {
+            let Some(version_type) = version_type else {
+                return Err(FileError::Error(format!(
+                    "Installing addons does not support the game version \"{}\" yet.",
+                    installation.name
+                )));
+            };
+            latest_file(project, version_type, allow_beta).ok_or_else(|| {
+                FileError::Skipped("There is no release file for this game version.".to_owned())
+            })?
+        }
+    };
+    let file = client
+        .get_file(mod_id, file_id)
+        .map_err(|error| FileError::Error(error.to_string()))?;
+    if file.mod_id != mod_id {
+        return Err(FileError::Error(
+            "The requested file does not belong to this addon.".to_owned(),
+        ));
+    }
     Ok(file)
+}
+
+/// L'esito del mirror GitHub di un progetto CurseForge (comando `github_mirror`, issue #164).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MirrorAvailability {
+    /// Il progetto si installa dallo zip di GitHub.
+    pub available: bool,
+    /// `owner/repo`, solo con `available`.
+    pub repo: Option<String>,
+    /// Il tag della release, solo con `available`.
+    pub tag: Option<String>,
+    /// Perché il mirror non si usa (D27, in inglese); `null` per un progetto che CurseForge
+    /// lascia scaricare, e quando il mirror c'è.
+    pub reason: Option<String>,
+}
+
+impl MirrorAvailability {
+    fn unavailable(reason: Option<String>) -> Self {
+        Self {
+            available: false,
+            repo: None,
+            tag: None,
+            reason,
+        }
+    }
+}
+
+/// Il mirror GitHub del progetto `mod_id` per l'installazione, con lo stesso file e la stessa
+/// regola di [`install_addon`] senza `file_id`: si chiama su richiesta (dettaglio o Install), mai
+/// durante la ricerca, per stare nel limite di 60 richieste l'ora. Un progetto che CurseForge
+/// lascia scaricare non fa nessuna richiesta a GitHub. `Err` solo quando CurseForge non risponde
+/// o non conosce il progetto; i problemi di GitHub sono un `reason`.
+pub fn github_mirror<T: Transport>(
+    installation: &Installation,
+    client: &CurseForgeClient<T>,
+    github: &dyn MirrorSource,
+    overrides: &VersionOverrides,
+    mod_id: u32,
+    allow_beta: bool,
+) -> Result<MirrorAvailability, String> {
+    let project = client
+        .get_mods(&[mod_id])
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|m| m.id == mod_id)
+        .ok_or_else(|| "Addon not found on CurseForge.".to_owned())?;
+    if project.allow_mod_distribution == Some(true) {
+        return Ok(MirrorAvailability::unavailable(None));
+    }
+    let version_type = overrides
+        .get(&mod_id)
+        .copied()
+        .or_else(|| updates::version_type_for(&installation.flavor));
+    let file = match chosen_file(
+        installation,
+        client,
+        &project,
+        version_type,
+        allow_beta,
+        None,
+    ) {
+        Ok(file) => file,
+        Err(FileError::Skipped(message)) => {
+            return Ok(MirrorAvailability::unavailable(Some(message)));
+        }
+        Err(FileError::Error(message)) => return Err(message),
+    };
+    Ok(
+        match github.resolve(&project, &file, &installation.flavor) {
+            Outcome::Mirror { repo, tag, .. } => MirrorAvailability {
+                available: true,
+                repo: Some(repo),
+                tag: Some(tag),
+                reason: None,
+            },
+            Outcome::Unavailable { reason } => {
+                MirrorAvailability::unavailable(Some(reason.message()))
+            }
+        },
+    )
 }
 
 /// Il file da installare per la versione tra quelli che CurseForge indica come ultimi del
@@ -370,15 +530,18 @@ fn latest_file(project: &Mod, version_type: u32, allow_beta: bool) -> Option<u32
     .map(|index| index.file_id)
 }
 
-/// Scarica e installa `file`, rifiutando le cartelle di altri progetti, poi lo registra sia
+/// Scarica e installa `file` (da CurseForge o, per un progetto bloccato, lo zip del suo mirror
+/// GitHub), rifiutando le cartelle di altri progetti, poi lo registra sia
 /// con `record` sia nei `records` locali (anche se `record` fallisce: le cartelle sono sul
 /// disco e appartengono al progetto). Su un'installazione riuscita restituisce anche le
 /// dipendenze obbligatorie del file.
+#[allow(clippy::too_many_arguments)]
 fn install_checked<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
     records: &mut InstalledRecords,
     file: &File,
+    download: &Download<'_>,
     name: &str,
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
     reporter: &Reporter<'_>,
@@ -388,7 +551,22 @@ fn install_checked<T: Transport>(
     let flavor = installation.flavor.as_str();
     let check =
         |folders: &[String]| check_foreign_folders(&addons_dir, flavor, records, mod_id, folders);
-    let folders = match updates::install_file(client, file, &addons_dir, &[], &check, reporter) {
+    let (installed, note) = match download {
+        Download::Curseforge => (
+            updates::install_file(client, file, &addons_dir, &[], &check, reporter),
+            None,
+        ),
+        Download::Mirror {
+            github,
+            repo,
+            tag,
+            asset,
+        } => (
+            github_mirror::install(*github, asset, &addons_dir, &[], &check, reporter),
+            Some(github_mirror::installed_message(repo, tag)),
+        ),
+    };
+    let folders = match installed {
         Ok(folders) => folders,
         Err(message) => return (InstallOutcome::error(mod_id, name, message), Vec::new()),
     };
@@ -398,9 +576,14 @@ fn install_checked<T: Transport>(
     };
     // Le cartelle sono già al loro posto: se il registro non si salva l'installazione resta
     // riuscita, e il messaggio lo dice (come in `update_addons`).
-    let message = record(mod_id, installed.clone())
+    let failed = record(mod_id, installed.clone())
         .err()
         .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
+    // Il record resta CurseForge anche dal mirror: l'esito dice che lo zip viene da GitHub.
+    let message = match (note, failed) {
+        (Some(note), Some(failed)) => Some(format!("{note} {failed}")),
+        (note, failed) => note.or(failed),
+    };
     records.insert(mod_id, installed);
     let dependencies = file
         .dependencies
@@ -755,6 +938,7 @@ mod tests {
         let outcomes = install_addon(
             &fx.installation,
             &client(routes),
+            None,
             &VersionOverrides::new(),
             records,
             mod_id,
@@ -802,6 +986,7 @@ mod tests {
         let outcome = install_addon(
             &fx.installation,
             &client(routes),
+            None,
             &VersionOverrides::from([(1, CLASSIC_ERA)]),
             &InstalledRecords::new(),
             1,
@@ -941,6 +1126,7 @@ mod tests {
             install_addon(
                 &fx.installation,
                 &client(beta_only_routes()),
+                None,
                 &VersionOverrides::new(),
                 &InstalledRecords::new(),
                 1,
@@ -1078,6 +1264,7 @@ mod tests {
         let outcome = install_addon(
             &fx.installation,
             &client(routes(1, 10, &[("Alpha/Alpha.toc", "")])),
+            None,
             &VersionOverrides::new(),
             &InstalledRecords::new(),
             1,
@@ -1353,6 +1540,7 @@ mod tests {
         let outcomes = install_addon(
             &fx.installation,
             &client(routes),
+            None,
             &VersionOverrides::from([(1, CLASSIC_ERA), (2, RETAIL)]),
             &InstalledRecords::new(),
             1,
@@ -1449,5 +1637,369 @@ mod tests {
         assert!(json.get("message").is_none());
         assert_eq!(json["dependencyOf"], 3);
         assert_eq!(serde_json::to_value(InstallStatus::Error).unwrap(), "error");
+    }
+
+    // ── Mirror GitHub dei progetti bloccati (D34, issue #164) ───────────
+
+    const REPO: &str = "owner/alpha";
+
+    /// Il mirror GitHub finto: l'esito di `resolve` per progetto e gli zip delle release, con le
+    /// richieste fatte.
+    #[derive(Default)]
+    struct FakeMirror {
+        outcomes: HashMap<u32, Outcome>,
+        zips: HashMap<String, Vec<u8>>,
+        /// `(progetto, file CurseForge)` di ogni `resolve`.
+        resolved: Mutex<Vec<(u32, u32)>>,
+        downloads: Mutex<Vec<String>>,
+    }
+
+    impl MirrorSource for FakeMirror {
+        fn resolve(&self, project: &Mod, file: &File, _flavor: &str) -> Outcome {
+            self.resolved.lock().unwrap().push((project.id, file.id));
+            self.outcomes
+                .get(&project.id)
+                .cloned()
+                .unwrap_or(Outcome::Unavailable {
+                    reason: Reason::NoGithubSource,
+                })
+        }
+
+        fn download(
+            &self,
+            asset: &Asset,
+            _progress: &mut crate::sources::http::DownloadProgress<'_>,
+        ) -> Result<Vec<u8>, String> {
+            let url = asset.browser_download_url.clone();
+            self.downloads.lock().unwrap().push(url.clone());
+            self.zips
+                .get(&url)
+                .cloned()
+                .ok_or_else(|| "Could not download the file.".to_owned())
+        }
+    }
+
+    fn asset_url(mod_id: u32) -> String {
+        format!("https://github.com/{REPO}/releases/download/v1/P{mod_id}.zip")
+    }
+
+    impl FakeMirror {
+        /// Una release `v1` che combacia per il progetto `mod_id`, con lo zip `zip`.
+        fn with_release(mut self, mod_id: u32, zip: &[(&str, &str)]) -> Self {
+            let asset = Asset {
+                name: format!("P{mod_id}.zip"),
+                browser_download_url: asset_url(mod_id),
+            };
+            self.zips.insert(asset_url(mod_id), zip_of(zip));
+            self.outcomes.insert(
+                mod_id,
+                Outcome::Mirror {
+                    repo: REPO.to_owned(),
+                    tag: "v1".to_owned(),
+                    asset,
+                },
+            );
+            self
+        }
+
+        fn without(mut self, mod_id: u32, reason: Reason) -> Self {
+            self.outcomes
+                .insert(mod_id, Outcome::Unavailable { reason });
+            self
+        }
+    }
+
+    /// Le rotte di un progetto bloccato: il file `file_id` esiste ma senza `downloadUrl`.
+    fn blocked_routes(mod_id: u32, file_id: u32) -> Routes {
+        Routes {
+            projects: vec![project(mod_id, Some(false))],
+            files: HashMap::from([(
+                format!("{API}/v1/mods/{mod_id}/files/{file_id}"),
+                json!({"data": file_json(mod_id, file_id, false)}).to_string(),
+            )]),
+            ..Routes::default()
+        }
+    }
+
+    /// Installa con il mirror, con le dipendenze, raccogliendo i record scritti.
+    fn install_mirrored(
+        fx: &Fixture,
+        routes: Routes,
+        mirror: &FakeMirror,
+        records: &InstalledRecords,
+        mod_id: u32,
+    ) -> (Vec<InstallOutcome>, Vec<(u32, InstalledRecord)>) {
+        let mut written = Vec::new();
+        let outcomes = install_addon(
+            &fx.installation,
+            &client(routes),
+            Some(mirror),
+            &VersionOverrides::new(),
+            records,
+            mod_id,
+            None,
+            false,
+            &mut |id, r| {
+                written.push((id, r));
+                Ok(())
+            },
+            &progress::ignore,
+        );
+        (outcomes, written)
+    }
+
+    #[test]
+    fn a_blocked_project_installs_from_its_mirror_with_a_curseforge_record() {
+        let fx = fixture();
+        let routes = blocked_routes(1, 10);
+        let log = Arc::clone(&routes.log);
+        let mirror = FakeMirror::default().with_release(1, &[("Alpha/Alpha.toc", "")]);
+
+        let (outcomes, written) =
+            install_mirrored(&fx, routes, &mirror, &InstalledRecords::new(), 1);
+
+        assert_eq!(summary(&outcomes), [(1, Installed, None)]);
+        let outcome = &outcomes[0];
+        assert_eq!(
+            outcome.message.as_deref(),
+            Some(
+                "Installed from GitHub (owner/alpha v1): CurseForge blocks third-party downloads."
+            )
+        );
+        // Il file dell'esito e del record è quello di CurseForge che combacia.
+        assert_eq!(outcome.file.as_ref().unwrap().id, 10);
+        assert_eq!(written, [(1, record(10, &["Alpha"]))]);
+        assert_eq!(*mirror.resolved.lock().unwrap(), [(1, 10)]);
+        assert_eq!(*mirror.downloads.lock().unwrap(), [asset_url(1)]);
+        assert!(log.downloads.lock().unwrap().is_empty());
+        assert_eq!(names(&fx.addons), ["Alpha"]);
+        assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
+    }
+
+    #[test]
+    fn a_blocked_project_without_a_usable_mirror_is_skipped_with_the_reason() {
+        let fx = fixture();
+        let mirror = FakeMirror::default().without(
+            1,
+            Reason::DifferentVersion {
+                github: "v0".to_owned(),
+                curseforge: "file-10.zip".to_owned(),
+            },
+        );
+
+        let (outcomes, written) = install_mirrored(
+            &fx,
+            blocked_routes(1, 10),
+            &mirror,
+            &InstalledRecords::new(),
+            1,
+        );
+
+        assert_eq!(summary(&outcomes), [(1, Skipped, None)]);
+        assert_eq!(
+            outcomes[0].message.as_deref(),
+            Some(
+                "The author does not allow downloads from third-party apps and the GitHub copy cannot be used. The latest GitHub release (v0) is not the CurseForge file (file-10.zip)."
+            )
+        );
+        assert!(written.is_empty());
+        assert!(mirror.downloads.lock().unwrap().is_empty());
+        assert!(names(&fx.addons).is_empty());
+
+        // GitHub che non risponde è un errore, non un salto.
+        let mirror = FakeMirror::default().without(1, Reason::Failed("offline".to_owned()));
+        let (outcomes, _) = install_mirrored(
+            &fx,
+            blocked_routes(1, 10),
+            &mirror,
+            &InstalledRecords::new(),
+            1,
+        );
+        assert_eq!(summary(&outcomes), [(1, Failed, None)]);
+        assert!(outcomes[0].message.as_deref().unwrap().ends_with("offline"));
+    }
+
+    #[test]
+    fn an_allowed_project_asks_github_nothing() {
+        let fx = fixture();
+        let mirror = FakeMirror::default().with_release(1, &[("Other/Other.toc", "")]);
+
+        let (outcomes, written) = install_mirrored(
+            &fx,
+            routes(1, 10, &[("Alpha/Alpha.toc", "")]),
+            &mirror,
+            &InstalledRecords::new(),
+            1,
+        );
+
+        assert_eq!(summary(&outcomes), [(1, Installed, None)]);
+        assert_eq!(outcomes[0].message, None);
+        assert_eq!(written, [(1, record(10, &["Alpha"]))]);
+        assert!(mirror.resolved.lock().unwrap().is_empty());
+        assert!(mirror.downloads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_mirror_zip_with_a_folder_of_another_project_leaves_the_disk_unchanged() {
+        let fx = fixture();
+        write_folder(&fx.addons, "SharedLib", "## Title: Shared\n");
+        let records = InstalledRecords::from([(2, record(20, &["SharedLib"]))]);
+        let mirror = FakeMirror::default().with_release(
+            1,
+            &[("Alpha/Alpha.toc", ""), ("SharedLib/SharedLib.toc", "new")],
+        );
+
+        let (outcomes, written) =
+            install_mirrored(&fx, blocked_routes(1, 10), &mirror, &records, 1);
+
+        assert_eq!(summary(&outcomes), [(1, Failed, None)]);
+        let message = outcomes[0].message.as_deref().unwrap();
+        assert!(message.contains("project 2"), "{message}");
+        assert!(written.is_empty());
+        assert_eq!(names(&fx.addons), ["SharedLib"]);
+        assert_eq!(
+            fs::read_to_string(fx.addons.join("SharedLib").join("SharedLib.lua")).unwrap(),
+            "old"
+        );
+        assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
+    }
+
+    #[test]
+    fn blocked_dependencies_follow_the_same_mirror_rule() {
+        let fx = fixture();
+        let mut routes = graph(&[
+            (1, &[(2, REQUIRED), (3, REQUIRED), (4, REQUIRED)]),
+            (2, &[]),
+            (3, &[]),
+            (4, &[]),
+        ]);
+        routes.projects[1] = project(2, Some(false));
+        routes.projects[2] = project(3, Some(false));
+        let log = Arc::clone(&routes.log);
+        let mirror = FakeMirror::default().with_release(2, &[("P2/P2.toc", "")]);
+
+        let (outcomes, written) =
+            install_mirrored(&fx, routes, &mirror, &InstalledRecords::new(), 1);
+
+        assert_eq!(
+            summary(&outcomes),
+            [
+                (1, Installed, None),
+                (2, Installed, Some(1)),
+                (3, Skipped, Some(1)),
+                (4, Installed, Some(1)),
+            ]
+        );
+        assert!(
+            outcomes[1]
+                .message
+                .as_deref()
+                .unwrap()
+                .starts_with("Installed from GitHub")
+        );
+        assert!(
+            outcomes[2]
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("does not link a GitHub repository")
+        );
+        assert!(written.contains(&(2, record(20, &["P2"]))));
+        assert_eq!(*mirror.resolved.lock().unwrap(), [(2, 20), (3, 30)]);
+        let downloads = log.downloads.lock().unwrap();
+        assert!(!downloads.contains(&download_url(20)));
+        assert!(!downloads.contains(&download_url(30)));
+        assert_eq!(names(&fx.addons), ["P1", "P2", "P4"]);
+    }
+
+    fn check_mirror(routes: Routes, mirror: &FakeMirror) -> Result<MirrorAvailability, String> {
+        let fx = fixture();
+        github_mirror(
+            &fx.installation,
+            &client(routes),
+            mirror,
+            &VersionOverrides::new(),
+            1,
+            false,
+        )
+    }
+
+    #[test]
+    fn the_mirror_check_is_available_unavailable_or_not_needed() {
+        let mirror = FakeMirror::default().with_release(1, &[("Alpha/Alpha.toc", "")]);
+        assert_eq!(
+            check_mirror(blocked_routes(1, 10), &mirror),
+            Ok(MirrorAvailability {
+                available: true,
+                repo: Some(REPO.to_owned()),
+                tag: Some("v1".to_owned()),
+                reason: None,
+            })
+        );
+        assert_eq!(*mirror.resolved.lock().unwrap(), [(1, 10)]);
+        // Il controllo non scarica niente.
+        assert!(mirror.downloads.lock().unwrap().is_empty());
+
+        let mirror = FakeMirror::default();
+        assert_eq!(
+            check_mirror(blocked_routes(1, 10), &mirror),
+            Ok(MirrorAvailability {
+                available: false,
+                repo: None,
+                tag: None,
+                reason: Some(Reason::NoGithubSource.message()),
+            })
+        );
+
+        // Un progetto che CurseForge lascia scaricare: nessuna richiesta a GitHub.
+        let mirror = FakeMirror::default().with_release(1, &[("Alpha/Alpha.toc", "")]);
+        assert_eq!(
+            check_mirror(routes(1, 10, &[]), &mirror),
+            Ok(MirrorAvailability {
+                available: false,
+                repo: None,
+                tag: None,
+                reason: None,
+            })
+        );
+        assert!(mirror.resolved.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_mirror_check_without_a_file_or_project_asks_github_nothing() {
+        let mirror = FakeMirror::default().with_release(1, &[]);
+        // Nessun file per la versione del gioco: il motivo è quello dell'installazione.
+        let mut routes = blocked_routes(1, 10);
+        routes.projects[0]["latestFilesIndexes"] = json!([]);
+        let result = check_mirror(routes, &mirror).unwrap();
+        assert!(!result.available);
+        assert_eq!(
+            result.reason.as_deref(),
+            Some("There is no release file for this game version.")
+        );
+        // Un progetto che CurseForge non conosce, o CurseForge che non risponde, è un errore.
+        assert_eq!(
+            check_mirror(Routes::default(), &mirror),
+            Err("Addon not found on CurseForge.".to_owned())
+        );
+        let mut routes = blocked_routes(1, 10);
+        routes.broken.push(format!("{API}/v1/mods/1/files/10"));
+        assert!(check_mirror(routes, &mirror).is_err());
+        assert!(mirror.resolved.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_mirror_payload_is_camel_case() {
+        let json = serde_json::to_value(MirrorAvailability {
+            available: true,
+            repo: Some(REPO.to_owned()),
+            tag: Some("v1".to_owned()),
+            reason: None,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            json!({"available": true, "repo": REPO, "tag": "v1", "reason": null})
+        );
     }
 }
