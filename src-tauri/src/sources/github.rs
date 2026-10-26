@@ -9,6 +9,7 @@
 //!    letta senza seguire il redirect: deve essere `https://github.com/{owner}/{repo}/releases/tag/{tag}`
 //!    per lo stesso repository (un 404 vuol dire nessuna release). Un repository spostato
 //!    risponde con un redirect verso `releases/latest` del nuovo nome, seguito una volta sola;
+//!    un tag con `/` (`release/2.0`) non sta in un segmento e si legge dall'API;
 //! 2. quando serve scegliere lo zip, il `release.json` del packager da
 //!    `https://github.com/{owner}/{repo}/releases/download/{tag}/release.json`;
 //! 3. lo zip da `https://github.com/{owner}/{repo}/releases/download/{tag}/{filename}`.
@@ -276,6 +277,8 @@ impl<T: PublicTransport> GithubSource<T> {
                     });
                 }
                 Some(Target::Moved(moved)) if moves_left > 0 => current = moved,
+                // Il limite dell'API vale anche qui: è una lettura dell'API.
+                Some(Target::SlashedTag) => return self.api_release(&current),
                 _ => return Err(unrecognized()),
             }
         }
@@ -635,6 +638,10 @@ enum Target {
     Tag(String),
     /// `/{owner}/{repo}/releases/latest` di un altro nome: il repository è stato spostato.
     Moved(String),
+    /// Il tag dello stesso repository contiene `/` (`release/2.0`, un nome di tag valido per
+    /// git): non sta in un segmento di `releases/download/{tag}/`, quindi la release si legge
+    /// dall'API, che dà gli indirizzi giusti dei suoi asset.
+    SlashedTag,
 }
 
 /// Il redirect di `releases/latest` di `repo` richiesto a `from`: solo `https://github.com`,
@@ -652,12 +659,25 @@ fn latest_target(from: &str, location: Option<&str>, repo: &str) -> Option<Targe
     }
     let segments: Vec<&str> = url.path_segments()?.collect();
     match segments.as_slice() {
-        [owner, name, "releases", "tag", tag]
-            if format!("{owner}/{name}").eq_ignore_ascii_case(repo) =>
+        [owner, name, "releases", "tag", tag @ ..]
+            if !tag.is_empty() && format!("{owner}/{name}").eq_ignore_ascii_case(repo) =>
         {
-            percent_decode(tag)
-                .filter(|tag| is_file_name(tag))
-                .map(Target::Tag)
+            let parts: Vec<String> = tag
+                .iter()
+                .map(|part| percent_decode(part))
+                .collect::<Option<_>>()?;
+            match parts.as_slice() {
+                [tag] if is_file_name(tag) => Some(Target::Tag(tag.clone())),
+                // Ogni pezzo tra le `/` deve essere un nome: niente `..` né pezzi vuoti.
+                _ if parts
+                    .iter()
+                    .flat_map(|part| part.split('/'))
+                    .all(is_file_name) =>
+                {
+                    Some(Target::SlashedTag)
+                }
+                _ => None,
+            }
         }
         [owner, name, "releases", "latest"] => {
             let moved = format!("{owner}/{name}");
@@ -1356,9 +1376,10 @@ mod tests {
             Some("https://github.com/BigWigsMods/BigWigs/releases"),
             Some("https://github.com/BigWigsMods/BigWigs/releases/tag/"),
             Some("https://github.com/BigWigsMods/BigWigs/releases/tag/v1?x=1"),
-            Some("https://github.com/BigWigsMods/BigWigs/releases/tag/a/b"),
             Some("https://github.com/BigWigsMods/BigWigs/releases/tag/%2E%2E"),
-            Some("https://github.com/BigWigsMods/BigWigs/releases/tag/a%2Fb"),
+            Some("https://github.com/BigWigsMods/BigWigs/releases/tag/a/.."),
+            Some("https://github.com/BigWigsMods/BigWigs/releases/tag/a%2F%2E%2E"),
+            Some("https://github.com/someone/Other/releases/tag/a/b"),
             Some("https://github.com/BigWigsMods/BigWigs/releases/tag/%zz"),
         ] {
             assert_eq!(latest(bad), unrecognized, "{bad:?}");
@@ -1400,6 +1421,32 @@ mod tests {
                 "GitHub did not respond in time.".to_owned()
             ))
         );
+    }
+
+    /// Un tag con `/` (valido per git) non sta in `releases/download/{tag}/`: la release si legge
+    /// dall'API, con i suoi asset, invece di fallire.
+    #[test]
+    fn a_tag_with_a_slash_is_read_from_the_api() {
+        for location in [
+            "https://github.com/BigWigsMods/BigWigs/releases/tag/release/2.0",
+            "https://github.com/BigWigsMods/BigWigs/releases/tag/release%2F2.0",
+        ] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let mut fake = fake("release/2.0", &["A.zip"]);
+            fake.redirects.insert(LATEST.to_owned(), found(location));
+            fake.calls = Arc::clone(&calls);
+            let source = GithubSource::new(fake);
+            let release = source.latest_release(REPO).unwrap();
+            assert_eq!(release.tag_name, "release/2.0", "{location}");
+            assert_eq!(release.web_repo, None, "{location}");
+            let asset = source.choose_zip(&release, "retail").unwrap().unwrap();
+            assert_eq!(asset.name, "A.zip");
+            assert_eq!(
+                *calls.lock().unwrap(),
+                [LATEST.to_owned(), API_LATEST.to_owned()],
+                "{location}"
+            );
+        }
     }
 
     /// Un repository spostato rimanda a `releases/latest` del nuovo nome: si segue una volta.
