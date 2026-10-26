@@ -782,14 +782,20 @@ impl addon_import::Installer for CommandInstaller<'_> {
             .ok()
             .and_then(|store| store.overrides_for(&installation.id).ok())
             .unwrap_or_default();
-        // La versione del gioco che l'installazione userà: quella della voce, se c'è.
+        // La versione del gioco che l'installazione userà, con la stessa funzione: `install`
+        // salva quella della voce come versione forzata prima di rileggerle, quindi qui vale come
+        // già salvata.
         let projects: Vec<(u32, Option<u32>)> = available(SourceKind::Curseforge)
             .filter_map(|entry| {
                 let mod_id = entry.key.parse::<u32>().ok()?;
-                let version_type = entry
-                    .version_type
-                    .or_else(|| install_new::version_type_of(installation, &overrides, mod_id));
-                Some((mod_id, version_type))
+                let mut overrides = overrides.clone();
+                if let Some(version_type) = entry.version_type {
+                    overrides.insert(mod_id, version_type);
+                }
+                Some((
+                    mod_id,
+                    install_new::version_type_of(installation, &overrides, mod_id),
+                ))
             })
             .collect();
         // Senza record l'installazione si ferma comunque: niente da scaricare.
