@@ -383,6 +383,7 @@ fn refresh_blocking(
         client: &client,
         overrides,
         allow_beta,
+        github: Some(&github),
     };
     updates::refresh_addons(
         installation,
@@ -881,14 +882,16 @@ pub async fn check_updates(
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         let client = CurseForgeClient::new(transport, key);
+        let tukui = tukui_source()?;
+        let wowi = wowinterface_source()?;
+        let github = github_source()?;
+        // I progetti che CurseForge non lascia scaricare usano il mirror GitHub (D34).
         let curseforge = CurseForgeSource {
             client: &client,
             overrides: &overrides,
             allow_beta,
+            github: Some(&github),
         };
-        let tukui = tukui_source()?;
-        let wowi = wowinterface_source()?;
-        let github = github_source()?;
         let cache = app.state::<FingerprintCache>();
         updates::check_updates_with(
             &installation,
@@ -942,14 +945,16 @@ pub async fn update_addons(
         // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         let client = CurseForgeClient::new(transport, key);
+        let tukui = tukui_source()?;
+        let wowi = wowinterface_source()?;
+        let github = github_source()?;
+        // I progetti che CurseForge non lascia scaricare usano il mirror GitHub (D34).
         let curseforge = CurseForgeSource {
             client: &client,
             overrides: &overrides,
             allow_beta,
+            github: Some(&github),
         };
-        let tukui = tukui_source()?;
-        let wowi = wowinterface_source()?;
-        let github = github_source()?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         let cache = app.state::<FingerprintCache>();
         let addons_dir = installation.path.join("Interface").join("AddOns");

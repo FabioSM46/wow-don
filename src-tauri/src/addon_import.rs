@@ -436,6 +436,7 @@ mod tests {
             project_folders: also.iter().map(|f| (*f).to_owned()).collect(),
             installed_modules: Vec::new(),
             reinstall_file: None,
+            mirror: Default::default(),
         }
     }
 
