@@ -218,10 +218,21 @@ export type Dependency = { id: number; name: string };
  * Il dettaglio di un addon (`addon_detail`): i campi di `CatalogAddon` più la versione del
  * gioco usata, la descrizione, i file recenti e le dipendenze obbligatorie.
  */
+/** Un'immagine della gallery: URL pubblici del CDN di CurseForge, da caricare con `<img src>`.
+ *  Titolo e descrizione sono testo semplice (vuoti se mancano): si mostrano solo come testo. */
+export type Screenshot = {
+  title: string;
+  description: string;
+  thumbnailUrl: string;
+  url: string;
+};
+
 export type AddonDetail = CatalogAddon & {
   versionType: number;
   /** Testo semplice, che può contenere `<` e `>`: si mostra solo come testo, mai come HTML. */
   description: string;
+  /** Le immagini della gallery, nell'ordine dell'API. */
+  screenshots: Screenshot[];
   /** I file Release e Beta per la versione, dal più recente, al massimo 20. */
   files: DetailFile[];
   dependencies: Dependency[];

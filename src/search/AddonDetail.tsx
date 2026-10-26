@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorMessage, type AddonDetail, type CatalogAddon, type VersionType } from "../api";
 import { formatAuthors, formatCount, formatDate, formatDownloads } from "./catalog";
@@ -10,6 +10,8 @@ import {
   paragraphs,
   versionName,
 } from "./detail";
+import { Gallery } from "./Gallery";
+import { galleryLabel, tabIndexForKey } from "./gallery";
 
 type Props = {
   installationId: string;
@@ -32,7 +34,7 @@ type Load =
   | { status: "error"; message: string }
   | { status: "ready"; detail: AddonDetail };
 
-/** Il dettaglio di un addon dentro la tab Search: descrizione, file e dipendenze. */
+/** Il dettaglio di un addon dentro la tab Search: descrizione, gallery, file e dipendenze. */
 export function AddonDetailView({
   installationId,
   addon,
@@ -68,7 +70,7 @@ export function AddonDetailView({
 
   useEffect(() => {
     if (!active) return;
-    function onKeyDown(event: KeyboardEvent) {
+    function onKeyDown(event: globalThis.KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
       onBack();
@@ -152,32 +154,110 @@ export function AddonDetailView({
         </p>
       )}
 
-      {detail && <DetailBody detail={detail} versionTypes={versionTypes} />}
+      {/* La chiave riapre la tab Description quando cambia l'addon. */}
+      {detail && (
+        <DetailBody
+          key={detail.id}
+          detail={detail}
+          versionTypes={versionTypes}
+          active={active}
+        />
+      )}
     </article>
   );
 }
 
+type DetailTab = "description" | "gallery";
+
+const DETAIL_TABS: DetailTab[] = ["description", "gallery"];
+
 function DetailBody({
   detail,
   versionTypes,
+  active,
 }: {
   detail: AddonDetail;
   versionTypes: VersionType[];
+  active: boolean;
 }) {
+  const [tab, setTab] = useState<DetailTab>("description");
+  const tabRefs = useRef<Partial<Record<DetailTab, HTMLButtonElement | null>>>({});
   const text = paragraphs(detail.description);
   const version = versionName(versionTypes, detail.versionType);
+  const labels: Record<DetailTab, string> = {
+    description: "Description",
+    gallery: galleryLabel(detail.screenshots.length),
+  };
+
+  function focusTab(next: DetailTab) {
+    setTab(next);
+    tabRefs.current[next]?.focus();
+  }
+
+  // Stesso pattern delle tab dell'app: frecce con giro, Home e Fine; la tab si attiva insieme
+  // al focus.
+  function onTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const next = tabIndexForKey(event.key, DETAIL_TABS.indexOf(tab), DETAIL_TABS.length);
+    if (next === null) return;
+    event.preventDefault();
+    focusTab(DETAIL_TABS[next]);
+  }
 
   return (
     <div className="detail-body">
-      <section className="detail-section detail-description" aria-label="Description">
-        <h3>Description</h3>
-        {text.length === 0 ? (
-          <p className="empty">The author has not written a description.</p>
-        ) : (
-          // Testo semplice: React lo mostra come testo, mai come HTML.
-          text.map((paragraph, index) => <p key={index}>{paragraph}</p>)
-        )}
-      </section>
+      <div className="detail-main">
+        <div
+          className="tabs detail-tabs"
+          role="tablist"
+          aria-label="Addon details"
+          onKeyDown={onTabKeyDown}
+        >
+          {DETAIL_TABS.map((id) => (
+            <button
+              key={id}
+              ref={(element) => {
+                tabRefs.current[id] = element;
+              }}
+              id={`detail-tab-${id}`}
+              className="tab"
+              role="tab"
+              aria-selected={tab === id}
+              aria-controls={`detail-panel-${id}`}
+              tabIndex={tab === id ? 0 : -1}
+              onClick={() => focusTab(id)}
+            >
+              {labels[id]}
+            </button>
+          ))}
+        </div>
+
+        <div
+          id="detail-panel-description"
+          className="detail-panel detail-description"
+          role="tabpanel"
+          aria-labelledby="detail-tab-description"
+          hidden={tab !== "description"}
+        >
+          {text.length === 0 ? (
+            <p className="empty">The author has not written a description.</p>
+          ) : (
+            // Testo semplice: React lo mostra come testo, mai come HTML.
+            text.map((paragraph, index) => <p key={index}>{paragraph}</p>)
+          )}
+        </div>
+
+        <div
+          id="detail-panel-gallery"
+          className="detail-panel"
+          role="tabpanel"
+          aria-labelledby="detail-tab-gallery"
+          hidden={tab !== "gallery"}
+        >
+          {tab === "gallery" && (
+            <Gallery screenshots={detail.screenshots} active={active} />
+          )}
+        </div>
+      </div>
 
       <div className="detail-side">
         <section className="detail-section" aria-label="Files">
