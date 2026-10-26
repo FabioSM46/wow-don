@@ -8,6 +8,7 @@ mod commands;
 mod config;
 mod discovery;
 mod install;
+mod install_link;
 mod install_local;
 mod install_new;
 mod installations;
@@ -79,6 +80,8 @@ pub fn run() {
             commands::update_addons,
             commands::install_addon,
             commands::install_zip,
+            commands::resolve_link,
+            commands::install_from_link,
             commands::remove_addons,
             commands::search_catalog,
             commands::list_categories,

@@ -47,6 +47,24 @@ pub struct UpdateTarget<'a> {
     pub progress: &'a ProgressSink<'a>,
 }
 
+/// Quello che una fonte dice di un progetto prima di installarlo da un link (issue #109).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkInfo {
+    pub name: String,
+    /// La versione che si installerebbe, come la scrive la fonte.
+    pub version: String,
+    /// Se WoW-don lo può scaricare per il gioco dell'installazione.
+    pub downloadable: bool,
+    /// Perché non si può scaricare, o un avviso su quello che si installerebbe.
+    pub message: Option<String>,
+    /// La pagina del progetto sul sito della fonte.
+    pub url: String,
+}
+
+/// Controlla le cartelle di primo livello di uno zip estratto prima che sostituiscano quelle in
+/// `AddOns`: un `Err` annulla l'installazione senza toccare il disco.
+pub type FolderCheck<'a> = dyn Fn(&[String]) -> Result<(), String> + 'a;
+
 /// Scrive in `installed-addons.json` quello che una fonte ha appena installato.
 pub type RecordWriter<'a> = dyn FnMut(SourceKind, &str, SourceRecord) -> Result<(), String> + 'a;
 

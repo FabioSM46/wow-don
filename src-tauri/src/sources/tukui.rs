@@ -19,7 +19,7 @@ use serde::Deserialize;
 
 use super::curseforge::{MAX_DOWNLOAD_BYTES, TransportError};
 use super::http::{DownloadProgress, PublicTransport, is_allowed_url};
-use super::{RecordWriter, Source, SourceKind, UpdateTarget};
+use super::{FolderCheck, LinkInfo, RecordWriter, Source, SourceKind, UpdateTarget};
 use crate::addons::scan::InstalledAddon;
 use crate::addons::toc;
 use crate::install;
@@ -145,12 +145,14 @@ impl<T: PublicTransport> TukuiSource<T> {
 
     /// Installa un progetto Tukui che non c'è ancora (l'import, issue #134). Vale se `patch`
     /// elenca il gioco dell'installazione oppure se un `.toc` dello zip lo dichiara, come per
-    /// il controllo (`patch` non elenca WoW Forever). L'esito usa la forma di un aggiornamento:
-    /// `updated` vuol dire installato.
+    /// il controllo (`patch` non elenca WoW Forever). `check` può rifiutare le cartelle dello zip
+    /// prima che tocchino il disco. L'esito usa la forma di un aggiornamento: `updated` vuol dire
+    /// installato.
     pub fn install_new(
         &self,
         installation: &Installation,
         key: &str,
+        check: &FolderCheck<'_>,
         record: &mut RecordWriter<'_>,
         progress: &ProgressSink<'_>,
     ) -> UpdateOutcome {
@@ -184,6 +186,7 @@ impl<T: PublicTransport> TukuiSource<T> {
             if !listed && !declares_game(staging.path(), &folders, &installation.flavor) {
                 return Ok(None);
             }
+            check(&folders)?;
             reporter.phase(Phase::Installing);
             install::replace(&addons_dir, staging.path(), &[])?;
             Ok::<_, String>(Some(folders))
@@ -217,6 +220,41 @@ impl<T: PublicTransport> TukuiSource<T> {
             summary(&addon.version, addon.last_update.as_deref()),
             message,
         )
+    }
+}
+
+impl<T: PublicTransport> TukuiSource<T> {
+    /// L'anteprima di un link (issue #109): nome, versione e pagina dall'elenco di Tukui. Si
+    /// può scaricare se Tukui lo elenca; se `patch` non nomina il gioco dell'installazione lo
+    /// dice il messaggio, perché l'installazione guarda anche i `.toc` dello zip (`patch` non
+    /// elenca WoW Forever). `Err` se l'elenco non si legge o non contiene il progetto.
+    pub fn preview(&self, installation: &Installation, key: &str) -> Result<LinkInfo, String> {
+        let addon = self
+            .cached()?
+            .into_iter()
+            .find(|a| a.id.to_string() == key)
+            .ok_or_else(|| "Tukui does not list this addon.".to_owned())?;
+        let listed = addon
+            .patch
+            .iter()
+            .filter_map(|patch| patch_interface(patch))
+            .any(|interface| fits(&installation.flavor, interface));
+        let message = (!listed).then(|| {
+            "Tukui does not list this game version: the addon's files are checked when installing."
+                .to_owned()
+        });
+        let url = addon
+            .web_url
+            .clone()
+            .filter(|url| reqwest::Url::parse(url).is_ok_and(|url| is_allowed_url(&url, &DOMAINS)))
+            .unwrap_or_else(|| "https://tukui.org".to_owned());
+        Ok(LinkInfo {
+            name: addon.name,
+            version: addon.version,
+            downloadable: true,
+            message,
+            url,
+        })
     }
 }
 
@@ -1042,6 +1080,7 @@ mod tests {
                 name: "Test".to_owned(),
             },
             key,
+            &|_| Ok(()),
             &mut |source, key, record| {
                 assert_eq!(source, TUKUI);
                 written.push(format!(

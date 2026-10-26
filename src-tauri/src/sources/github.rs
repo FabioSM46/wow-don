@@ -28,7 +28,7 @@ use serde::Deserialize;
 
 use super::curseforge::{MAX_DOWNLOAD_BYTES, TransportError};
 use super::http::{DownloadProgress, PublicTransport, is_allowed_url};
-use super::{RecordWriter, Source, SourceKind, UpdateTarget};
+use super::{FolderCheck, LinkInfo, RecordWriter, Source, SourceKind, UpdateTarget};
 use crate::addons::scan::InstalledAddon;
 use crate::addons::toc;
 use crate::installations::Installation;
@@ -293,8 +293,9 @@ impl<T: PublicTransport> GithubSource<T> {
         Ok(response.body)
     }
 
-    /// Scarica `asset` e lo installa al posto di `old_folders`, poi registra il tag. L'esito usa
-    /// la forma di un aggiornamento: `updated` vuol dire installato.
+    /// Scarica `asset` e lo installa al posto di `old_folders`, poi registra il tag. `check`
+    /// può rifiutare le cartelle dello zip prima che tocchino il disco. L'esito usa la forma di
+    /// un aggiornamento: `updated` vuol dire installato.
     #[allow(clippy::too_many_arguments)]
     fn install(
         &self,
@@ -303,6 +304,7 @@ impl<T: PublicTransport> GithubSource<T> {
         asset: &Asset,
         addons_dir: &std::path::Path,
         old_folders: &[String],
+        check: &FolderCheck<'_>,
         record: &mut RecordWriter<'_>,
         progress: &ProgressSink<'_>,
     ) -> UpdateOutcome {
@@ -317,7 +319,7 @@ impl<T: PublicTransport> GithubSource<T> {
         };
         reporter.downloaded(bytes.len() as u64);
         let folders =
-            match updates::install_bytes(&bytes, addons_dir, old_folders, &|_| Ok(()), &reporter) {
+            match updates::install_bytes(&bytes, addons_dir, old_folders, check, &reporter) {
                 Ok(folders) => folders,
                 Err(error) => return UpdateOutcome::error(GITHUB, key, name, error),
             };
@@ -336,12 +338,14 @@ impl<T: PublicTransport> GithubSource<T> {
         UpdateOutcome::updated(GITHUB, key, name, summary_of(release), message)
     }
 
-    /// Installa un progetto GitHub che non c'è ancora (l'import, issue #134), con la stessa
-    /// scelta dello zip del controllo.
+    /// Installa un progetto GitHub che non c'è ancora (l'import, issue #134, e i link, issue
+    /// #109), con la stessa scelta dello zip del controllo. `check` può rifiutare le cartelle
+    /// dello zip prima che tocchino il disco.
     pub fn install_new(
         &self,
         installation: &Installation,
         key: &str,
+        check: &FolderCheck<'_>,
         record: &mut RecordWriter<'_>,
         progress: &ProgressSink<'_>,
     ) -> UpdateOutcome {
@@ -356,7 +360,35 @@ impl<T: PublicTransport> GithubSource<T> {
             Err(error) => return UpdateOutcome::skipped(GITHUB, key, name, &error),
         };
         let addons_dir = installation.path.join("Interface").join("AddOns");
-        self.install(key, &release, &asset, &addons_dir, &[], record, progress)
+        self.install(
+            key,
+            &release,
+            &asset,
+            &addons_dir,
+            &[],
+            check,
+            record,
+            progress,
+        )
+    }
+
+    /// L'anteprima di un link (issue #109): l'ultima release e se ha uno zip per il gioco
+    /// dell'installazione, con la stessa scelta dell'installazione. Una sola richiesta all'API,
+    /// che l'installazione riusa dalla cache. `Err` se la release non si legge.
+    pub fn preview(&self, installation: &Installation, key: &str) -> Result<LinkInfo, String> {
+        let release = self.latest(key)?;
+        let (downloadable, message) = match self.choose(&release, &installation.flavor) {
+            Ok(Some(_)) => (true, None),
+            Ok(None) => (false, Some(WEBSITE_ONLY.to_owned())),
+            Err(error) => (false, Some(error)),
+        };
+        Ok(LinkInfo {
+            name: repo_name(key).to_owned(),
+            version: release.tag_name,
+            downloadable,
+            message,
+            url: format!("https://github.com/{key}"),
+        })
     }
 }
 
@@ -570,6 +602,7 @@ impl<T: PublicTransport> Source for GithubSource<T> {
             &asset,
             target.addons_dir,
             &old_folders,
+            &|_| Ok(()),
             record,
             target.progress,
         )
@@ -1215,6 +1248,7 @@ mod tests {
         let outcome = GithubSource::new(fake).install_new(
             &installation,
             REPO,
+            &|_| Ok(()),
             &mut |_, key, record| {
                 written.push(format!(
                     "{key}={}:{}",

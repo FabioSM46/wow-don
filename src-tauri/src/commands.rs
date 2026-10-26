@@ -16,6 +16,7 @@ use crate::backup::{self, BackupInfo};
 use crate::catalog::{self, AddonDetail, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
 use crate::config::Config;
 use crate::discovery::{self, DiscoveredInstallation};
+use crate::install_link::{self, LinkPreview, LinkSources};
 use crate::install_local::{self, LocalInstall};
 use crate::install_new::{self, InstallOutcome};
 use crate::installations::Installation;
@@ -731,11 +732,21 @@ impl addon_import::Installer for CommandInstaller<'_> {
                     )
                 };
                 let outcome = if entry.source == SourceKind::Tukui {
-                    self.tukui
-                        .install_new(installation, &entry.key, &mut record, &progress)
+                    self.tukui.install_new(
+                        installation,
+                        &entry.key,
+                        &|_| Ok(()),
+                        &mut record,
+                        &progress,
+                    )
                 } else {
-                    self.github
-                        .install_new(installation, &entry.key, &mut record, &progress)
+                    self.github.install_new(
+                        installation,
+                        &entry.key,
+                        &|_| Ok(()),
+                        &mut record,
+                        &progress,
+                    )
                 };
                 let status = match outcome.status {
                     updates::OutcomeStatus::Updated => EntryStatus::Installed,
@@ -1058,6 +1069,81 @@ pub async fn install_zip(
             }
         }
         Ok(result)
+    })
+    .await
+    .map_err(|error| format!("The installation was interrupted ({error})."))?
+}
+
+/// Riconosce un link di GitHub, WoWInterface o Tukui e ne restituisce l'anteprima (issue #109):
+/// fonte, id, nome, versione, se si può scaricare per l'installazione, pagina del progetto e se
+/// l'app l'ha già installato. Un link non riconosciuto o malformato è un errore prima di
+/// qualunque richiesta di rete; la rete gira fuori dal thread principale.
+#[tauri::command]
+pub async fn resolve_link(
+    installation_id: String,
+    url: String,
+    store: Store<'_>,
+    installed: Installed<'_>,
+) -> Result<LinkPreview, String> {
+    let target = install_link::parse_link(&url)?;
+    let installation = find_installation(&store, &installation_id)?;
+    let records = records_for_matching(&installed, &installation.id);
+    tauri::async_runtime::spawn_blocking(move || {
+        // Le fonti bloccanti di reqwest vanno create e distrutte fuori dal runtime asincrono.
+        let (github, wowinterface, tukui) =
+            (github_source()?, wowinterface_source()?, tukui_source()?);
+        let sources = LinkSources {
+            github: &github,
+            wowinterface: &wowinterface,
+            tukui: &tukui,
+        };
+        install_link::preview(&installation, &sources, &records, &target)
+    })
+    .await
+    .map_err(|error| format!("Reading the link was interrupted ({error})."))?
+}
+
+/// Installa il progetto `id` della fonte `source` (`github`, `wowinterface` o `tukui`) letto da
+/// [`resolve_link`]. Un progetto già installato si salta senza rete; una cartella dello zip di un
+/// altro progetto fa fallire l'installazione senza toccare il disco. Tiene [`InstallLock`] e
+/// legge lì i record di tutte le fonti: un registro illeggibile blocca l'installazione, perché
+/// senza record non si sa quali cartelle appartengono ad altri progetti. Registra il progetto in
+/// `installed-addons.json` e restituisce un esito con la forma di `UpdateOutcome`.
+#[tauri::command]
+pub async fn install_from_link(
+    installation_id: String,
+    source: SourceKind,
+    id: String,
+    app: AppHandle,
+    store: Store<'_>,
+) -> Result<UpdateOutcome, String> {
+    let installation = find_installation(&store, &installation_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = app.state::<InstallLock>();
+        let _held = lock.hold();
+        let installed = app.state::<Mutex<InstalledAddonsStore>>();
+        let records = locked_installed(&installed)?.source_records_for(&installation.id)?;
+        let (github, wowinterface, tukui) =
+            (github_source()?, wowinterface_source()?, tukui_source()?);
+        let sources = LinkSources {
+            github: &github,
+            wowinterface: &wowinterface,
+            tukui: &tukui,
+        };
+        let cache = app.state::<FingerprintCache>();
+        let addons_dir = installation.path.join("Interface").join("AddOns");
+        Ok(install_link::install(
+            &installation,
+            &sources,
+            &records,
+            source,
+            &id,
+            &mut |source, key, record| {
+                cache.forget(&addons_dir, &record.folders);
+                locked_installed(&installed)?.record_source(&installation.id, source, key, record)
+            },
+            &emit_progress(&app, &installation.id),
+        ))
     })
     .await
     .map_err(|error| format!("The installation was interrupted ({error})."))?

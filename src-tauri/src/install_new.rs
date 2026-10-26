@@ -463,7 +463,7 @@ fn check_foreign_folders(
 }
 
 /// Le cartelle in `AddOns`: nome in minuscolo → nome sul disco.
-fn folder_names(addons_dir: &Path) -> Result<HashMap<String, String>, String> {
+pub(crate) fn folder_names(addons_dir: &Path) -> Result<HashMap<String, String>, String> {
     let entries = match fs::read_dir(addons_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
