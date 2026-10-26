@@ -338,6 +338,7 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
                     project_folders: Vec::new(),
                     installed_modules: Vec::new(),
                     reinstall_file: None,
+                    mirror: Default::default(),
                 });
                 continue;
             };
@@ -393,6 +394,7 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
                 project_folders,
                 installed_modules: Vec::new(),
                 reinstall_file: None,
+                mirror: Default::default(),
             });
         }
         Ok(updates)
@@ -852,6 +854,7 @@ mod tests {
                         project_folders: Vec::new(),
                         installed_modules: Vec::new(),
                         reinstall_file: None,
+                        mirror: Default::default(),
                     })
                     .collect())
             }

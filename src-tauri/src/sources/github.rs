@@ -332,7 +332,9 @@ impl<T: PublicTransport> GithubSource<T> {
             })
     }
 
-    fn download(
+    /// Scarica `asset` solo dai domini di GitHub e con il limite di dimensione dei download: lo
+    /// usa anche il mirror dei progetti CurseForge bloccati (issue #163).
+    pub(crate) fn download(
         &self,
         asset: &Asset,
         progress: &mut DownloadProgress<'_>,
@@ -614,6 +616,7 @@ impl<T: PublicTransport> Source for GithubSource<T> {
                     project_folders: record.folders.clone(),
                     installed_modules: Vec::new(),
                     reinstall_file: None,
+                    mirror: Default::default(),
                 });
             }
         }
