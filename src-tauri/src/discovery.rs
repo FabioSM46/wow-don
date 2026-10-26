@@ -85,7 +85,9 @@ pub fn examine(candidates: &[Candidate], known: &[Installation]) -> Vec<Discover
 
 /// Se la cartella `_<flavor>_` contiene ancora il gioco: il file `.flavor.info` che il launcher
 /// scrive in ogni cartella installata, un eseguibile `Wow*.exe` (Windows e Wine: `Wow.exe`,
-/// `WowClassic.exe`, `WowB.exe`, `WowT.exe`) o un bundle `*.app` (macOS). Disinstallando una
+/// `WowClassic.exe`, `WowB.exe`, `WowT.exe`) o un bundle `*.app` (macOS: il bundle sta dentro
+/// la cartella, per esempio `_retail_/World of Warcraft.app`, ed è una cartella, non un file
+/// che un residuo potrebbe imitare). Disinstallando una
 /// versione, il launcher lascia la cartella con qualche file residuo (librerie, `D3D12`) ma
 /// senza nessuno di questi: non è un'installazione da suggerire. Nomi senza distinguere
 /// maiuscole e minuscole, come il gioco.
@@ -97,7 +99,7 @@ fn has_game_files(dir: &Path) -> bool {
         let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
         name == ".flavor.info"
             || (name.starts_with("wow") && name.ends_with(".exe"))
-            || name.ends_with(".app")
+            || (name.ends_with(".app") && entry.file_type().is_ok_and(|kind| kind.is_dir()))
     })
 }
 
@@ -429,6 +431,9 @@ mod tests {
         }
         std::fs::create_dir_all(game.join("_classic_").join("World of Warcraft Classic.app"))
             .unwrap();
+        // Un file `.app` non è un bundle.
+        std::fs::create_dir_all(game.join("_ptr_")).unwrap();
+        std::fs::write(game.join("_ptr_").join("World of Warcraft.app"), b"").unwrap();
 
         let found = examine(&[Candidate::new(game, "Program Files")], &[]);
         assert_eq!(
