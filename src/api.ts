@@ -112,6 +112,14 @@ export type AddonUpdate = {
   versionOverride: number | null;
   /** Le cartelle del file riconosciuto per questa cartella; vuoto se non riconosciuta. */
   projectFolders: string[];
+  /**
+   * Il mirror GitHub di un progetto CurseForge bloccato con un aggiornamento (D34, issue #163):
+   * con un mirror Update e Reinstall scaricano da GitHub. `null` quando non è stato calcolato
+   * (progetto non bloccato, aggiornato o di un'altra fonte) o non si può usare.
+   */
+  githubMirror: GithubMirror | null;
+  /** Perché il mirror non si può usare (in inglese); `null` con un mirror o senza calcolo. */
+  githubMirrorReason: string | null;
 } & (
   | { status: "notMatched" }
   | { status: "upToDate" }
@@ -120,6 +128,21 @@ export type AddonUpdate = {
   | { status: "betaOnly"; latest: FileSummary }
   | { status: "error"; message: string }
 );
+
+/** Il mirror GitHub di un progetto CurseForge bloccato: `owner/repo` e il tag della release. */
+export type GithubMirror = { repo: string; tag: string };
+
+/**
+ * Esito di `github_mirror` (issue #164) per un progetto della Search. `available`: `install_addon`
+ * lo installa da GitHub (`repo`, `tag`). Altrimenti `reason` dice perché; `reason` è `null` per
+ * un progetto che CurseForge lascia scaricare (nessuna richiesta a GitHub).
+ */
+export type MirrorAvailability = {
+  available: boolean;
+  repo: string | null;
+  tag: string | null;
+  reason: string | null;
+};
 
 /** Esito di `update_addons` per un progetto; `message` spiega `skipped` ed `error`. */
 export type UpdateOutcome = {
@@ -405,6 +428,13 @@ export const api = {
   /** `fileId` assente: l'ultimo Release per la versione del gioco del progetto. */
   installAddon: (installationId: string, modId: number, fileId?: number) =>
     invoke<InstallOutcome[]>("install_addon", { installationId, modId, fileId: fileId ?? null }),
+  /**
+   * Il mirror GitHub di un progetto CurseForge bloccato (issue #164), per lo stesso `fileId` di
+   * `installAddon`. Fa richieste a GitHub (60 l'ora): si chiama solo dal dettaglio o da Install,
+   * mai per tutti i risultati della ricerca.
+   */
+  githubMirror: (installationId: string, modId: number, fileId?: number) =>
+    invoke<MirrorAvailability>("github_mirror", { installationId, modId, fileId: fileId ?? null }),
   /** Un link non riconosciuto o malformato è rifiutato con un messaggio che dice cosa incollare. */
   resolveLink: (installationId: string, url: string) =>
     invoke<LinkPreview>("resolve_link", { installationId, url }),

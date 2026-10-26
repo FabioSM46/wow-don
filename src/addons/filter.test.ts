@@ -53,6 +53,8 @@ function checked(
             installedFile: { id: 1, name: "file", date: "2026-10-01T00:00:00Z" },
             versionOverride: null,
             projectFolders: match[1],
+            githubMirror: null,
+            githubMirrorReason: null,
             status: "upToDate",
           }
         : {
@@ -62,6 +64,8 @@ function checked(
             installedFile: null,
             versionOverride: null,
             projectFolders: [],
+            githubMirror: null,
+            githubMirrorReason: null,
             status: "notMatched",
           };
       return [a.folder, update];
@@ -370,6 +374,8 @@ function fromSources(entries: [InstalledAddon, SourceKind, string, string[]][]):
         installedFile: null,
         versionOverride: null,
         projectFolders: folders,
+        githubMirror: null,
+        githubMirrorReason: null,
         status: "upToDate",
       },
     ]),

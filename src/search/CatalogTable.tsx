@@ -2,6 +2,7 @@ import type { KeyboardEvent, ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CatalogAddon } from "../api";
 import { formatAuthors, formatCount, formatDate, formatDownloads } from "./catalog";
+import { blockedHint, type BlockedHint } from "./mirror";
 
 type Props = {
   addons: CatalogAddon[];
@@ -10,10 +11,19 @@ type Props = {
   selectedId?: number | null;
   /** Le azioni di una riga (per esempio Install), in un'ultima colonna. */
   renderActions?: (addon: CatalogAddon) => ReactNode;
+  /** L'etichetta di un addon che CurseForge non lascia scaricare, con l'esito del mirror
+   *  GitHub se è stato controllato (issue #165). */
+  hintFor?: (addon: CatalogAddon) => BlockedHint;
 };
 
 /** La tabella dei risultati del catalogo: logo, nome, sommario, autore, download, data. */
-export function CatalogTable({ addons, onSelect, selectedId = null, renderActions }: Props) {
+export function CatalogTable({
+  addons,
+  onSelect,
+  selectedId = null,
+  renderActions,
+  hintFor = () => blockedHint(undefined),
+}: Props) {
   function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, addon: CatalogAddon) {
     if (event.target !== event.currentTarget) return;
     if (event.key === "Enter" || event.key === " ") {
@@ -61,7 +71,7 @@ export function CatalogTable({ addons, onSelect, selectedId = null, renderAction
                 )}
               </td>
               <td>
-                <NameCell addon={addon} />
+                <NameCell addon={addon} hint={addon.allowModDistribution ? null : hintFor(addon)} />
               </td>
               <td>
                 <span className="summary" title={addon.summary || undefined}>
@@ -86,8 +96,9 @@ export function CatalogTable({ addons, onSelect, selectedId = null, renderAction
   );
 }
 
-/** Il nome (link alla pagina su CurseForge), il segno "Installed" e il download solo manuale. */
-function NameCell({ addon }: { addon: CatalogAddon }) {
+/** Il nome (link alla pagina su CurseForge), il segno "Installed" e l'etichetta di un addon
+ *  che CurseForge non lascia scaricare. */
+function NameCell({ addon, hint }: { addon: CatalogAddon; hint: BlockedHint | null }) {
   const name = addon.name || `#${addon.id}`;
   return (
     <>
@@ -107,12 +118,9 @@ function NameCell({ addon }: { addon: CatalogAddon }) {
         <span className="addon-title">{name}</span>
       )}
       {addon.installed && <span className="tag">Installed</span>}
-      {!addon.allowModDistribution && (
-        <span
-          className="hint"
-          title="The author does not allow downloads from other apps: get it from the CurseForge website."
-        >
-          Manual download only
+      {hint && (
+        <span className="hint" title={hint.title}>
+          {hint.label}
         </span>
       )}
     </>

@@ -3,6 +3,7 @@
 
 import type { AddonUpdate, RemoveResult } from "../api";
 import { groupUpdate, type AddonGroup } from "./filter.ts";
+import { reinstallBlockedReason } from "./mirror.ts";
 import { projectId, type ProjectRef } from "./sources.ts";
 
 /**
@@ -56,15 +57,21 @@ export function foldersOf(groups: AddonGroup[]): string[] {
   return [...folders];
 }
 
-/** I progetti da reinstallare: uno per fonte e id, dai gruppi che hanno una fonte. */
+/**
+ * I progetti da reinstallare: uno per fonte e id, dai gruppi che hanno una fonte. Restano fuori
+ * i progetti che il backend salterebbe di sicuro (`reinstallBlockedReason`, issue #165).
+ */
 export function reinstallProjects(
   groups: AddonGroup[],
   updates?: Map<string, AddonUpdate>,
 ): ProjectRef[] {
   const projects = new Map<string, ProjectRef>();
   for (const group of groups) {
-    const project = groupUpdate(group, updates)?.project;
-    if (project) projects.set(projectId(project), { source: project.source, key: project.key });
+    const update = groupUpdate(group, updates);
+    const project = update?.project;
+    if (project && reinstallBlockedReason(update) === null) {
+      projects.set(projectId(project), { source: project.source, key: project.key });
+    }
   }
   return [...projects.values()];
 }
@@ -103,16 +110,7 @@ export function menuItems(
   let reinstallReason: string | null = null;
   if (state.busy) reinstallReason = BUSY_REASON;
   else if (count === 0) reinstallReason = "No addons selected.";
-  else if (projects.length === 0) {
-    reinstallReason =
-      state.updates === undefined
-        ? state.checking
-          ? "Wait for the update check to finish: it finds the source of each addon."
-          : "Check for updates first: it finds the source of each addon."
-        : count === 1
-          ? "No recognized source: this addon was not found on CurseForge, Tukui, WoWInterface or GitHub."
-          : "No recognized source: none of these addons was found on CurseForge, Tukui, WoWInterface or GitHub.";
-  }
+  else if (projects.length === 0) reinstallReason = noProjectsReason(targets, state);
   const removeReason = state.busy ? BUSY_REASON : count === 0 ? "No addons selected." : null;
   if (!selecting) {
     return [
@@ -126,6 +124,29 @@ export function menuItems(
     { action: "remove", label: `Remove ${count}`, disabledReason: removeReason },
     { action: "clear", label: "Clear selection", disabledReason: null },
   ];
+}
+
+/** Perché Reinstall è spento quando nessuno dei gruppi ha un progetto da reinstallare. */
+function noProjectsReason(targets: AddonGroup[], state: MenuState): string {
+  const count = targets.length;
+  // Progetti bloccati da CurseForge il cui mirror GitHub non si può usare (issue #165).
+  const blocked = targets
+    .map((group) => reinstallBlockedReason(groupUpdate(group, state.updates)))
+    .filter((reason): reason is string => reason !== null);
+  if (blocked.length > 0) {
+    if (count === 1) return blocked[0];
+    return blocked.length === count
+      ? "CurseForge blocks third-party downloads of these addons and their GitHub copies cannot be used."
+      : "None of these addons can be reinstalled: no recognized source, or CurseForge blocks the download and the GitHub copy cannot be used.";
+  }
+  if (state.updates === undefined) {
+    return state.checking
+      ? "Wait for the update check to finish: it finds the source of each addon."
+      : "Check for updates first: it finds the source of each addon.";
+  }
+  return count === 1
+    ? "No recognized source: this addon was not found on CurseForge, Tukui, WoWInterface or GitHub."
+    : "No recognized source: none of these addons was found on CurseForge, Tukui, WoWInterface or GitHub.";
 }
 
 function plural(count: number, one: string, many: string): string {

@@ -48,6 +48,8 @@ function matched(folder: string, source: SourceKind): AddonUpdate {
     installedFile: null,
     versionOverride: null,
     projectFolders: [folder],
+    githubMirror: null,
+    githubMirrorReason: null,
     status: "upToDate",
   };
 }
