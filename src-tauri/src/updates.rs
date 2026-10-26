@@ -179,6 +179,11 @@ pub struct AddonUpdate {
     /// backend.
     #[serde(skip)]
     pub installed_modules: Vec<FileModule>,
+    /// Il file che la regola unica [`pick_file`] sceglie per il progetto, anche quando è quello
+    /// installato: la reinstallazione (issue #148) scarica questo. `None` se la regola non
+    /// sceglie niente o la fonte non lo usa. Resta nel backend: il JSON non cambia.
+    #[serde(skip)]
+    pub reinstall_file: Option<FileSummary>,
 }
 
 /// Abbina e valuta. `version_type` è il `gameVersionTypeId` dell'installazione; `overrides`
@@ -233,6 +238,7 @@ pub fn evaluate_with(
                 version_override: None,
                 project_folders: Vec::new(),
                 installed_modules: Vec::new(),
+                reinstall_file: None,
             };
             let Some(fingerprint) = addon.fingerprint else {
                 update.source = Some(SourceKind::Curseforge);
@@ -261,7 +267,9 @@ pub fn evaluate_with(
             update.project_folders = found.file.modules.iter().map(|m| m.name.clone()).collect();
             update.version_override = overrides.get(&found.id).copied();
             let target = update.version_override.unwrap_or(version_type);
-            update.status = match newest_file(found, target, allow_beta) {
+            let picked = newest_file(found, target, allow_beta);
+            update.reinstall_file = picked.map(FileSummary::from);
+            update.status = match picked {
                 Some(latest) if is_newer(latest, &found.file) => UpdateStatus::UpdateAvailable {
                     latest: FileSummary::from(latest),
                 },
@@ -494,6 +502,7 @@ fn unclaimed(addon: &InstalledAddon, status: UpdateStatus) -> AddonUpdate {
         version_override: None,
         project_folders: Vec::new(),
         installed_modules: Vec::new(),
+        reinstall_file: None,
     }
 }
 
@@ -559,14 +568,9 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
             );
         }
         let Ok(mod_id) = target.key.parse::<u32>() else {
-            return UpdateOutcome::skipped(
-                SourceKind::Curseforge,
-                target.key,
-                "",
-                "Not found among the installed addons.",
-            );
+            return target.not_found(SourceKind::Curseforge);
         };
-        update_project(target, self.client, mod_id, record)
+        update_project(target, self.client, mod_id, self.allow_beta, record)
     }
 }
 
@@ -667,18 +671,23 @@ pub fn update_addons(
         sources,
         records,
         projects,
+        false,
         record,
         progress,
     )
 }
 
-/// Come `update_addons`, con i fingerprint del controllo iniziale presi da `cache`.
+/// Come `update_addons`, con i fingerprint del controllo iniziale presi da `cache`. Con
+/// `reinstall` (issue #148) un progetto già aggiornato si riscarica comunque: ogni fonte installa
+/// il file che sceglierebbe per un aggiornamento, anche se è la versione installata.
+#[allow(clippy::too_many_arguments)]
 pub fn update_addons_with(
     installation: &Installation,
     cache: Option<&FingerprintCache>,
     sources: &[&dyn Source],
     records: &SourceRecords,
     projects: &[ProjectKey],
+    reinstall: bool,
     record: &mut RecordWriter<'_>,
     progress: &ProgressSink<'_>,
 ) -> Result<Vec<UpdateOutcome>, String> {
@@ -710,6 +719,7 @@ pub fn update_addons_with(
                 addons: &addons,
                 updates: &updates,
                 progress,
+                reinstall,
             };
             source.update(&target, record)
         })
@@ -720,6 +730,7 @@ fn update_project<T: Transport>(
     target: &UpdateTarget<'_>,
     client: &CurseForgeClient<T>,
     mod_id: u32,
+    allow_beta: bool,
     record: &mut RecordWriter<'_>,
 ) -> UpdateOutcome {
     const CF: SourceKind = SourceKind::Curseforge;
@@ -734,15 +745,39 @@ fn update_project<T: Transport>(
         })
         .collect();
     let Some(project) = folders.first().and_then(|u| u.project.as_ref()) else {
-        return UpdateOutcome::skipped(CF, key, "", "Not found among the installed addons.");
+        return target.not_found(CF);
     };
     let name = project.name.as_str();
     let available = folders.iter().find_map(|u| match &u.status {
-        UpdateStatus::UpdateAvailable { latest } => Some((u, latest)),
+        UpdateStatus::UpdateAvailable { latest } => Some((*u, latest)),
         _ => None,
     });
-    let Some((installed, latest)) = available else {
-        return UpdateOutcome::skipped(CF, key, name, "Already up to date.");
+    // Con `reinstall` un progetto aggiornato riscarica il file della regola unica, anche se è
+    // quello installato; con un aggiornamento disponibile resta quello.
+    let chosen = available.or_else(|| {
+        target
+            .reinstall
+            .then(|| {
+                folders
+                    .iter()
+                    .find_map(|u| u.reinstall_file.as_ref().map(|file| (*u, file)))
+            })
+            .flatten()
+    });
+    let Some((installed, latest)) = chosen else {
+        if !target.reinstall {
+            return UpdateOutcome::skipped(CF, key, name, "Already up to date.");
+        }
+        return UpdateOutcome::skipped(
+            CF,
+            key,
+            name,
+            if allow_beta {
+                "No Release or Beta for this game version: nothing to reinstall."
+            } else {
+                "No Release for this game version: turn on the Beta option to reinstall a Beta."
+            },
+        );
     };
     if !project.allow_mod_distribution {
         return UpdateOutcome::skipped(
@@ -918,10 +953,42 @@ mod tests {
         mod_ids: &[u32],
         record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
     ) -> Result<Vec<UpdateOutcome>, String> {
+        let plain = Mode {
+            allow_beta: false,
+            reinstall: false,
+        };
+        cf_update_addons_with(
+            installation,
+            client,
+            overrides,
+            mod_ids,
+            plain,
+            record,
+            &progress::ignore,
+        )
+    }
+
+    /// L'opzione Beta e la reinstallazione (issue #148) per [`cf_update_addons_with`].
+    #[derive(Clone, Copy)]
+    struct Mode {
+        allow_beta: bool,
+        reinstall: bool,
+    }
+
+    /// Come [`cf_update_addons`], con `mode` e l'avanzamento in `progress`.
+    fn cf_update_addons_with<T: Transport>(
+        installation: &Installation,
+        client: &CurseForgeClient<T>,
+        overrides: &VersionOverrides,
+        mod_ids: &[u32],
+        mode: Mode,
+        record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
+        progress: &ProgressSink<'_>,
+    ) -> Result<Vec<UpdateOutcome>, String> {
         let source = CurseForgeSource {
             client,
             overrides,
-            allow_beta: false,
+            allow_beta: mode.allow_beta,
         };
         let projects: Vec<ProjectKey> = mod_ids
             .iter()
@@ -930,11 +997,13 @@ mod tests {
                 key: id.to_string(),
             })
             .collect();
-        update_addons(
+        update_addons_with(
             installation,
+            None,
             &[&source],
             &SourceRecords::new(),
             &projects,
+            mode.reinstall,
             &mut |source, key, written| {
                 assert_eq!(source, SourceKind::Curseforge);
                 record(
@@ -945,7 +1014,7 @@ mod tests {
                     },
                 )
             },
-            &progress::ignore,
+            progress,
         )
     }
     use crate::addons::toc::TocInfo;
@@ -1374,6 +1443,11 @@ mod tests {
                 name: "Foo".to_owned(),
                 fingerprint: 1,
             }],
+            reinstall_file: Some(FileSummary {
+                id: 1,
+                name: "x".to_owned(),
+                date: "d".to_owned(),
+            }),
         };
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(json["status"], "updateAvailable");
@@ -1400,7 +1474,7 @@ mod tests {
         use zip::write::SimpleFileOptions;
 
         use super::super::*;
-        use super::{cf_check_updates, cf_update_addons};
+        use super::{Mode, cf_check_updates, cf_update_addons, cf_update_addons_with};
         use crate::sources::curseforge::{ApiKey, BytesResponse, HttpResponse, TransportError};
         use crate::store::InstalledRecord;
         use crate::test_support::TempDir;
@@ -1948,6 +2022,266 @@ mod tests {
             assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
         }
 
+        // ── Reinstallazione (issue #148) ────────────────────────────────────
+
+        const REINSTALL: Mode = Mode {
+            allow_beta: false,
+            reinstall: true,
+        };
+
+        /// Un progetto aggiornato con il file `id` installato, la sua risposta e il suo zip.
+        fn up_to_date(fx: &Fixture, mod_id: u32, folder: &str, release_type: u8) -> (Value, Value) {
+            let mut current = file_json(
+                mod_id,
+                mod_id * 10,
+                "2026-09-01T00:00:00Z",
+                &[(folder, fx.fingerprints[folder])],
+            );
+            current["releaseType"] = json!(release_type);
+            let found = json!({"id": mod_id, "file": current, "latestFiles": [current.clone()]});
+            (found, current)
+        }
+
+        fn reinstall_routes(found: Value, project: Value, file: &Value, zip: Vec<u8>) -> Routes {
+            let id = file["id"].as_u64().unwrap();
+            let mod_id = file["modId"].as_u64().unwrap();
+            Routes {
+                fingerprints: json!({"data": {"exactMatches": [found]}}).to_string(),
+                mods: json!({"data": [project]}).to_string(),
+                files: HashMap::from([(
+                    format!("{API}/v1/mods/{mod_id}/files/{id}"),
+                    json!({ "data": file }).to_string(),
+                )]),
+                zips: HashMap::from([(download_url(id as u32), zip)]),
+                ..Routes::default()
+            }
+        }
+
+        #[test]
+        fn reinstall_downloads_the_installed_file_again() {
+            let fx = fixture(&[("Alpha", "alpha v1"), ("Other", "other")]);
+            let (found, current) = up_to_date(&fx, 1, "Alpha", 1);
+            let routes = reinstall_routes(
+                found,
+                project(1, "Alpha", true),
+                &current,
+                zip_of(&[
+                    ("Alpha/Alpha.toc", "## Title: Alpha\nAlpha.lua\n"),
+                    ("Alpha/Alpha.lua", "alpha v1"),
+                ]),
+            );
+            let log = Arc::clone(&routes.log);
+            let client = client(routes);
+            // Un file estraneo, fuori dal fingerprint: la reinstallazione rimette la cartella com'è
+            // nello zip.
+            fs::write(fx.addons.join("Alpha").join("Junk.txt"), "junk").unwrap();
+
+            // Senza reinstall: già aggiornato, niente scaricato.
+            let outcomes =
+                update_without_record(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
+            assert_eq!(outcomes[0].status, OutcomeStatus::Skipped);
+            assert_eq!(outcomes[0].message.as_deref(), Some("Already up to date."));
+            assert!(log.downloads.lock().unwrap().is_empty());
+
+            let mut records = Vec::new();
+            let phases = Mutex::new(Vec::new());
+            let outcomes = cf_update_addons_with(
+                &fx.installation,
+                &client,
+                &no_overrides(),
+                &[1],
+                REINSTALL,
+                &mut |mod_id, record| {
+                    records.push((mod_id, record));
+                    Ok(())
+                },
+                &|p: crate::progress::Progress| {
+                    phases.lock().unwrap().push((p.key, p.phase));
+                },
+            )
+            .unwrap();
+
+            assert_eq!(outcomes[0].status, OutcomeStatus::Updated);
+            assert_eq!(outcomes[0].file.as_ref().map(|f| f.id), Some(10));
+            assert_eq!(*log.downloads.lock().unwrap(), [download_url(10)]);
+            assert_eq!(
+                records,
+                [(
+                    1,
+                    InstalledRecord {
+                        file_id: 10,
+                        folders: vec!["Alpha".to_owned()],
+                    }
+                )]
+            );
+            // La cartella è quella dello zip: il file estraneo non c'è più.
+            assert_eq!(names(&fx.addons.join("Alpha")), ["Alpha.lua", "Alpha.toc"]);
+            assert_eq!(names(&fx.addons), ["Alpha", "Other"]);
+            // L'avanzamento è quello di un aggiornamento.
+            let phases: Vec<Phase> = phases
+                .into_inner()
+                .unwrap()
+                .into_iter()
+                .filter(|(key, _)| key == "1")
+                .map(|(_, phase)| phase)
+                .collect();
+            assert_eq!(phases.first(), Some(&Phase::Checking));
+            assert!(phases.contains(&Phase::Downloading));
+            assert_eq!(phases.last(), Some(&Phase::Installing));
+        }
+
+        #[test]
+        fn reinstall_with_an_update_available_installs_the_update() {
+            let fx = fixture(&[("Alpha", "alpha v1")]);
+            let new_file = file_json(1, 11, "2026-10-01T00:00:00Z", &[]);
+            let routes = reinstall_routes(
+                installed(&fx, 1, &["Alpha"], true),
+                project(1, "Alpha", true),
+                &new_file,
+                zip_of(&[("Alpha/Alpha.lua", "alpha v2")]),
+            );
+            let log = Arc::clone(&routes.log);
+            let client = client(routes);
+
+            let outcomes = cf_update_addons_with(
+                &fx.installation,
+                &client,
+                &no_overrides(),
+                &[1],
+                REINSTALL,
+                &mut |_, _| Ok(()),
+                &crate::progress::ignore,
+            )
+            .unwrap();
+
+            assert_eq!(outcomes[0].status, OutcomeStatus::Updated);
+            assert_eq!(outcomes[0].file.as_ref().map(|f| f.id), Some(11));
+            assert_eq!(*log.downloads.lock().unwrap(), [download_url(11)]);
+        }
+
+        #[test]
+        fn reinstall_keeps_the_download_rules() {
+            let fx = fixture(&[("Alpha", "alpha"), ("Beta", "beta")]);
+            let (alpha, _) = up_to_date(&fx, 1, "Alpha", 1);
+            let (beta, mut no_link) = up_to_date(&fx, 2, "Beta", 1);
+            no_link["downloadUrl"] = Value::Null;
+            let routes = Routes {
+                fingerprints: json!({"data": {"exactMatches": [alpha, beta]}}).to_string(),
+                mods: json!({"data": [project(1, "Alpha", false), project(2, "Beta", true)]})
+                    .to_string(),
+                files: HashMap::from([(
+                    format!("{API}/v1/mods/2/files/20"),
+                    json!({ "data": no_link }).to_string(),
+                )]),
+                ..Routes::default()
+            };
+            let log = Arc::clone(&routes.log);
+            let client = client(routes);
+
+            let outcomes = cf_update_addons_with(
+                &fx.installation,
+                &client,
+                &no_overrides(),
+                &[1, 2, 99],
+                REINSTALL,
+                &mut |_, _| panic!("nothing is installed"),
+                &crate::progress::ignore,
+            )
+            .unwrap();
+
+            let summary: Vec<(u32, OutcomeStatus, &str)> = outcomes
+                .iter()
+                .map(|o| (o.mod_id, o.status, o.message.as_deref().unwrap_or("")))
+                .collect();
+            assert_eq!(
+                summary,
+                [
+                    (
+                        1,
+                        OutcomeStatus::Skipped,
+                        "The author does not allow downloads from third-party apps: update it from the CurseForge website."
+                    ),
+                    (
+                        2,
+                        OutcomeStatus::Skipped,
+                        "CurseForge does not provide a download link for this file: update it from the CurseForge website."
+                    ),
+                    (
+                        99,
+                        OutcomeStatus::Skipped,
+                        "Not linked to a source: cannot reinstall."
+                    ),
+                ]
+            );
+            assert!(log.downloads.lock().unwrap().is_empty());
+        }
+
+        #[test]
+        fn reinstall_of_a_beta_follows_the_beta_option() {
+            let fx = fixture(&[("Alpha", "alpha")]);
+            let (found, current) = up_to_date(&fx, 1, "Alpha", 2);
+            let routes = reinstall_routes(
+                found,
+                project(1, "Alpha", true),
+                &current,
+                zip_of(&[("Alpha/Alpha.lua", "alpha")]),
+            );
+            let log = Arc::clone(&routes.log);
+            let client = client(routes);
+            let reinstall = |allow_beta| {
+                cf_update_addons_with(
+                    &fx.installation,
+                    &client,
+                    &no_overrides(),
+                    &[1],
+                    Mode {
+                        allow_beta,
+                        reinstall: true,
+                    },
+                    &mut |_, _| Ok(()),
+                    &crate::progress::ignore,
+                )
+                .unwrap()
+                .remove(0)
+            };
+
+            // Senza l'opzione la regola unica non sceglie la Beta: niente da reinstallare.
+            let off = reinstall(false);
+            assert_eq!(off.status, OutcomeStatus::Skipped);
+            assert_eq!(
+                off.message.as_deref(),
+                Some(
+                    "No Release for this game version: turn on the Beta option to reinstall a Beta."
+                )
+            );
+            assert!(log.downloads.lock().unwrap().is_empty());
+
+            let on = reinstall(true);
+            assert_eq!(on.status, OutcomeStatus::Updated);
+            assert_eq!(on.file.as_ref().map(|f| f.id), Some(10));
+            assert_eq!(*log.downloads.lock().unwrap(), [download_url(10)]);
+        }
+
+        #[test]
+        fn without_reinstall_a_missing_project_keeps_its_message() {
+            let fx = fixture(&[("Alpha", "alpha")]);
+            let (found, _) = up_to_date(&fx, 1, "Alpha", 1);
+            let routes = Routes {
+                fingerprints: json!({"data": {"exactMatches": [found]}}).to_string(),
+                mods: json!({"data": [project(1, "Alpha", true)]}).to_string(),
+                ..Routes::default()
+            };
+            let client = client(routes);
+
+            let outcomes =
+                update_without_record(&fx.installation, &client, &no_overrides(), &[99]).unwrap();
+
+            assert_eq!(
+                outcomes[0].message.as_deref(),
+                Some("Not found among the installed addons.")
+            );
+        }
+
         #[test]
         fn update_follows_the_stored_override() {
             let fx = fixture(&[("Alpha", "alpha v1")]);
@@ -2206,6 +2540,7 @@ mod tests {
                         version_override: None,
                         project_folders: vec![a.folder.clone()],
                         installed_modules: Vec::new(),
+                        reinstall_file: None,
                     })
                     .collect())
             }

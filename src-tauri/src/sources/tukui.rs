@@ -379,6 +379,7 @@ impl<T: PublicTransport> Source for TukuiSource<T> {
                     version_override: None,
                     project_folders: addon.directories.clone(),
                     installed_modules: Vec::new(),
+                    reinstall_file: None,
                 });
             }
         }
@@ -397,13 +398,17 @@ impl<T: PublicTransport> Source for TukuiSource<T> {
             })
             .collect();
         let Some(project) = folders.first().and_then(|u| u.project.as_ref()) else {
-            return UpdateOutcome::skipped(TUKUI, key, "", "Not found among the installed addons.");
+            return target.not_found(TUKUI);
         };
         let name = project.name.as_str();
-        if !folders
-            .iter()
-            .any(|u| matches!(u.status, UpdateStatus::UpdateAvailable { .. }))
-        {
+        // Con `reinstall` (issue #148) un addon aggiornato si riscarica comunque: Tukui elenca una
+        // sola versione, quella installata.
+        let wanted = |status: &UpdateStatus| match status {
+            UpdateStatus::UpdateAvailable { .. } => true,
+            UpdateStatus::UpToDate => target.reinstall,
+            _ => false,
+        };
+        if !folders.iter().any(|u| wanted(&u.status)) {
             // Un addon non elencato per questo gioco riporta il motivo, non "aggiornato".
             let reason = folders.iter().find_map(|u| match &u.status {
                 UpdateStatus::Error { message } => Some(message.as_str()),
@@ -878,6 +883,85 @@ mod tests {
         );
         // L'elenco si legge una volta: l'aggiornamento riusa quello del controllo.
         assert_eq!(*calls.lock().unwrap(), [ADDONS_URL, DOWNLOAD]);
+    }
+
+    /// Issue #148: con `reinstall` un ElvUI già aggiornato si riscarica comunque.
+    #[test]
+    fn reinstall_downloads_the_installed_version_again() {
+        let tmp = TempDir::new();
+        let path = tmp.path().join("World of Warcraft").join("_retail_");
+        let addons = path.join("Interface").join("AddOns");
+        for folder in ["ElvUI", "ElvUI_Libraries", "ElvUI_Options"] {
+            write_addon(
+                &addons,
+                folder,
+                "## Interface: 120100\n## Version: v16.01\n",
+            );
+        }
+        // Un file estraneo che la reinstallazione toglie.
+        fs::write(addons.join("ElvUI").join("Junk.lua"), "junk").unwrap();
+        let installation = Installation {
+            id: "test".to_owned(),
+            path,
+            flavor: "retail".to_owned(),
+            name: "Retail".to_owned(),
+        };
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let tukui = TukuiSource::new(Fake {
+            json: Some(Ok(HttpResponse {
+                status: 200,
+                body: body("16.01"),
+            })),
+            zip: Some(zip_of(&[
+                ("ElvUI/ElvUI.toc", "## Version: v16.01\n"),
+                ("ElvUI_Libraries/ElvUI_Libraries.toc", ""),
+                ("ElvUI_Options/ElvUI_Options.toc", ""),
+            ])),
+            calls: Arc::clone(&calls),
+        });
+        let projects = [super::super::ProjectKey {
+            source: TUKUI,
+            key: "-2".to_owned(),
+        }];
+        let run = |reinstall: bool, written: &mut Vec<SourceRecord>| {
+            updates::update_addons_with(
+                &installation,
+                None,
+                &[&tukui],
+                &SourceRecords::new(),
+                &projects,
+                reinstall,
+                &mut |_, _, record| {
+                    written.push(record);
+                    Ok(())
+                },
+                &progress::ignore,
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let downloads = || {
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| *c == DOWNLOAD)
+                .count()
+        };
+
+        let mut written = Vec::new();
+        let plain = run(false, &mut written);
+        assert_eq!(plain.status, updates::OutcomeStatus::Skipped);
+        assert_eq!(plain.message.as_deref(), Some("Already up to date."));
+        assert_eq!(downloads(), 0);
+
+        let again = run(true, &mut written);
+        assert_eq!(again.status, updates::OutcomeStatus::Updated, "{again:?}");
+        assert_eq!(again.file, Some(summary("16.01", Some("2026-10-13"))));
+        assert_eq!(downloads(), 1);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].file, "16.01");
+        assert!(!addons.join("ElvUI").join("Junk.lua").exists());
     }
 
     #[test]

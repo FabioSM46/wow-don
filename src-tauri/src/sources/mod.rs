@@ -43,6 +43,22 @@ pub struct UpdateTarget<'a> {
     pub updates: &'a [AddonUpdate],
     /// Dove riportare download, estrazione e installazione del progetto (issue #127).
     pub progress: &'a ProgressSink<'a>,
+    /// Reinstallare anche un progetto già aggiornato (issue #148): la fonte scarica il file che
+    /// sceglierebbe per un aggiornamento, anche se è la versione installata.
+    pub reinstall: bool,
+}
+
+impl UpdateTarget<'_> {
+    /// L'esito di un progetto che il controllo non ha trovato tra le cartelle installate. Per una
+    /// reinstallazione il motivo è che nessuna cartella è legata a una fonte con quel progetto.
+    pub fn not_found(&self, source: SourceKind) -> UpdateOutcome {
+        let message = if self.reinstall {
+            "Not linked to a source: cannot reinstall."
+        } else {
+            "Not found among the installed addons."
+        };
+        UpdateOutcome::skipped(source, self.key, "", message)
+    }
 }
 
 /// Scrive in `installed-addons.json` quello che una fonte ha appena installato.
@@ -66,7 +82,8 @@ pub trait Source {
     ) -> Result<Vec<AddonUpdate>, String>;
 
     /// Aggiorna il progetto `target.key` all'ultima versione trovata dal controllo: scarica,
-    /// sostituisce le cartelle e registra con `record`. Le regole di distribuzione della fonte
+    /// sostituisce le cartelle e registra con `record`. Con `target.reinstall` lo fa anche per un
+    /// progetto già aggiornato. Le regole di distribuzione della fonte
     /// (per CurseForge `allowModDistribution`, D13) restano qui.
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome;
 }
