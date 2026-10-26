@@ -244,16 +244,23 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-/* Options: le sezioni (Found on this computer, Installations, Appearance) una sotto l'altra. */
+/* Options: le sezioni (Found on this computer, Installations, Appearance, Updates, System) una
+   sotto l'altra. */
 
 .discovered + .installations,
 .appearance,
-.updates-option {
+.updates-option,
+.system-option {
   margin-top: 32px;
 }
 
-.updates-option .hint {
+.updates-option .hint,
+.system-option .hint {
   margin-top: 4px;
+}
+
+.system-option .option-row + .option-row {
+  margin-top: 12px;
 }
 
 /* Import / export (issue #135): due blocchi compatti, il colore solo per errore e conferma. */
@@ -573,6 +580,10 @@ button:focus-visible {
 
 .toggle input {
   accent-color: var(--accent);
+}
+
+.toggle:has(input:disabled) {
+  cursor: default;
 }
 
 .table-wrap {
