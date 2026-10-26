@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -610,18 +610,20 @@ fn import_availability(
         }
     }
 
-    for entry in entries.iter().filter(|e| {
-        !matches!(
-            e.source,
-            SourceKind::Curseforge | SourceKind::Tukui | SourceKind::Github
-        )
-    }) {
+    for entry in entries
+        .iter()
+        .filter(|e| !matches!(e.source, SourceKind::Curseforge | SourceKind::Tukui))
+    {
+        // Un progetto GitHub vale come installabile senza leggere la release, per non spendere
+        // il limite di richieste; un id che non è `owner/repo` no.
+        let message = match entry.source {
+            SourceKind::Github if github::is_valid_repo(&entry.key) => continue,
+            SourceKind::Github => "Invalid GitHub project: it must be owner/repo.".to_owned(),
+            source => format!("WoW-don cannot install from {} yet.", source.label()),
+        };
         availability.insert(
             (entry.source, entry.key.clone()),
-            not_downloadable(
-                &format!("WoW-don cannot install from {} yet.", entry.source.label()),
-                None,
-            ),
+            not_downloadable(&message, None),
         );
     }
     let error = (!errors.is_empty()).then(|| errors.join(" "));
@@ -922,8 +924,15 @@ fn tukui_source() -> Result<TukuiSource<PublicReqwestTransport>, String> {
 fn github_source() -> Result<GithubSource<PublicReqwestTransport>, String> {
     let transport = PublicReqwestTransport::new(&github::DOMAINS)
         .map_err(|_| "Could not prepare the connection to GitHub.".to_owned())?;
-    Ok(GithubSource::new(transport))
+    Ok(GithubSource::with_cache(
+        transport,
+        Arc::clone(&GITHUB_CACHE),
+    ))
 }
+
+/// Le release GitHub lette e il limite di richieste, condivisi da tutti i comandi: ogni Reload
+/// rifà il controllo, e le richieste senza token sono 60 l'ora.
+static GITHUB_CACHE: LazyLock<Arc<github::Cache>> = LazyLock::new(Arc::default);
 
 /// I record dell'installazione per l'ordine di abbinamento (D33). Un `installed-addons.json`
 /// illeggibile non blocca il controllo: senza record le cartelle si offrono a tutte le fonti,

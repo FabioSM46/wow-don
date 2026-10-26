@@ -4,7 +4,8 @@
 //!
 //! Il controllo legge `GET https://api.github.com/repos/{owner}/{repo}/releases/latest`, senza
 //! token: 60 richieste l'ora per indirizzo. Ogni risposta, anche un errore, si legge una volta
-//! per esecuzione; dopo una risposta di limite superato non parte nessun'altra richiesta.
+//! per esecuzione. Tra un comando e l'altro (`Cache`) una release letta vale dieci minuti, e
+//! dopo una risposta di limite superato non parte nessun'altra richiesta fino al ripristino.
 //!
 //! Risposta verificata il 2026-10-25 su BigWigs `v427.8`: `tag_name`, `published_at`,
 //! `html_url` e `assets[]` con `name` e `browser_download_url` (`BigWigs-v427.8.zip` e
@@ -20,7 +21,8 @@
 //! 3. altrimenti il progetto si aggiorna solo dal sito (`allowModDistribution` falso).
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
@@ -84,35 +86,81 @@ struct ManifestFlavor {
 /// sito. `Err` è il motivo per cui la release non si può usare.
 type Choice = Result<Option<Asset>, String>;
 
-/// La fonte GitHub. Le risposte si tengono per tutta la vita della fonte, che dura un comando:
-/// l'aggiornamento riusa il controllo che lo precede.
+/// Quanto vale una release letta per i comandi successivi: ogni "Reload" rifà il controllo, e
+/// senza questa memoria N progetti GitHub costerebbero N delle 60 richieste l'ora a ogni giro.
+pub const RELEASE_TTL: Duration = Duration::from_secs(10 * 60);
+/// Quanto si aspetta dopo un limite superato senza `x-ratelimit-reset`.
+const LIMIT_FALLBACK: Duration = Duration::from_secs(5 * 60);
+
+/// Le risposte di GitHub che valgono tra un comando e l'altro: le release lette con successo,
+/// per [`RELEASE_TTL`], e il limite di richieste superato, fino all'ora di ripristino. Gli altri
+/// errori valgono solo per il comando che li ha ricevuti.
+#[derive(Default)]
+pub struct Cache {
+    releases: Mutex<HashMap<String, (Instant, Release)>>,
+    /// Il messaggio del limite e fino a quando vale.
+    limited: Mutex<Option<(SystemTime, String)>>,
+}
+
+impl Cache {
+    fn release(&self, repo: &str) -> Option<Release> {
+        lock(&self.releases)
+            .get(repo)
+            .filter(|(read, _)| read.elapsed() < RELEASE_TTL)
+            .map(|(_, release)| release.clone())
+    }
+
+    fn limit(&self) -> Option<String> {
+        lock(&self.limited)
+            .as_ref()
+            .filter(|(until, _)| SystemTime::now() < *until)
+            .map(|(_, message)| message.clone())
+    }
+}
+
+/// La fonte GitHub. Ogni risposta, anche un errore, si tiene per tutta la vita della fonte, che
+/// dura un comando: l'aggiornamento riusa il controllo che lo precede. Le release lette e il
+/// limite superato passano anche ai comandi successivi attraverso [`Cache`].
 pub struct GithubSource<T: PublicTransport> {
     transport: T,
+    cache: Arc<Cache>,
     releases: Mutex<HashMap<String, Result<Release, String>>>,
     manifests: Mutex<HashMap<String, Result<Manifest, String>>>,
     /// Lo zip scelto dal controllo per ogni progetto con un aggiornamento.
     chosen: Mutex<HashMap<String, (Release, Asset)>>,
-    /// Il messaggio del limite di richieste, dopo la prima risposta che lo riporta.
-    limited: Mutex<Option<String>>,
 }
 
 impl<T: PublicTransport> GithubSource<T> {
+    #[cfg(test)]
     pub fn new(transport: T) -> Self {
+        Self::with_cache(transport, Arc::default())
+    }
+
+    /// Una fonte che condivide `cache` con le altre create dall'app.
+    pub fn with_cache(transport: T, cache: Arc<Cache>) -> Self {
         Self {
             transport,
+            cache,
             releases: Mutex::new(HashMap::new()),
             manifests: Mutex::new(HashMap::new()),
             chosen: Mutex::new(HashMap::new()),
-            limited: Mutex::new(None),
         }
     }
 
-    /// L'ultima release di `repo`, letta al massimo una volta.
+    /// L'ultima release di `repo`, letta al massimo una volta per comando e al massimo una
+    /// volta per [`RELEASE_TTL`].
     fn latest(&self, repo: &str) -> Result<Release, String> {
         if let Some(cached) = lock(&self.releases).get(repo) {
             return cached.clone();
         }
-        let result = self.fetch_latest(repo);
+        let result = self.cache.release(repo).map(Ok).unwrap_or_else(|| {
+            let fetched = self.fetch_latest(repo);
+            if let Ok(release) = &fetched {
+                lock(&self.cache.releases)
+                    .insert(repo.to_owned(), (Instant::now(), release.clone()));
+            }
+            fetched
+        });
         lock(&self.releases).insert(repo.to_owned(), result.clone());
         result
     }
@@ -123,7 +171,7 @@ impl<T: PublicTransport> GithubSource<T> {
                 "\"{repo}\" is not a GitHub repository (owner/repo)."
             ));
         }
-        if let Some(message) = lock(&self.limited).clone() {
+        if let Some(message) = self.cache.limit() {
             return Err(message);
         }
         let url = format!("{API_URL}/repos/{repo}/releases/latest");
@@ -142,7 +190,11 @@ impl<T: PublicTransport> GithubSource<T> {
             404 => Err(format!("GitHub has no published release for {repo}.")),
             403 | 429 if response.ratelimit_remaining == Some(0) => {
                 let message = rate_limit_message(response.ratelimit_reset);
-                *lock(&self.limited) = Some(message.clone());
+                let until = response.ratelimit_reset.map_or_else(
+                    || SystemTime::now() + LIMIT_FALLBACK,
+                    |reset| UNIX_EPOCH + Duration::from_secs(reset),
+                );
+                *lock(&self.cache.limited) = Some((until, message.clone()));
                 Err(message)
             }
             status => Err(format!("GitHub responded with an error (HTTP {status}).")),
@@ -192,15 +244,14 @@ impl<T: PublicTransport> GithubSource<T> {
             });
         };
         let manifest = self.manifest(&manifest.browser_download_url)?;
-        let wanted = packager_flavor(flavor);
+        let no_file = || "The latest GitHub release has no file for this game version.".to_owned();
+        let wanted = packager_flavor(flavor).ok_or_else(no_file)?;
         let file = manifest
             .releases
             .iter()
             .filter(|file| file.metadata.iter().any(|m| m.flavor == wanted))
             .min_by_key(|file| file.nolib)
-            .ok_or_else(|| {
-                "The latest GitHub release has no file for this game version.".to_owned()
-            })?;
+            .ok_or_else(no_file)?;
         release
             .assets
             .iter()
@@ -321,7 +372,7 @@ fn is_allowed(url: &str) -> bool {
 
 /// `owner/repo` con i caratteri che GitHub ammette nei nomi: lettere e cifre ASCII, `-`, `_` e
 /// `.`, senza `.` o `..` da soli. Il testo finisce in un URL dell'API.
-fn is_valid_repo(repo: &str) -> bool {
+pub(crate) fn is_valid_repo(repo: &str) -> bool {
     let Some((owner, name)) = repo.split_once('/') else {
         return false;
     };
@@ -354,13 +405,15 @@ fn repo_name(repo: &str) -> &str {
 /// | `_classic_` | Classic progressiva (Mists) | `mists` |
 ///
 /// `wrath`, `cata` e `titan` non hanno oggi una cartella del client.
-fn packager_flavor(flavor: &str) -> &'static str {
-    match toc::toc_suffixes(flavor).first() {
-        Some(&"Forever") => "forever",
-        Some(&"Vanilla") => "classic",
-        Some(&"TBC") => "bcc",
-        Some(&"Mists") => "mists",
-        _ => "mainline",
+fn packager_flavor(flavor: &str) -> Option<&'static str> {
+    match *toc::toc_suffixes(flavor).first()? {
+        "Standard" => Some("mainline"),
+        "Forever" => Some("forever"),
+        "Vanilla" => Some("classic"),
+        "TBC" => Some("bcc"),
+        "Mists" => Some("mists"),
+        // Una famiglia che `toc_suffixes` aggiungerà in futuro non diventa Retail per sbaglio.
+        _ => None,
     }
 }
 
@@ -773,13 +826,13 @@ mod tests {
 
     #[test]
     fn packager_flavors_follow_the_toc_families() {
-        assert_eq!(packager_flavor("retail"), "mainline");
-        assert_eq!(packager_flavor("_retail_"), "mainline");
-        assert_eq!(packager_flavor("ptr"), "mainline");
-        assert_eq!(packager_flavor("classic_era"), "classic");
-        assert_eq!(packager_flavor("classic_beta"), "forever");
-        assert_eq!(packager_flavor("anniversary"), "bcc");
-        assert_eq!(packager_flavor("classic"), "mists");
+        assert_eq!(packager_flavor("retail"), Some("mainline"));
+        assert_eq!(packager_flavor("_retail_"), Some("mainline"));
+        assert_eq!(packager_flavor("ptr"), Some("mainline"));
+        assert_eq!(packager_flavor("classic_era"), Some("classic"));
+        assert_eq!(packager_flavor("classic_beta"), Some("forever"));
+        assert_eq!(packager_flavor("anniversary"), Some("bcc"));
+        assert_eq!(packager_flavor("classic"), Some("mists"));
         // Ogni flavor della tabella esiste nel `release.json` reale.
         let manifest: Manifest = serde_json::from_str(&manifest()).unwrap();
         for flavor in [
@@ -789,7 +842,7 @@ mod tests {
             "anniversary",
             "classic",
         ] {
-            let wanted = packager_flavor(flavor);
+            let wanted = packager_flavor(flavor).unwrap();
             assert!(
                 manifest.releases[1]
                     .metadata
@@ -897,6 +950,56 @@ mod tests {
             rate_limit_message(None),
             "GitHub's limit of 60 requests an hour has been reached: try again later."
         );
+    }
+
+    #[test]
+    fn a_shared_cache_spares_requests_across_commands() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let cache = Arc::new(Cache::default());
+        let run = || {
+            let mut fake = fake("v427.8", &[]);
+            fake.calls = Arc::clone(&calls);
+            GithubSource::with_cache(fake, Arc::clone(&cache))
+                .check(&installation("retail"), &offered(), &records("v427.8"))
+                .unwrap()
+        };
+        assert_eq!(run()[0].status, UpdateStatus::UpToDate);
+        assert_eq!(run()[0].status, UpdateStatus::UpToDate);
+        // Il secondo comando trova la release ancora valida.
+        assert_eq!(*calls.lock().unwrap(), [LATEST]);
+        // Scaduta, si rilegge.
+        lock(&cache.releases).get_mut(REPO).unwrap().0 -= RELEASE_TTL;
+        run();
+        assert_eq!(calls.lock().unwrap().len(), 2);
+
+        // Il limite superato vale anche per i comandi successivi, fino al ripristino.
+        let limited = Arc::new(Cache::default());
+        let in_an_hour = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3_600;
+        let mut first = Fake::default();
+        first.api.insert(
+            LATEST.to_owned(),
+            Ok(ApiResponse {
+                status: 403,
+                body: String::new(),
+                ratelimit_remaining: Some(0),
+                ratelimit_reset: Some(in_an_hour),
+            }),
+        );
+        GithubSource::with_cache(first, Arc::clone(&limited))
+            .check(&installation("retail"), &offered(), &records("v1"))
+            .unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut second = fake("v2", &[]);
+        second.calls = Arc::clone(&calls);
+        let updates = GithubSource::with_cache(second, limited)
+            .check(&installation("retail"), &offered(), &records("v1"))
+            .unwrap();
+        assert!(matches!(updates[0].status, UpdateStatus::Error { .. }));
+        assert!(calls.lock().unwrap().is_empty());
     }
 
     #[test]
