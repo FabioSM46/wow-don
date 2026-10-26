@@ -1,5 +1,5 @@
-//! Il dettaglio di un addon del catalogo: descrizione in testo, file recenti e dipendenze
-//! obbligatorie, per decidere se installarlo e quale versione arriverà. Bloccante: va
+//! Il dettaglio di un addon del catalogo: descrizione in testo, immagini della gallery, file
+//! recenti e dipendenze obbligatorie, per decidere se installarlo e quale versione arriverà. Bloccante: va
 //! chiamato fuori dal thread principale.
 
 use std::collections::{HashMap, HashSet};
@@ -10,8 +10,8 @@ use super::text::plain_text;
 use super::{CatalogAddon, MAX_RESULTS, installed_projects, search_version_type};
 use crate::installations::Installation;
 use crate::sources::curseforge::{
-    CurseForgeClient, File, RELATION_REQUIRED_DEPENDENCY, RELEASE_TYPE_BETA, RELEASE_TYPE_RELEASE,
-    Transport,
+    CurseForgeClient, File, ModAsset, RELATION_REQUIRED_DEPENDENCY, RELEASE_TYPE_BETA,
+    RELEASE_TYPE_RELEASE, Transport, is_media_url,
 };
 use crate::store::InstalledRecords;
 use crate::updates::VersionOverrides;
@@ -59,7 +59,45 @@ pub struct Dependency {
     pub name: String,
 }
 
-/// Il dettaglio per il frontend: i campi di [`CatalogAddon`] più descrizione, file e
+/// Un'immagine della gallery. Gli URL sono indirizzi pubblici del CDN di CurseForge (vedi
+/// [`is_media_url`]): il frontend li carica con `<img src>`, il backend non li scarica.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Screenshot {
+    /// Testo semplice, vuoto se manca; si mostra solo come testo, come `description`.
+    pub title: String,
+    /// Testo semplice, vuoto se manca; si mostra solo come testo.
+    pub description: String,
+    /// L'anteprima, oppure `url` se l'anteprima manca o non è sul CDN.
+    pub thumbnail_url: String,
+    /// L'immagine intera.
+    pub url: String,
+}
+
+impl Screenshot {
+    /// L'immagine se `url` è sul CDN, altrimenti niente.
+    fn from_asset(asset: &ModAsset) -> Option<Self> {
+        let url = asset.url.as_deref().filter(|url| is_media_url(url))?;
+        let thumbnail_url = asset
+            .thumbnail_url
+            .as_deref()
+            .filter(|thumb| is_media_url(thumb))
+            .unwrap_or(url);
+        Some(Self {
+            title: plain_text(asset.title.as_deref().unwrap_or_default()),
+            description: plain_text(asset.description.as_deref().unwrap_or_default()),
+            thumbnail_url: thumbnail_url.to_owned(),
+            url: url.to_owned(),
+        })
+    }
+}
+
+/// Le immagini della gallery mostrabili, nell'ordine dell'API.
+fn screenshots(assets: &[ModAsset]) -> Vec<Screenshot> {
+    assets.iter().filter_map(Screenshot::from_asset).collect()
+}
+
+/// Il dettaglio per il frontend: i campi di [`CatalogAddon`] più descrizione, gallery, file e
 /// dipendenze.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +110,8 @@ pub struct AddonDetail {
     /// contenere `<` e `>` decodificati dalle entità, quindi si mostra solo come testo, mai
     /// con `innerHTML` (vedi `text::plain_text`).
     pub description: String,
+    /// Le immagini della gallery, dalla stessa `get_mod`: nessuna richiesta in più.
+    pub screenshots: Vec<Screenshot>,
     /// I file Release e Beta per la versione, dal più recente, al massimo [`MAX_FILES`].
     pub files: Vec<DetailFile>,
     /// Le dipendenze obbligatorie dell'ultimo file Release: quello di `latestFile` se c'è,
@@ -100,6 +140,7 @@ pub fn addon_detail<T: Transport>(
     let mut files = recent_files(client, mod_id, version_type)?;
     let installed = installed_projects(installation, records);
     let addon = CatalogAddon::new(&found, version_type, allow_beta, &installed);
+    let screenshots = screenshots(&found.screenshots);
     let latest = addon.latest_file.as_ref().map(|file| file.id);
     // Le dipendenze si leggono dalla lista intera: tagliarla prima perderebbe l'ultimo
     // Release dietro più di [`MAX_FILES`] Beta.
@@ -109,6 +150,7 @@ pub fn addon_detail<T: Transport>(
         addon,
         version_type,
         description,
+        screenshots,
         files: files.iter().map(DetailFile::from).collect(),
         dependencies,
     })
@@ -224,6 +266,13 @@ mod tests {
     /// L'indice dice che l'ultimo Release per Retail (517) è il file 30.
     const MOD: &str = r#"{"data": {"id": 61284, "name": "Details!", "summary": "Meter",
       "allowModDistribution": true,
+      "screenshots": [
+        {"title": "Meter", "description": "<b>The</b> window",
+         "thumbnailUrl": "https://media.forgecdn.net/1-thumb.png", "url": "https://media.forgecdn.net/1.png"},
+        {"title": null, "description": null, "thumbnailUrl": "https://media.forgecdn.net/2-thumb.png",
+         "url": "http://media.forgecdn.net/2.png"},
+        {"title": "Plain", "url": "https://media.forgecdn.net/3.png"}
+      ],
       "latestFilesIndexes": [
         {"fileId": 30, "filename": "details-30.zip", "releaseType": 1, "gameVersion": "12.1.5", "gameVersionTypeId": 517},
         {"fileId": 29, "filename": "details-29.zip", "releaseType": 2, "gameVersion": "12.1.5", "gameVersionTypeId": 517}
@@ -398,6 +447,24 @@ mod tests {
         assert_eq!(detail.addon.latest_file.as_ref().unwrap().id, 30);
         assert_eq!(detail.version_type, RETAIL);
         assert_eq!(detail.description, "A meter.\n\nFast");
+        // Dalla stessa `get_mod`: l'immagine su `http` si scarta, l'anteprima mancante è l'URL.
+        assert_eq!(
+            detail.screenshots,
+            [
+                Screenshot {
+                    title: "Meter".to_owned(),
+                    description: "The window".to_owned(),
+                    thumbnail_url: "https://media.forgecdn.net/1-thumb.png".to_owned(),
+                    url: "https://media.forgecdn.net/1.png".to_owned(),
+                },
+                Screenshot {
+                    title: "Plain".to_owned(),
+                    description: String::new(),
+                    thumbnail_url: "https://media.forgecdn.net/3.png".to_owned(),
+                    url: "https://media.forgecdn.net/3.png".to_owned(),
+                },
+            ]
+        );
         let files: Vec<(u32, &str, u8)> = detail
             .files
             .iter()
@@ -637,13 +704,60 @@ mod tests {
             "installed",
             "versionType",
             "description",
+            "screenshots",
             "files",
             "dependencies",
         ] {
             assert!(json.get(key).is_some(), "{key}");
         }
+        assert_eq!(
+            json["screenshots"][0],
+            serde_json::json!({
+                "title": "Meter",
+                "description": "The window",
+                "thumbnailUrl": "https://media.forgecdn.net/1-thumb.png",
+                "url": "https://media.forgecdn.net/1.png",
+            })
+        );
         assert!(json.get("addon").is_none());
         assert_eq!(json["files"][0]["releaseType"], 1);
         assert_eq!(json["dependencies"][0]["name"], "DBM");
+    }
+
+    fn asset(thumbnail_url: Option<&str>, url: Option<&str>) -> ModAsset {
+        ModAsset {
+            thumbnail_url: thumbnail_url.map(str::to_owned),
+            url: url.map(str::to_owned),
+            title: None,
+            description: None,
+        }
+    }
+
+    #[test]
+    fn only_cdn_images_reach_the_gallery() {
+        let cdn = "https://media.forgecdn.net/a.png";
+        let thumb = "https://media.forgecdn.net/a-thumb.png";
+        let assets = [
+            asset(Some(thumb), Some(cdn)),
+            asset(Some(thumb), Some("http://media.forgecdn.net/a.png")),
+            asset(Some(thumb), Some("https://example.com/a.png")),
+            asset(Some(thumb), Some("")),
+            asset(Some(thumb), Some("not a url")),
+            asset(Some(thumb), None),
+            // Senza anteprima, o con un'anteprima fuori dal CDN, vale l'URL.
+            asset(None, Some(cdn)),
+            asset(Some(""), Some(cdn)),
+            asset(Some("https://example.com/t.png"), Some(cdn)),
+        ];
+        let all = screenshots(&assets);
+        let kept: Vec<(&str, &str)> = all
+            .iter()
+            .map(|s| (s.thumbnail_url.as_str(), s.url.as_str()))
+            .collect();
+        assert_eq!(kept, [(thumb, cdn), (cdn, cdn), (cdn, cdn), (cdn, cdn)]);
+        assert!(
+            all.iter()
+                .all(|s| s.title.is_empty() && s.description.is_empty())
+        );
     }
 }
