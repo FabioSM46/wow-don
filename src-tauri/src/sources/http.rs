@@ -25,6 +25,13 @@ pub struct ApiResponse {
     pub ratelimit_reset: Option<u64>,
 }
 
+/// La risposta di una richiesta che non segue i redirect: lo stato e l'intestazione `Location`,
+/// senza il corpo. Serve a GitHub per leggere il tag di `releases/latest` (issue #179).
+pub struct RedirectResponse {
+    pub status: u16,
+    pub location: Option<String>,
+}
+
 pub struct BytesResponse {
     pub status: u16,
     pub body: Vec<u8>,
@@ -120,6 +127,13 @@ pub trait PublicTransport: Send + Sync {
             ratelimit_reset: None,
         })
     }
+    /// Una richiesta `GET` che **non** segue i redirect, per leggere `Location`; il corpo non si
+    /// legge. Chi chiama valida l'URL e la `Location` con [`is_allowed_url`]. Senza una versione
+    /// propria il trasporto non la sa fare e risponde [`TransportError::Other`].
+    fn get_redirect(&self, url: &str) -> Result<RedirectResponse, TransportError> {
+        let _ = url;
+        Err(TransportError::Other)
+    }
     /// Scarica un file. Un corpo più lungo di `max_len` byte dà [`TransportError::TooLarge`]
     /// senza tenerne in memoria più di `max_len`. Chi chiama valida l'URL con
     /// [`is_allowed_url`]; il trasporto reale applica la stessa regola ai redirect.
@@ -140,17 +154,24 @@ pub trait PublicTransport: Send + Sync {
 }
 
 /// Il trasporto reale: `reqwest` bloccante con TLS `rustls`, che segue i redirect solo verso i
-/// domini della fonte. Va usato fuori dal thread principale.
+/// domini della fonte, più un secondo client che non li segue mai ([`get_redirect`]). Va usato
+/// fuori dal thread principale.
+///
+/// [`get_redirect`]: PublicTransport::get_redirect
 pub struct PublicReqwestTransport {
     client: reqwest::blocking::Client,
+    no_redirect: reqwest::blocking::Client,
 }
 
 impl PublicReqwestTransport {
     pub fn new(domains: &'static [&'static str]) -> Result<Self, TransportError> {
-        let client = reqwest::blocking::Client::builder()
-            // Vale per la connessione e per ogni lettura, non per l'intero download.
-            .timeout(Duration::from_secs(30))
-            .user_agent(concat!("wow-don/", env!("CARGO_PKG_VERSION")))
+        let builder = || {
+            reqwest::blocking::Client::builder()
+                // Vale per la connessione e per ogni lettura, non per l'intero download.
+                .timeout(Duration::from_secs(30))
+                .user_agent(concat!("wow-don/", env!("CARGO_PKG_VERSION")))
+        };
+        let client = builder()
             .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                 if attempt.previous().len() >= 5 || !is_allowed_url(attempt.url(), domains) {
                     attempt.stop()
@@ -160,7 +181,14 @@ impl PublicReqwestTransport {
             }))
             .build()
             .map_err(|_| TransportError::Other)?;
-        Ok(Self { client })
+        let no_redirect = builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| TransportError::Other)?;
+        Ok(Self {
+            client,
+            no_redirect,
+        })
     }
 }
 
@@ -201,6 +229,19 @@ impl PublicTransport for PublicReqwestTransport {
             body,
             ratelimit_remaining,
             ratelimit_reset,
+        })
+    }
+
+    fn get_redirect(&self, url: &str) -> Result<RedirectResponse, TransportError> {
+        let response = self.no_redirect.get(url).send().map_err(transport_error)?;
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        Ok(RedirectResponse {
+            status: response.status().as_u16(),
+            location,
         })
     }
 
