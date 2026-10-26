@@ -15,7 +15,8 @@
 //!
 //! Stampa il tempo totale e quello delle fasi, ricavate dagli eventi di avanzamento: ogni
 //! intervallo tra due eventi va alla fase dell'evento che lo apre. "network" sono `checking`,
-//! `downloading` e `downloaded`; "disk" sono `extracting` e `installing`.
+//! `downloading` e `downloaded`, più il tempo prima del primo evento; "disk" sono `extracting` e
+//! `installing`.
 
 use std::fs;
 use std::sync::Mutex;
@@ -37,10 +38,14 @@ impl Timeline {
             .push((Instant::now(), progress.phase));
     }
 
-    /// (rete, disco): la somma degli intervalli tra eventi consecutivi, fino a `end`.
-    fn split(&self, end: Instant) -> (Duration, Duration) {
+    /// (rete, disco): la somma degli intervalli tra eventi consecutivi da `start` a `end`. Il
+    /// tempo prima del primo evento (le richieste in blocco) è rete.
+    fn split(&self, start: Instant, end: Instant) -> (Duration, Duration) {
         let events = self.0.lock().unwrap();
-        let mut network = Duration::ZERO;
+        let mut network = events
+            .first()
+            .map_or(end, |(first, _)| *first)
+            .saturating_duration_since(start);
         let mut disk = Duration::ZERO;
         for (index, (at, phase)) in events.iter().enumerate() {
             let next = events.get(index + 1).map_or(end, |(next, _)| *next);
@@ -125,7 +130,7 @@ fn import_bench() {
     );
     let end = Instant::now();
 
-    let (network, disk) = timeline.split(end);
+    let (network, disk) = timeline.split(checked, end);
     let count = |status| result.entries.iter().filter(|e| e.status == status).count();
     println!(
         "entries: {} ({} installed, {} skipped, {} errors){}",
