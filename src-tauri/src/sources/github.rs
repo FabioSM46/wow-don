@@ -48,18 +48,40 @@ const MANIFEST: &str = "release.json";
 const GITHUB: SourceKind = SourceKind::Github;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct Release {
-    tag_name: String,
+pub(crate) struct Release {
+    pub(crate) tag_name: String,
     #[serde(default)]
     published_at: Option<String>,
     #[serde(default)]
     assets: Vec<Asset>,
 }
 
+/// Un asset di una release: il nome del file e l'indirizzo da cui scaricarlo.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct Asset {
-    name: String,
-    browser_download_url: String,
+pub(crate) struct Asset {
+    pub(crate) name: String,
+    pub(crate) browser_download_url: String,
+}
+
+/// Perché l'ultima release di un repository non si legge. Le varianti separano i casi che chi
+/// chiama tratta in modo diverso (il mirror di un progetto CurseForge, issue #162); il testo è
+/// lo stesso messaggio in inglese che il controllo mostra.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReleaseError {
+    /// Il limite di 60 richieste l'ora, con l'ora di ripristino nel messaggio.
+    Limited(String),
+    /// Il repository non è valido, non esiste o non ha release pubblicate (HTTP 404).
+    Missing(String),
+    /// Rete, risposta illeggibile o un altro errore HTTP.
+    Other(String),
+}
+
+impl ReleaseError {
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            Self::Limited(message) | Self::Missing(message) | Self::Other(message) => message,
+        }
+    }
 }
 
 /// Il `release.json` del packager.
@@ -85,6 +107,23 @@ struct ManifestFlavor {
 /// Lo zip della release per l'installazione: un asset da scaricare oppure `None`, solo dal
 /// sito. `Err` è il motivo per cui la release non si può usare.
 type Choice = Result<Option<Asset>, String>;
+
+/// Perché lo zip di una release non si sceglie, con il tipo dell'errore (issue #162).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ChoiceError {
+    /// Il `release.json` non ha una voce per il gioco, o la voce nomina un asset che manca.
+    NoFileForGame(String),
+    /// Il `release.json` non si legge: rete, risposta illeggibile o un altro errore HTTP.
+    Other(String),
+}
+
+impl ChoiceError {
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            Self::NoFileForGame(message) | Self::Other(message) => message,
+        }
+    }
+}
 
 /// Quanto vale una release letta per i comandi successivi: ogni "Reload" rifà il controllo, e
 /// senza questa memoria N progetti GitHub costerebbero N delle 60 richieste l'ora a ogni giro.
@@ -124,7 +163,7 @@ impl Cache {
 pub struct GithubSource<T: PublicTransport> {
     transport: T,
     cache: Arc<Cache>,
-    releases: Mutex<HashMap<String, Result<Release, String>>>,
+    releases: Mutex<HashMap<String, Result<Release, ReleaseError>>>,
     manifests: Mutex<HashMap<String, Result<Manifest, String>>>,
     /// Lo zip scelto dal controllo per ogni progetto con un aggiornamento.
     chosen: Mutex<HashMap<String, (Release, Asset)>>,
@@ -150,6 +189,12 @@ impl<T: PublicTransport> GithubSource<T> {
     /// L'ultima release di `repo`, letta al massimo una volta per comando e al massimo una
     /// volta per [`RELEASE_TTL`].
     fn latest(&self, repo: &str) -> Result<Release, String> {
+        self.latest_release(repo)
+            .map_err(|error| error.message().to_owned())
+    }
+
+    /// Come [`latest`](Self::latest), con il tipo dell'errore.
+    pub(crate) fn latest_release(&self, repo: &str) -> Result<Release, ReleaseError> {
         if let Some(cached) = lock(&self.releases).get(repo) {
             return cached.clone();
         }
@@ -165,14 +210,14 @@ impl<T: PublicTransport> GithubSource<T> {
         result
     }
 
-    fn fetch_latest(&self, repo: &str) -> Result<Release, String> {
+    fn fetch_latest(&self, repo: &str) -> Result<Release, ReleaseError> {
         if !is_valid_repo(repo) {
-            return Err(format!(
+            return Err(ReleaseError::Missing(format!(
                 "\"{repo}\" is not a GitHub repository (owner/repo)."
-            ));
+            )));
         }
         if let Some(message) = self.cache.limit() {
-            return Err(message);
+            return Err(ReleaseError::Limited(message));
         }
         let url = format!("{API_URL}/repos/{repo}/releases/latest");
         let response = self
@@ -183,11 +228,14 @@ impl<T: PublicTransport> GithubSource<T> {
                     "Unrecognized response from GitHub: it is too large.".to_owned()
                 }
                 other => network_error(other),
-            })?;
+            })
+            .map_err(ReleaseError::Other)?;
         match response.status {
             200 => serde_json::from_str(&response.body)
-                .map_err(|_| "Unrecognized response from GitHub.".to_owned()),
-            404 => Err(format!("GitHub has no published release for {repo}.")),
+                .map_err(|_| ReleaseError::Other("Unrecognized response from GitHub.".to_owned())),
+            404 => Err(ReleaseError::Missing(format!(
+                "GitHub has no published release for {repo}."
+            ))),
             403 | 429 if response.ratelimit_remaining == Some(0) => {
                 let message = rate_limit_message(response.ratelimit_reset);
                 let until = response.ratelimit_reset.map_or_else(
@@ -195,9 +243,11 @@ impl<T: PublicTransport> GithubSource<T> {
                     |reset| UNIX_EPOCH + Duration::from_secs(reset),
                 );
                 *lock(&self.cache.limited) = Some((until, message.clone()));
-                Err(message)
+                Err(ReleaseError::Limited(message))
             }
-            status => Err(format!("GitHub responded with an error (HTTP {status}).")),
+            status => Err(ReleaseError::Other(format!(
+                "GitHub responded with an error (HTTP {status})."
+            ))),
         }
     }
 
@@ -233,6 +283,16 @@ impl<T: PublicTransport> GithubSource<T> {
 
     /// Lo zip di `release` per il gioco `flavor` (vedi la documentazione del modulo).
     fn choose(&self, release: &Release, flavor: &str) -> Choice {
+        self.choose_zip(release, flavor)
+            .map_err(|error| error.message().to_owned())
+    }
+
+    /// Come [`choose`](Self::choose), con il tipo dell'errore.
+    pub(crate) fn choose_zip(
+        &self,
+        release: &Release,
+        flavor: &str,
+    ) -> Result<Option<Asset>, ChoiceError> {
         let Some(manifest) = release.assets.iter().find(|a| a.name == MANIFEST) else {
             let mut zips = release.assets.iter().filter(|a| {
                 let name = a.name.to_ascii_lowercase();
@@ -243,8 +303,14 @@ impl<T: PublicTransport> GithubSource<T> {
                 _ => None,
             });
         };
-        let manifest = self.manifest(&manifest.browser_download_url)?;
-        let no_file = || "The latest GitHub release has no file for this game version.".to_owned();
+        let manifest = self
+            .manifest(&manifest.browser_download_url)
+            .map_err(ChoiceError::Other)?;
+        let no_file = || {
+            ChoiceError::NoFileForGame(
+                "The latest GitHub release has no file for this game version.".to_owned(),
+            )
+        };
         let wanted = packager_flavor(flavor).ok_or_else(no_file)?;
         let file = manifest
             .releases
@@ -259,10 +325,10 @@ impl<T: PublicTransport> GithubSource<T> {
             .cloned()
             .map(Some)
             .ok_or_else(|| {
-                format!(
+                ChoiceError::NoFileForGame(format!(
                     "The latest GitHub release does not include {}.",
                     file.filename
-                )
+                ))
             })
     }
 

@@ -1095,6 +1095,7 @@ mod tests {
             allow_mod_distribution: allow,
             links: ModLinks {
                 website_url: Some(format!("https://www.curseforge.com/wow/addons/p{id}")),
+                source_url: None,
             },
             latest_files_indexes: Vec::new(),
         }
