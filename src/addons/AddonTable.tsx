@@ -1,4 +1,13 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   api,
@@ -6,6 +15,7 @@ import {
   type AddonUpdate,
   type InstalledAddon,
   type Installation,
+  type RemoveResult,
   type UpdateOutcome,
   type VersionType,
 } from "../api";
@@ -18,6 +28,7 @@ import {
   groupUpdate,
   nextSort,
   visibleGroups,
+  type AddonGroup,
   type Filters,
   type Sort,
   type SortKey,
@@ -25,6 +36,22 @@ import {
 import { SOURCE_LABELS, projectId, sourcesIn, updateRequest, type ProjectRef } from "./sources";
 import { ProgressBar, useInstallProgress } from "./ProgressBar";
 import { refreshCheck } from "./refresh";
+import { ContextMenu } from "./ContextMenu";
+import {
+  confirmText,
+  foldersOf,
+  menuItems,
+  menuTargets,
+  pruneSelection,
+  reinstallProjects,
+  removalSummary,
+  removedFolders,
+  selectRow,
+  selectedText,
+  toggleRow,
+  type MenuAction,
+  type Selection,
+} from "./selection";
 import {
   progressLabel,
   progressPercent,
@@ -59,10 +86,21 @@ const errorCache = new Map<string, string>();
  * e non parte un secondo aggiornamento dello stesso progetto.
  */
 const updateRuns = new Map<string, Set<string>>();
+/** Le installazioni il cui aggiornamento in corso è una reinstallazione (issue #149). */
+const reinstallRuns = new Set<string>();
 /** L'esito dell'ultimo aggiornamento per installazione, mostrato sopra la tabella. */
 const updateResults = new Map<string, UpdateResult>();
 
-type UpdateResult = { outcomes: UpdateOutcome[] } | { error: string };
+/** `reinstall`: l'esito viene da "Reinstall" del menu, non da un aggiornamento. */
+type UpdateResult = ({ outcomes: UpdateOutcome[] } | { error: string }) & { reinstall?: boolean };
+
+/** Il menu aperto: la riga (cartella principale) e il punto in cui si apre. */
+type OpenMenu = { row: string; x: number; y: number };
+
+/** L'esito dell'ultima rimozione, mostrato sopra la tabella. */
+type RemovalResult =
+  | { error: string }
+  | { text: string; errors: { folder: string; message: string }[]; warning: string | null };
 
 /**
  * I tipi di versione del gioco non cambiano durante la sessione e il comando non usa la rete:
@@ -228,6 +266,20 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
     }
   });
   const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
+  const [reinstalling, setReinstalling] = useState(false);
+  // Menu contestuale, selezione multipla e rimozione (issue #149).
+  const [selection, setSelection] = useState<Selection>(null);
+  const [menu, setMenu] = useState<OpenMenu | null>(null);
+  // I gruppi da togliere, fissati quando si sceglie "Remove": la barra chiede conferma per quelli.
+  const [confirming, setConfirming] = useState<AddonGroup[] | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const [removalResult, setRemovalResult] = useState<RemovalResult | null>(null);
+  // La riga da cui è partito il menu: il focus ci torna con Esc, dopo una scelta o con Cancel.
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  // La riga raggiungibile con Tab (roving tabindex): le altre si raggiungono con le frecce.
+  const [focusRow, setFocusRow] = useState<string | null>(null);
   // `currentId` sopravvive allo smontaggio: serve un segnale a parte per non rileggere la lista
   // di un componente che non c'è più.
   const mounted = useRef(false);
@@ -238,21 +290,27 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
     };
   }, []);
 
-  function updateProjects(projects: ProjectRef[]) {
+  // `reinstall` (issue #149): riscarica anche i progetti già aggiornati, con la stessa barra e
+  // lo stesso riepilogo di un aggiornamento.
+  function updateProjects(projects: ProjectRef[], reinstall = false) {
     const id = installation.id;
     const ids = new Set(projects.map(projectId));
-    if (ids.size === 0 || updateRuns.has(id)) return;
+    if (ids.size === 0 || updateRuns.has(id) || removing) return;
     updateRuns.set(id, ids);
+    if (reinstall) reinstallRuns.add(id);
+    else reinstallRuns.delete(id);
     updateResults.delete(id);
     setUpdating(ids);
+    setReinstalling(reinstall);
     setProgress(new Map());
     setUpdateResult(null);
+    setRemovalResult(null);
     const request = updateRequest(projects);
     api
-      .updateAddons(id, request.modIds, request.projects)
+      .updateAddons(id, request.modIds, request.projects, reinstall)
       .then(
-        (outcomes): UpdateResult => ({ outcomes }),
-        (err): UpdateResult => ({ error: errorMessage(err) }),
+        (outcomes): UpdateResult => ({ outcomes, reinstall }),
+        (err): UpdateResult => ({ error: errorMessage(err), reinstall }),
       )
       .then((result) => {
         updateResults.set(id, result);
@@ -268,11 +326,45 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
       })
       .finally(() => {
         updateRuns.delete(id);
+        reinstallRuns.delete(id);
         // Non c'è una fase finale: la barra si chiude quando il comando restituisce gli esiti.
         if (mounted.current && currentId.current === id) {
           setUpdating(new Set());
+          setReinstalling(false);
           setProgress(new Map());
         }
+      });
+  }
+
+  // Rimozione (issue #149): toglie tutte le cartelle dei gruppi confermati, senza backup; poi la
+  // lista si rilegge. Le righe rimosse escono dalla selezione, le altre restano.
+  function removeGroups(targets: AddonGroup[]) {
+    const id = installation.id;
+    const folders = foldersOf(targets);
+    if (folders.length === 0 || removing || updateRuns.has(id)) return;
+    setRemoving(true);
+    setRemovalResult(null);
+    updateResults.delete(id);
+    setUpdateResult(null);
+    api
+      .removeAddons(id, folders)
+      .then((result: RemoveResult) => {
+        if (!mounted.current || currentId.current !== id) return;
+        setRemovalResult({ ...removalSummary(result), warning: result.warning });
+        const removed = new Set(removedFolders(result));
+        setSelection((previous) =>
+          previous === null
+            ? null
+            : pruneSelection(previous, [...previous].filter((key) => !removed.has(key))),
+        );
+        return rescan();
+      })
+      .catch((err) => {
+        if (!mounted.current || currentId.current !== id) return;
+        setRemovalResult({ error: errorMessage(err) });
+      })
+      .finally(() => {
+        if (mounted.current && currentId.current === id) setRemoving(false);
       });
   }
 
@@ -332,8 +424,15 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
     setRescanning(false);
     setRescanError(null);
     setUpdating(updateRuns.get(installation.id) ?? new Set());
+    setReinstalling(reinstallRuns.has(installation.id));
     setProgress(new Map());
     setUpdateResult(updateResults.get(installation.id) ?? null);
+    setSelection(null);
+    setMenu(null);
+    setConfirming(null);
+    setRemoving(false);
+    setRemovalResult(null);
+    setFocusRow(null);
     setLoad({ state: "loading" });
     setFilters(defaultFilters);
     setExpanded(new Set());
@@ -373,8 +472,120 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
       setFilters((previous) => ({ ...previous, source: null }));
     }
   }, [sources, filters.source]);
-  const busy = updating.size > 0;
+  const running = updating.size > 0;
+  const busy = running || removing;
   const position = progressPosition(progress, updating);
+
+  // Dopo una rilettura restano selezionate solo le righe che esistono ancora.
+  useEffect(() => {
+    if (load.state !== "ready") return;
+    setSelection((previous) => pruneSelection(previous, groups.map((g) => g.main.folder)));
+  }, [groups, load.state]);
+
+  // Esc esce dalla modalità selezione, se il tasto non serve già a un campo, al menu o alla barra
+  // di conferma, e solo con la tab Installed in vista (le tab nascoste restano montate).
+  const selecting = selection !== null;
+  useEffect(() => {
+    if (!selecting) return;
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (sectionRef.current?.closest("[hidden]")) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("input, textarea, select, [role='menu'], [role='alertdialog']")) return;
+      setSelection(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [selecting]);
+
+  // La barra di conferma prende il focus su Cancel: Invio per sbaglio non toglie niente.
+  useEffect(() => {
+    if (confirming) cancelRef.current?.focus();
+  }, [confirming]);
+
+  const closeMenu = useCallback((restoreFocus: boolean) => {
+    setMenu(null);
+    if (restoreFocus) returnFocus.current?.focus();
+  }, []);
+
+  function openMenu(row: string, element: HTMLElement, x: number, y: number) {
+    returnFocus.current = element;
+    setFocusRow(row);
+    setMenu({ row, x, y });
+  }
+
+  function onRowContextMenu(event: MouseEvent<HTMLTableRowElement>, row: string) {
+    event.preventDefault();
+    const element = event.currentTarget;
+    // Dal tasto Menu il browser può dare (0, 0): il menu si apre sotto l'inizio della riga.
+    if (event.clientX === 0 && event.clientY === 0) {
+      const rect = element.getBoundingClientRect();
+      openMenu(row, element, rect.left + 24, rect.bottom);
+    } else {
+      openMenu(row, element, event.clientX, event.clientY);
+    }
+  }
+
+  function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, row: string, hasOthers: boolean) {
+    // I controlli dentro la riga (link, menu della versione, pulsanti) tengono i loro tasti.
+    if (event.target !== event.currentTarget) return;
+    const element = event.currentTarget;
+    if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+      event.preventDefault();
+      const rect = element.getBoundingClientRect();
+      openMenu(row, element, rect.left + 24, rect.bottom);
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (selection !== null) setSelection((previous) => toggleRow(previous, row));
+      else if (hasOthers) toggle(row);
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const rows = [
+        ...(element.parentElement?.querySelectorAll<HTMLElement>("tr[data-row]") ?? []),
+      ];
+      const next = rows[rows.indexOf(element) + (event.key === "ArrowDown" ? 1 : -1)];
+      if (next) {
+        event.preventDefault();
+        setFocusRow(next.dataset.row ?? null);
+        next.focus();
+      }
+    }
+  }
+
+  function chooseAction(action: MenuAction) {
+    if (!menu) return;
+    const targets = menuTargets(groups, selection, menu.row);
+    switch (action) {
+      case "select":
+        setSelection((previous) => selectRow(previous, menu.row));
+        closeMenu(true);
+        break;
+      case "clear":
+        setSelection(null);
+        closeMenu(true);
+        break;
+      case "reinstall":
+        closeMenu(true);
+        updateProjects(reinstallProjects(targets, updates), true);
+        break;
+      case "remove":
+        // Il focus va alla barra di conferma, non alla riga.
+        closeMenu(false);
+        setConfirming(targets);
+        break;
+    }
+  }
+
+  function cancelRemove() {
+    setConfirming(null);
+    returnFocus.current?.focus();
+  }
+
+  const menuState = { updates, busy, checking };
+  // Una riga che i filtri hanno nascosto non può restare l'unica raggiungibile con Tab.
+  const tabStop =
+    focusRow !== null && visible.some((g) => g.main.folder === focusRow)
+      ? focusRow
+      : (visible[0]?.main.folder ?? null);
 
   function update(patch: Partial<Filters>) {
     setFilters((previous) => ({ ...previous, ...patch }));
@@ -396,10 +607,18 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
   }
 
   return (
-    <section className="addons" aria-labelledby="addons-title">
+    <section ref={sectionRef} className="addons" aria-labelledby="addons-title">
       <header className="section-header">
         <h2 id="addons-title">Addons · {installation.name}</h2>
         <div className="section-actions">
+          {selection !== null && (
+            <span className="selection-status">
+              <span className="count">{selectedText(selection)}</span>
+              <button className="link" onClick={() => setSelection(null)}>
+                Clear selection
+              </button>
+            </span>
+          )}
           {load.state === "ready" && (
             <span className="muted count">
               {visible.length} of {groups.length} {groups.length === 1 ? "addon" : "addons"}
@@ -431,16 +650,18 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
           >
             {checking ? "Checking…" : "Check for updates"}
           </button>
-          {(busy || updatableIds.length > 0) && (
+          {(running || updatableIds.length > 0) && (
             <button
               className="button"
               onClick={() => updateProjects(updatableIds)}
               disabled={busy || checking || versionSaving !== null}
             >
-              {busy
+              {running
                 ? position > 0
-                  ? `Updating ${position} of ${updating.size}`
-                  : "Updating…"
+                  ? `${reinstalling ? "Reinstalling" : "Updating"} ${position} of ${updating.size}`
+                  : reinstalling
+                    ? "Reinstalling…"
+                    : "Updating…"
                 : `Update all (${updatableIds.length})`}
             </button>
           )}
@@ -457,6 +678,43 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
           {rescanError}
         </p>
       )}
+      {confirming && (
+        <div
+          className="message remove-confirm"
+          role="alertdialog"
+          aria-labelledby="remove-confirm-title"
+          aria-describedby="remove-confirm-hint"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              cancelRemove();
+            }
+          }}
+        >
+          <span id="remove-confirm-title">{confirmText(confirming)}</span>
+          <span id="remove-confirm-hint" className="muted">
+            No backup; saved settings in WTF are kept.
+          </span>
+          <button
+            className="button danger small"
+            onClick={() => {
+              setConfirming(null);
+              removeGroups(confirming);
+            }}
+          >
+            Remove
+          </button>
+          <button ref={cancelRef} className="button secondary small" onClick={cancelRemove}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {removing && (
+        <p className="message muted" role="status">
+          Removing…
+        </p>
+      )}
+      {removalResult && <RemovalSummary result={removalResult} />}
       {updateResult && <UpdateSummary result={updateResult} />}
       {versionTypesError && (
         <p className="message error" role="alert">
@@ -568,16 +826,32 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
                     const update = groupUpdate({ main: addon, others }, updates);
                     const hasOthers = others.length > 0;
                     const open = hasOthers && expanded.has(addon.folder);
+                    const isSelected = selection?.has(addon.folder) ?? false;
                     const classes = [
                       error ? "has-error" : "",
-                      hasOthers ? "expandable" : "",
+                      hasOthers || selection !== null ? "expandable" : "",
                       open ? "open" : "",
+                      isSelected ? "selected" : "",
                     ].join(" ");
                     return (
                       <Fragment key={addon.folder}>
                         <tr
-                          className={classes.trim() || undefined}
-                          onClick={hasOthers ? () => toggle(addon.folder) : undefined}
+                          data-row={addon.folder}
+                          className={classes.replace(/\s+/g, " ").trim() || undefined}
+                          tabIndex={addon.folder === tabStop ? 0 : -1}
+                          aria-selected={selection !== null ? isSelected : undefined}
+                          onFocus={(event) => {
+                            if (event.target === event.currentTarget) setFocusRow(addon.folder);
+                          }}
+                          onClick={
+                            selection !== null
+                              ? () => setSelection((previous) => toggleRow(previous, addon.folder))
+                              : hasOthers
+                                ? () => toggle(addon.folder)
+                                : undefined
+                          }
+                          onContextMenu={(event) => onRowContextMenu(event, addon.folder)}
+                          onKeyDown={(event) => onRowKeyDown(event, addon.folder, hasOthers)}
                         >
                           <td>
                             {hasOthers ? (
@@ -645,6 +919,7 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
                             updating={Boolean(
                               update?.project && updating.has(projectId(update.project)),
                             )}
+                            reinstalling={reinstalling}
                             progress={
                               update?.project ? progress.get(projectId(update.project)) : undefined
                             }
@@ -690,7 +965,54 @@ export function AddonTable({ installation, reload = 0, onInstallZip, zipBusy = f
           )}
         </>
       )}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems(menuTargets(groups, selection, menu.row), selection !== null, menuState)}
+          label={
+            selection !== null
+              ? `Actions for ${selectedText(selection)}`
+              : `Actions for ${menuTitle(groups, menu.row)}`
+          }
+          onChoose={chooseAction}
+          onClose={closeMenu}
+        />
+      )}
     </section>
+  );
+}
+
+/** Il titolo della riga del menu, per il suo nome accessibile. */
+function menuTitle(groups: AddonGroup[], row: string): string {
+  const group = groups.find((g) => g.main.folder === row);
+  return group ? displayTitle(group.main) : row;
+}
+
+/** Riepilogo dell'ultima rimozione, con il motivo di ogni cartella non tolta. */
+function RemovalSummary({ result }: { result: RemovalResult }) {
+  if ("error" in result) {
+    return (
+      <p className="message error" role="alert">
+        Remove failed: {result.error}
+      </p>
+    );
+  }
+  const problem = result.errors.length > 0 || result.warning !== null;
+  return (
+    <div className="message update-summary" role={problem ? "alert" : "status"}>
+      <p>{result.text}</p>
+      {result.warning && <p className="error">{result.warning}</p>}
+      {result.errors.length > 0 && (
+        <ul>
+          {result.errors.map((entry) => (
+            <li key={entry.folder} className="error">
+              {entry.folder}: {entry.message}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -829,19 +1151,29 @@ type UpdateCellProps = {
   checking: boolean;
   /** Il progetto di questa riga è nell'aggiornamento in corso. */
   updating: boolean;
+  /** L'aggiornamento in corso è una reinstallazione. */
+  reinstalling: boolean;
   /** L'ultimo avanzamento del progetto in aggiornamento, se è arrivato. */
   progress?: InstallProgress;
   disabled: boolean;
   onUpdate: (projects: ProjectRef[]) => void;
 };
 
-function UpdateCell({ update, checking, updating, progress, disabled, onUpdate }: UpdateCellProps) {
+function UpdateCell({
+  update,
+  checking,
+  updating,
+  reinstalling,
+  progress,
+  disabled,
+  onUpdate,
+}: UpdateCellProps) {
   if (updating) {
     return (
       <td className="nowrap">
         <ProgressBar
           value={progressPercent(progress)}
-          label={progressLabel(progress, "Updating…")}
+          label={progressLabel(progress, reinstalling ? "Reinstalling…" : "Updating…")}
           name={update?.project?.name ?? "Addon"}
         />
       </td>
@@ -902,7 +1234,7 @@ function UpdateSummary({ result }: { result: UpdateResult }) {
   if ("error" in result) {
     return (
       <p className="message error" role="alert">
-        Update failed: {result.error}
+        {result.reinstall ? "Reinstall failed" : "Update failed"}: {result.error}
       </p>
     );
   }
@@ -912,14 +1244,20 @@ function UpdateSummary({ result }: { result: UpdateResult }) {
   const skipped = count("skipped");
   const errors = count("error");
   const parts = [
-    updated > 0 && `${updated} updated`,
+    updated > 0 && `${updated} ${result.reinstall ? "reinstalled" : "updated"}`,
     skipped > 0 && `${skipped} skipped`,
     errors > 0 && `${errors} ${errors === 1 ? "error" : "errors"}`,
   ].filter(Boolean);
   const details = result.outcomes.filter((o) => o.status !== "updated");
   return (
     <div className="message update-summary" role="status">
-      <p>{parts.length > 0 ? parts.join(", ") : "Nothing was updated"}</p>
+      <p>
+        {parts.length > 0
+          ? parts.join(", ")
+          : result.reinstall
+            ? "Nothing was reinstalled"
+            : "Nothing was updated"}
+      </p>
       {details.length > 0 && (
         <ul>
           {details.map((outcome) => (

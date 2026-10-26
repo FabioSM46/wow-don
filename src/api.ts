@@ -297,6 +297,20 @@ export type ImportResult = {
   lookupError?: string;
 };
 
+/** L'esito di `remove_addons` per una cartella; `message` spiega `error`. */
+export type FolderRemoval = {
+  folder: string;
+  status: "removed" | "error";
+  message: string | null;
+};
+
+/** Il risultato di `remove_addons` (issue #147): un esito per cartella, nell'ordine chiesto. */
+export type RemoveResult = {
+  folders: FolderRemoval[];
+  /** Le cartelle sono tolte ma il registro non si è aggiornato. */
+  warning: string | null;
+};
+
 export const api = {
   appStatus: () => invoke<AppStatus>("app_status"),
   listInstallations: () => invoke<Installation[]>("list_installations"),
@@ -312,12 +326,19 @@ export const api = {
   /** Lista e stati da una sola scansione; un controllo fallito arriva in `checkError`. */
   refreshAddons: (installationId: string, force = false) =>
     invoke<Refresh>("refresh_addons", { installationId, force }),
-  /** `modIds` sono progetti CurseForge, `projects` quelli delle altre fonti. */
+  /**
+   * `modIds` sono progetti CurseForge, `projects` quelli delle altre fonti. Con `reinstall`
+   * (issue #148) riscarica anche i progetti già aggiornati.
+   */
   updateAddons: (
     installationId: string,
     modIds: number[],
     projects: { source: SourceKind; key: string }[] = [],
-  ) => invoke<UpdateOutcome[]>("update_addons", { installationId, modIds, projects }),
+    reinstall = false,
+  ) => invoke<UpdateOutcome[]>("update_addons", { installationId, modIds, projects, reinstall }),
+  /** Toglie le cartelle da `Interface/AddOns`, senza backup; `WTF` non si tocca (issue #147). */
+  removeAddons: (installationId: string, folders: string[]) =>
+    invoke<RemoveResult>("remove_addons", { installationId, folders }),
   listVersionTypes: () => invoke<VersionType[]>("list_version_types"),
   setVersionOverride: (installationId: string, modId: number, versionType: number) =>
     invoke<void>("set_version_override", { installationId, modId, versionType }),
