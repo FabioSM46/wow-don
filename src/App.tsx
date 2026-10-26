@@ -10,6 +10,7 @@ import { Discovered } from "./installations/Discovered";
 import { Installations } from "./installations/Installations";
 import { Appearance } from "./options/Appearance";
 import { BetaOption } from "./options/BetaOption";
+import { SystemOptions } from "./options/SystemOptions";
 import { ImportExport } from "./options/ImportExport";
 import { applyTheme } from "./options/theme";
 import { Search } from "./search/Search";
@@ -343,6 +344,7 @@ function App() {
               setInstalledStale(true);
             }}
           />
+          <SystemOptions active={tab === "options"} />
           {installations !== null && (
             <ImportExport installation={active ?? null} onImported={() => setInstalledStale(true)} />
           )}
