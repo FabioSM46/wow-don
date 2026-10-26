@@ -7,8 +7,9 @@
 //! - il repository si ricava **solo** dal `sourceUrl` del progetto, quando punta a
 //!   `github.com/<owner>/<repo>` (con il parsing dei link di `install_link::parse_link`); un
 //!   altro host o nessun `sourceUrl` non fa nessuna richiesta. Mai ricerca per nome;
-//! - la release si legge con [`GithubSource`]: stessa cache, stesso blocco dopo il limite di
-//!   richieste, stessa scelta dello zip dal `release.json` per il flavor del gioco;
+//! - la release si legge con [`GithubSource`], senza l'API (issue #179): stessa cache, stessa
+//!   scelta dello zip dal `release.json` per il flavor del gioco, e il blocco dopo il limite di
+//!   richieste solo per una release senza `release.json`, che passa dall'API;
 //! - la regola della stessa versione è [`same_version`], una funzione pura.
 //!
 //! Dati verificati il 2026-10-26: Bartender4 (`4.18.3.1`) e Deadly Boss Mods (`12.1.17`) hanno
@@ -247,6 +248,7 @@ pub(crate) fn resolve<T: PublicTransport>(
             ));
         }
         Err(ChoiceError::NoFileForGame(message)) => return unavailable(Reason::NoZip(message)),
+        Err(ChoiceError::Limited(message)) => return unavailable(Reason::RateLimited(message)),
         Err(ChoiceError::Other(message)) => return unavailable(Reason::Failed(message)),
     };
     if !same_version(&tag, Some(&asset.name), file) {
@@ -343,7 +345,7 @@ pub(crate) fn contains_version(text: &str, version: &str) -> bool {
 mod tests {
     use super::*;
     use crate::sources::curseforge::{ModLinks, TransportError};
-    use crate::sources::http::{ApiResponse, BytesResponse, HttpResponse};
+    use crate::sources::http::{ApiResponse, BytesResponse, HttpResponse, RedirectResponse};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -352,6 +354,8 @@ mod tests {
     /// Le risposte del trasporto finto per URL, con le richieste fatte.
     #[derive(Default)]
     struct Fake {
+        /// `releases/latest` sul sito → (stato, `Location`).
+        redirects: HashMap<String, (u16, Option<String>)>,
         api: HashMap<String, ApiResponse>,
         json: HashMap<String, String>,
         calls: Arc<Mutex<Vec<String>>>,
@@ -370,6 +374,16 @@ mod tests {
                     body: String::new(),
                 },
             })
+        }
+
+        fn get_redirect(&self, url: &str) -> Result<RedirectResponse, TransportError> {
+            self.calls.lock().unwrap().push(url.to_owned());
+            let (status, location) = self
+                .redirects
+                .get(url)
+                .cloned()
+                .ok_or(TransportError::Connect)?;
+            Ok(RedirectResponse { status, location })
         }
 
         fn get_api(&self, url: &str, _accept: &str) -> Result<ApiResponse, TransportError> {
@@ -394,9 +408,21 @@ mod tests {
         format!("https://github.com/{repo}/releases/download/{tag}")
     }
 
+    fn latest(repo: &str) -> String {
+        format!("https://github.com/{repo}/releases/latest")
+    }
+
     /// Una release di `repo` con gli asset `assets` e, se `flavors` non è vuoto, un
-    /// `release.json` che assegna il primo zip a quei flavor.
+    /// `release.json` che assegna il primo zip a quei flavor. Il sito rimanda al tag; l'API
+    /// elenca gli asset.
     fn release(fake: &mut Fake, repo: &str, tag: &str, assets: &[&str], flavors: &[&str]) {
+        fake.redirects.insert(
+            latest(repo),
+            (
+                302,
+                Some(format!("https://github.com/{repo}/releases/tag/{tag}")),
+            ),
+        );
         let mut names: Vec<&str> = assets.to_vec();
         if !flavors.is_empty() {
             names.push("release.json");
@@ -671,7 +697,7 @@ mod tests {
         // Auctionator e Leatrix Plus: nessuna release (404).
         let repo = "Auctionator/Auctionator";
         let mut fake = Fake::default();
-        status(&mut fake, repo, 404, 50, None);
+        fake.redirects.insert(latest(repo), (404, None));
         let blocked = project(
             Some(false),
             Some("https://github.com/Auctionator/Auctionator"),
@@ -812,7 +838,15 @@ mod tests {
 
     #[test]
     fn the_rate_limit_names_the_reset_time() {
+        // Senza `release.json` lo zip si sceglie dall'API, che risponde con il limite.
         let mut fake = Fake::default();
+        release(
+            &mut fake,
+            BARTENDER,
+            "4.18.3.1",
+            &["Bartender4-4.18.3.1.zip"],
+            &[],
+        );
         // 2026-10-26 14:32:00 UTC.
         status(&mut fake, BARTENDER, 403, 0, Some(1_793_025_120));
         let why = reason(resolve_with(

@@ -2420,6 +2420,55 @@ mod tests {
     }
 
     #[test]
+    fn the_first_phase_of_an_import_downloads_the_mirror_zip() {
+        // Issue #180: il mirror GitHub si risolve e si scarica nella prima fase.
+        let fx = fixture();
+        let mirror = FakeMirror::default().with_release(1, &[("Alpha/Alpha.toc", "")]);
+        let client = client(blocked_routes(1, 10));
+        let live = Live {
+            installation: &fx.installation,
+            client: &client,
+            github: Some(&mirror),
+            allow_beta: false,
+        };
+        let prefetched = Prefetched::default();
+        prefetch(
+            &live,
+            &HashSet::new(),
+            &projects(&fx, &[1]),
+            &prefetched,
+            &|_| {},
+        );
+        assert_eq!(*mirror.downloads.lock().unwrap(), [asset_url(1)]);
+        assert!(names(&fx.addons).is_empty());
+        let cached = Cached {
+            live: &live,
+            prefetched: &prefetched,
+        };
+        let outcomes = install_addon_with(
+            &fx.installation,
+            &cached,
+            &VersionOverrides::new(),
+            &InstalledRecords::new(),
+            1,
+            None,
+            &mut |_, _| Ok(()),
+            &progress::ignore,
+        );
+        assert_eq!(summary(&outcomes), [(1, Installed, None)]);
+        assert_eq!(
+            outcomes[0].message.as_deref(),
+            Some(
+                "Installed from GitHub (owner/alpha v1): CurseForge blocks third-party downloads."
+            )
+        );
+        // La seconda fase non chiede di nuovo a GitHub.
+        assert_eq!(mirror.resolved.lock().unwrap().len(), 1);
+        assert_eq!(mirror.downloads.lock().unwrap().len(), 1);
+        assert_eq!(names(&fx.addons), ["Alpha"]);
+    }
+
+    #[test]
     fn a_blocked_project_without_a_usable_mirror_is_skipped_with_the_reason() {
         let fx = fixture();
         let mirror = FakeMirror::default().without(
