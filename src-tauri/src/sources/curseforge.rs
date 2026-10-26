@@ -611,6 +611,12 @@ struct ModsRequest<'a> {
     mod_ids: &'a [u32],
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilesRequest<'a> {
+    file_ids: &'a [u32],
+}
+
 // ── Client ──────────────────────────────────────────────────────────────────
 
 pub struct CurseForgeClient<T: Transport> {
@@ -709,6 +715,21 @@ impl<T: Transport> CurseForgeClient<T> {
         let key = self.key()?;
         let url = format!("{BASE_URL}/v1/mods/{mod_id}/files/{file_id}");
         decode(self.transport.get(&url, key))
+    }
+
+    /// Il dettaglio di più file, anche di mod diversi (`POST /v1/mods/files`). Una sola
+    /// richiesta; un file che CurseForge non conosce manca dalla risposta.
+    pub fn get_files(&self, file_ids: &[u32]) -> Result<Vec<File>, CurseForgeError> {
+        let key = self.key()?;
+        if file_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let body = serde_json::to_string(&FilesRequest { file_ids })
+            .map_err(|_| CurseForgeError::InvalidResponse)?;
+        decode(
+            self.transport
+                .post_json(&format!("{BASE_URL}/v1/mods/files"), key, body),
+        )
     }
 
     /// Un mod con i campi descrittivi del catalogo (`GET /v1/mods/{modId}`).
@@ -1026,6 +1047,24 @@ mod tests {
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(seen[0].0, "https://api.curseforge.com/v1/mods");
         assert_eq!(seen[0].2.as_deref(), Some(r#"{"modIds":[1,2]}"#));
+    }
+
+    #[test]
+    fn files_are_read_with_one_post() {
+        let body = r#"{"data": [{"id": 10, "modId": 1, "releaseType": 1},
+                                 {"id": 20, "modId": 2, "releaseType": 2}]}"#;
+        let client = client(Ok((200, body)));
+        let files = client.get_files(&[10, 20]).unwrap();
+        assert_eq!(
+            files.iter().map(|f| (f.id, f.mod_id)).collect::<Vec<_>>(),
+            [(10, 1), (20, 2)]
+        );
+        let seen = client.transport.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "https://api.curseforge.com/v1/mods/files");
+        assert_eq!(seen[0].2.as_deref(), Some(r#"{"fileIds":[10,20]}"#));
+        drop(seen);
+        assert!(client.get_files(&[]).unwrap().is_empty());
     }
 
     #[test]

@@ -209,6 +209,13 @@ pub struct TukuiDownload {
     zip: Vec<u8>,
 }
 
+impl TukuiDownload {
+    /// Il nome del progetto nell'elenco di Tukui.
+    pub fn name(&self) -> &str {
+        &self.addon.name
+    }
+}
+
 /// La parte su disco di [`TukuiSource::install_new`]: estrae `download`, controlla il gioco e le
 /// cartelle, lo installa e lo registra.
 pub fn install_downloaded(
@@ -1258,6 +1265,7 @@ mod tests {
             ..Fake::default()
         });
         let download = tukui.download_new("-2", &progress::ignore).unwrap();
+        assert_eq!(download.name(), "ElvUI");
         assert!(fs::read_dir(&addons).unwrap().next().is_none());
         let installation = Installation {
             id: "test".to_owned(),

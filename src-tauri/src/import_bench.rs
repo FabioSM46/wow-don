@@ -117,6 +117,7 @@ fn import_bench() {
         settings: &settings,
         cache: &cache,
         progress: &progress,
+        prepared: Prepared::default(),
     };
     let result = addon_import::run_import(
         &addons_dir,

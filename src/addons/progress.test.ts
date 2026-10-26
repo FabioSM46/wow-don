@@ -51,6 +51,7 @@ describe("progressLabel", () => {
       "Downloading 25%",
     );
     assert.equal(progressLabel(event({ phase: "downloading", received: 1 })), "Downloading…");
+    assert.equal(progressLabel(event({ phase: "downloaded" })), "Waiting to install…");
     assert.equal(progressLabel(event({ phase: "extracting" })), "Extracting…");
     assert.equal(progressLabel(event({ phase: "installing" })), "Installing…");
     assert.equal(progressLabel(undefined), "Waiting…");

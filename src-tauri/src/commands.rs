@@ -21,6 +21,7 @@ use crate::install_link::{self, LinkPreview, LinkSources};
 use crate::install_local::{self, LocalInstall};
 use crate::install_new::{self, InstallOutcome, MirrorAvailability};
 use crate::installations::Installation;
+use crate::parallel;
 use crate::progress::{self, Progress, ProgressEvent};
 use crate::sources::curseforge::{CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder};
 use crate::sources::github::{self, GithubSource};
@@ -580,6 +581,7 @@ pub async fn import_addons(
             settings: &settings,
             cache: &cache,
             progress: &progress,
+            prepared: Prepared::default(),
         };
         let mut result = addon_import::run_import(
             &addons_dir,
@@ -733,9 +735,95 @@ struct CommandInstaller<'a> {
     settings: &'a Mutex<AddonSettingsStore>,
     cache: &'a FingerprintCache,
     progress: &'a (dyn Fn(Progress) + Sync),
+    /// Quello che la prima fase ha scaricato e la seconda non ha ancora installato (issue #180).
+    prepared: Prepared,
+}
+
+/// Gli zip scaricati dalla prima fase di un import, in attesa della loro installazione.
+#[derive(Default)]
+struct Prepared {
+    curseforge: install_new::Prefetched,
+    /// Per chiave Tukui, lo zip o l'esito che dice perché non c'è.
+    tukui: HashMap<String, Result<tukui::TukuiDownload, Box<updates::UpdateOutcome>>>,
+}
+
+impl CommandInstaller<'_> {
+    /// Le richieste vere a CurseForge, per la prima fase e per quello che non ha letto.
+    fn live(&self) -> install_new::Live<'_, ReqwestTransport> {
+        install_new::Live {
+            installation: self.installation,
+            client: self.client,
+            // L'importazione non chiede il mirror GitHub (issue #164): un elenco lungo
+            // consumerebbe il limite di 60 richieste l'ora.
+            github: None,
+            allow_beta: self.allow_beta,
+        }
+    }
 }
 
 impl addon_import::Installer for CommandInstaller<'_> {
+    /// Risolve e scarica le voci del gruppo, più voci insieme ([`parallel::DOWNLOADS_AT_ONCE`]);
+    /// il disco e i record non si toccano.
+    fn prepare(&mut self, entries: &[&addon_list::ListEntry]) {
+        let installation = self.installation;
+        let availability = self.availability;
+        let available = |source: SourceKind| {
+            entries.iter().filter(move |entry| {
+                entry.source == source
+                    && matches!(
+                        availability_of(availability, entry),
+                        addon_import::Availability::Available
+                    )
+            })
+        };
+        let overrides = self
+            .settings
+            .lock()
+            .ok()
+            .and_then(|store| store.overrides_for(&installation.id).ok())
+            .unwrap_or_default();
+        // La versione del gioco che l'installazione userà: quella della voce, se c'è.
+        let projects: Vec<(u32, Option<u32>)> = available(SourceKind::Curseforge)
+            .filter_map(|entry| {
+                let mod_id = entry.key.parse::<u32>().ok()?;
+                let version_type = entry
+                    .version_type
+                    .or_else(|| install_new::version_type_of(installation, &overrides, mod_id));
+                Some((mod_id, version_type))
+            })
+            .collect();
+        // Senza record l'installazione si ferma comunque: niente da scaricare.
+        if !projects.is_empty()
+            && let Ok(records) = locked_installed(self.installed)
+                .and_then(|store| store.records_for(&installation.id))
+        {
+            let installed = catalog::installed_projects(installation, &records);
+            install_new::prefetch(
+                &self.live(),
+                &installed,
+                &projects,
+                &self.prepared.curseforge,
+                self.progress,
+            );
+        }
+        let keys: Vec<&str> = available(SourceKind::Tukui)
+            .map(|entry| entry.key.as_str())
+            .collect();
+        let progress = self.progress;
+        let tukui = self.tukui;
+        let downloads = parallel::map(&keys, |key| {
+            let download = tukui.download_new(key, progress);
+            if let Ok(download) = &download {
+                progress::Reporter::new(progress, Some(SourceKind::Tukui), key, download.name())
+                    .phase(progress::Phase::Downloaded);
+            }
+            download
+        });
+        for (key, download) in keys.into_iter().zip(downloads) {
+            self.prepared.tukui.insert(key.to_owned(), download);
+        }
+    }
+
     fn install(&mut self, entry: &addon_list::ListEntry) -> addon_import::EntryOutcome {
         use addon_import::{EntryOutcome, EntryStatus};
         if let addon_import::Availability::NotDownloadable { message, .. } =
@@ -776,17 +864,18 @@ impl addon_import::Installer for CommandInstaller<'_> {
                     Ok(records) => records,
                     Err(error) => return EntryOutcome::new(entry, EntryStatus::Error, Some(error)),
                 };
-                // L'importazione non chiede il mirror GitHub (issue #164): un elenco lungo
-                // consumerebbe il limite di 60 richieste l'ora.
-                let outcomes = install_new::install_addon(
+                let live = self.live();
+                let cached = install_new::Cached {
+                    live: &live,
+                    prefetched: &self.prepared.curseforge,
+                };
+                let outcomes = install_new::install_addon_with(
                     installation,
-                    self.client,
-                    None,
+                    &cached,
                     &overrides,
                     &records,
                     mod_id,
                     None,
-                    self.allow_beta,
                     &mut |mod_id, record| {
                         cache.forget(&addons_dir, &record.folders);
                         locked_installed(installed)?.record(&installation.id, mod_id, record)
@@ -806,13 +895,24 @@ impl addon_import::Installer for CommandInstaller<'_> {
                     )
                 };
                 let outcome = if entry.source == SourceKind::Tukui {
-                    self.tukui.install_new(
-                        installation,
-                        &entry.key,
-                        &|_| Ok(()),
-                        &mut record,
-                        progress,
-                    )
+                    match self.prepared.tukui.remove(&entry.key) {
+                        Some(Ok(download)) => tukui::install_downloaded(
+                            installation,
+                            &entry.key,
+                            download,
+                            &|_| Ok(()),
+                            &mut record,
+                            progress,
+                        ),
+                        Some(Err(outcome)) => *outcome,
+                        None => self.tukui.install_new(
+                            installation,
+                            &entry.key,
+                            &|_| Ok(()),
+                            &mut record,
+                            progress,
+                        ),
+                    }
                 } else {
                     self.github.install_new(
                         installation,

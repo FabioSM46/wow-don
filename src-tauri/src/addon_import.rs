@@ -283,8 +283,21 @@ pub struct ImportResult {
     pub lookup_error: Option<String>,
 }
 
-/// Chi installa un progetto della stringa. Nel comando sono le fonti vere; nei test una finta.
+/// Quante voci si preparano prima di installarle: gli zip di un gruppo restano in memoria
+/// finché non tocca a loro, quindi una lista lunga si fa a gruppi.
+pub const ENTRIES_PER_GROUP: usize = 4 * crate::parallel::DOWNLOADS_AT_ONCE;
+
+/// Chi installa i progetti della stringa, in due fasi (issue #180). Nel comando sono le fonti
+/// vere; nei test una finta.
 pub trait Installer {
+    /// La prima fase per un gruppo di voci da installare: risolvere e scaricare, anche in
+    /// parallelo, senza toccare `AddOns` né i record. Quello che non riesce lo dirà `install`.
+    fn prepare(&mut self, entries: &[&ListEntry]) {
+        let _ = entries;
+    }
+
+    /// La seconda fase per una voce: installarla, con quello che `prepare` ha già scaricato.
+    /// Si chiama una voce alla volta, nell'ordine della lista.
     fn install(&mut self, entry: &ListEntry) -> EntryOutcome;
 }
 
@@ -303,18 +316,24 @@ pub fn run_import(
     rescan: &mut dyn FnMut() -> Result<(Refresh, SourceRecords), String>,
 ) -> ImportResult {
     let installed = installed_projects(before, records);
-    let entries: Vec<EntryOutcome> = decoded
-        .list
-        .addons
+    let list = &decoded.list.addons;
+    let mut outcomes: Vec<Option<EntryOutcome>> = list
         .iter()
         .map(|entry| {
-            if installed.contains(&id_of(entry)) {
-                EntryOutcome::new(entry, EntryStatus::AlreadyInstalled, None)
-            } else {
-                installer.install(entry)
-            }
+            installed
+                .contains(&id_of(entry))
+                .then(|| EntryOutcome::new(entry, EntryStatus::AlreadyInstalled, None))
         })
         .collect();
+    let pending: Vec<usize> = (0..list.len()).filter(|i| outcomes[*i].is_none()).collect();
+    for group in pending.chunks(ENTRIES_PER_GROUP) {
+        let entries: Vec<&ListEntry> = group.iter().map(|i| &list[*i]).collect();
+        installer.prepare(&entries);
+        for (index, entry) in group.iter().zip(entries) {
+            outcomes[*index] = Some(installer.install(entry));
+        }
+    }
+    let entries: Vec<EntryOutcome> = outcomes.into_iter().flatten().collect();
     let mut result = ImportResult {
         entries,
         invalid: decoded.invalid.clone(),
@@ -470,15 +489,39 @@ mod tests {
         names
     }
 
-    /// Installa scrivendo la cartella `Addon<key>`; le chiavi in `fail` falliscono.
+    /// Installa scrivendo la cartella `Addon<key>`; le chiavi in `fail` falliscono. `calls`
+    /// sono le installazioni, `prepared` i gruppi preparati, nell'ordine.
     struct FakeInstaller<'a> {
         addons_dir: &'a Path,
         fail: Vec<&'static str>,
         calls: Vec<String>,
+        prepared: Vec<Vec<String>>,
+    }
+
+    impl<'a> FakeInstaller<'a> {
+        fn new(addons_dir: &'a Path, fail: Vec<&'static str>) -> Self {
+            Self {
+                addons_dir,
+                fail,
+                calls: Vec::new(),
+                prepared: Vec::new(),
+            }
+        }
     }
 
     impl Installer for FakeInstaller<'_> {
+        fn prepare(&mut self, entries: &[&ListEntry]) {
+            // La prima fase non tocca il disco.
+            assert!(entries.iter().all(|e| !self.calls.contains(&e.key)));
+            self.prepared
+                .push(entries.iter().map(|e| e.key.clone()).collect());
+        }
+
         fn install(&mut self, entry: &ListEntry) -> EntryOutcome {
+            assert!(
+                self.prepared.iter().flatten().any(|key| *key == entry.key),
+                "installed before it was prepared"
+            );
             self.calls.push(entry.key.clone());
             if self.fail.contains(&entry.key.as_str()) {
                 return EntryOutcome::new(entry, EntryStatus::Error, Some("boom".to_owned()));
@@ -609,11 +652,7 @@ mod tests {
             vec![listed("Details", &[]), listed("Other", &[])],
             vec![matched("Details", "61284", &[])],
         );
-        let mut installer = FakeInstaller {
-            addons_dir: &disk.addons_dir,
-            fail: Vec::new(),
-            calls: Vec::new(),
-        };
+        let mut installer = FakeInstaller::new(&disk.addons_dir, Vec::new());
         let result = run_import(
             &disk.addons_dir,
             &decoded(vec![
@@ -638,6 +677,60 @@ mod tests {
     }
 
     #[test]
+    fn entries_are_prepared_in_groups_then_installed_in_list_order() {
+        let disk = disk(&["Details"]);
+        let before = state(
+            vec![listed("Details", &[])],
+            vec![matched("Details", "61284", &[])],
+        );
+        let count = ENTRIES_PER_GROUP + 2;
+        let keys: Vec<String> = (1..=count).map(|n| n.to_string()).collect();
+        let mut list: Vec<ListEntry> = keys
+            .iter()
+            .map(|key| entry(SourceKind::Curseforge, key))
+            .collect();
+        // Uno già installato in mezzo: non si prepara e non si installa.
+        list.insert(3, entry(SourceKind::Curseforge, "61284"));
+        let mut installer = FakeInstaller::new(&disk.addons_dir, vec!["2"]);
+        let result = run_import(
+            &disk.addons_dir,
+            &decoded(list.clone()),
+            ImportMode::Keep,
+            &[],
+            &before,
+            &SourceRecords::new(),
+            &mut installer,
+            &mut || panic!("keep does not read the disk again"),
+        );
+        assert_eq!(installer.calls, keys);
+        assert_eq!(
+            installer.prepared,
+            [
+                keys[..ENTRIES_PER_GROUP].to_vec(),
+                keys[ENTRIES_PER_GROUP..].to_vec()
+            ]
+        );
+        // Gli esiti seguono la lista, con l'errore al suo posto.
+        let outcomes: Vec<(&str, EntryStatus)> = result
+            .entries
+            .iter()
+            .map(|e| (e.key.as_str(), e.status))
+            .collect();
+        let expected: Vec<(&str, EntryStatus)> = list
+            .iter()
+            .map(|e| {
+                let status = match e.key.as_str() {
+                    "61284" => EntryStatus::AlreadyInstalled,
+                    "2" => EntryStatus::Error,
+                    _ => EntryStatus::Installed,
+                };
+                (e.key.as_str(), status)
+            })
+            .collect();
+        assert_eq!(outcomes, expected);
+    }
+
+    #[test]
     fn replace_removes_only_confirmed_and_unclaimed_folders() {
         let disk = disk(&["Details", "Other", "Late", "Dep"]);
         let before = state(
@@ -648,11 +741,7 @@ mod tests {
             ],
             vec![matched("Details", "61284", &[])],
         );
-        let mut installer = FakeInstaller {
-            addons_dir: &disk.addons_dir,
-            fail: Vec::new(),
-            calls: Vec::new(),
-        };
+        let mut installer = FakeInstaller::new(&disk.addons_dir, Vec::new());
         let addons_dir = disk.addons_dir.clone();
         let result = run_import(
             &disk.addons_dir,
@@ -696,11 +785,7 @@ mod tests {
     fn replace_removes_nothing_when_every_install_fails() {
         let disk = disk(&["Other"]);
         let before = state(vec![listed("Other", &[])], Vec::new());
-        let mut installer = FakeInstaller {
-            addons_dir: &disk.addons_dir,
-            fail: vec!["5", "6"],
-            calls: Vec::new(),
-        };
+        let mut installer = FakeInstaller::new(&disk.addons_dir, vec!["5", "6"]);
         let result = run_import(
             &disk.addons_dir,
             &decoded(vec![
@@ -730,11 +815,7 @@ mod tests {
             vec![matched("Details", "61284", &[])],
         );
         let after = before.clone();
-        let mut installer = FakeInstaller {
-            addons_dir: &disk.addons_dir,
-            fail: Vec::new(),
-            calls: Vec::new(),
-        };
+        let mut installer = FakeInstaller::new(&disk.addons_dir, Vec::new());
         let result = run_import(
             &disk.addons_dir,
             &decoded(vec![entry(SourceKind::Curseforge, "61284")]),
@@ -765,11 +846,7 @@ mod tests {
             ],
             vec![matched("Details", "61284", &[])],
         );
-        let mut installer = FakeInstaller {
-            addons_dir: &disk.addons_dir,
-            fail: Vec::new(),
-            calls: Vec::new(),
-        };
+        let mut installer = FakeInstaller::new(&disk.addons_dir, Vec::new());
         let result = run_import(
             &disk.addons_dir,
             &decoded(vec![entry(SourceKind::Curseforge, "61284")]),
@@ -790,11 +867,7 @@ mod tests {
     fn an_empty_list_with_replace_removes_nothing() {
         let disk = disk(&["Other"]);
         let before = state(vec![listed("Other", &[])], Vec::new());
-        let mut installer = FakeInstaller {
-            addons_dir: &disk.addons_dir,
-            fail: Vec::new(),
-            calls: Vec::new(),
-        };
+        let mut installer = FakeInstaller::new(&disk.addons_dir, Vec::new());
         let result = run_import(
             &disk.addons_dir,
             &decoded(Vec::new()),
