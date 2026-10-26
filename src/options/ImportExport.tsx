@@ -23,7 +23,8 @@ type Props = {
   /** L'installazione attiva; `null` se non ce n'è nessuna. */
   installation: Installation | null;
   /** Gli addon sul disco sono cambiati: la tab Installed si rilegge. */
-  onImported: () => void;
+  /** L'importazione nell'installazione `installationId` è finita, anche con un errore. */
+  onImported: (installationId: string) => void;
 };
 
 type Load<T> =
@@ -169,7 +170,7 @@ export function ImportExport({ installation, onImported }: Props) {
       setImporting(false);
       setProgress(undefined);
       // Gli addon sul disco possono essere cambiati anche se il comando ha fallito.
-      onImported();
+      onImported(requested);
     }
   }
 

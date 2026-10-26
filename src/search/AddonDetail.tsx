@@ -20,6 +20,8 @@ type Props = {
   /** La versione del gioco scelta nella ricerca; `null` lascia decidere al backend. */
   versionType: number | null;
   versionTypes: VersionType[];
+  /** Cambia quando gli addon dell'installazione sono cambiati: il dettaglio si rilegge. */
+  refresh?: number;
   /** La tab è visibile: Esc torna ai risultati solo allora. */
   active: boolean;
   onBack: () => void;
@@ -40,6 +42,7 @@ export function AddonDetailView({
   addon,
   versionType,
   versionTypes,
+  refresh = 0,
   active,
   onBack,
   renderActions,
@@ -50,10 +53,15 @@ export function AddonDetailView({
   const [linkError, setLinkError] = useState<string | null>(null);
   const backRef = useRef<HTMLButtonElement>(null);
 
+  // Il dettaglio già caricato resta in vista mentre si rilegge lo stesso addon (`refresh`).
+  const loadedKey = useRef<string | null>(null);
   useEffect(() => {
     // Solo la risposta dell'ultima richiesta si applica (un altro addon, un nuovo tentativo).
     let current = true;
-    setLoad({ status: "loading" });
+    const key = `${installationId}:${addon.id}:${versionType}`;
+    const same = loadedKey.current === key;
+    loadedKey.current = key;
+    setLoad((previous) => (same && previous.status === "ready" ? previous : { status: "loading" }));
     api
       .addonDetail(installationId, addon.id, versionType)
       .then((detail) => current && setLoad({ status: "ready", detail }))
@@ -61,7 +69,7 @@ export function AddonDetailView({
     return () => {
       current = false;
     };
-  }, [installationId, addon.id, versionType, retry]);
+  }, [installationId, addon.id, versionType, retry, refresh]);
 
   // Il focus va sul pulsante per tornare indietro: da tastiera la vista si lascia subito.
   useEffect(() => {
