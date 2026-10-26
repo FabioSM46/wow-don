@@ -22,11 +22,11 @@ use serde::Deserialize;
 
 use super::curseforge::{MAX_DOWNLOAD_BYTES, TransportError};
 use super::http::{DownloadProgress, PublicTransport, is_allowed_url};
-use super::{RecordWriter, Source, SourceKind, UpdateTarget};
+use super::{FolderCheck, LinkInfo, RecordWriter, Source, SourceKind, UpdateTarget};
 use crate::addons::scan::InstalledAddon;
 use crate::backup;
 use crate::installations::Installation;
-use crate::progress::Reporter;
+use crate::progress::{ProgressSink, Reporter};
 use crate::store::{ProjectRecords, SourceRecord};
 use crate::updates::{self, AddonUpdate, FileSummary, Project, UpdateOutcome, UpdateStatus};
 
@@ -154,6 +154,76 @@ impl<T: PublicTransport> WowInterfaceSource<T> {
     }
 }
 
+impl<T: PublicTransport> WowInterfaceSource<T> {
+    /// L'anteprima di un link (issue #109): titolo, versione e pagina del progetto, con una
+    /// sola richiesta. L'API non dice per quale gioco è il file: ogni progetto elencato vale
+    /// come scaricabile. `Err` se WoWInterface non risponde o non conosce l'id.
+    pub fn preview(&self, key: &str) -> Result<LinkInfo, String> {
+        let file = self.file(key)?.ok_or_else(|| not_listed(key))?;
+        Ok(LinkInfo {
+            name: file.title,
+            version: file.version,
+            downloadable: true,
+            message: None,
+            url: page_url(key),
+        })
+    }
+
+    /// Installa un progetto WoWInterface che non c'è ancora (un link, issue #109). `check` può
+    /// rifiutare le cartelle dello zip prima che tocchino il disco. L'esito usa la forma di un
+    /// aggiornamento: `updated` vuol dire installato.
+    pub fn install_new(
+        &self,
+        installation: &Installation,
+        key: &str,
+        check: &FolderCheck<'_>,
+        record: &mut RecordWriter<'_>,
+        progress: &ProgressSink<'_>,
+    ) -> UpdateOutcome {
+        let file = match self.file(key) {
+            Ok(Some(file)) => file,
+            Ok(None) => return UpdateOutcome::skipped(WOWI, key, "", &not_listed(key)),
+            Err(error) => return UpdateOutcome::error(WOWI, key, "", error),
+        };
+        let name = file.title.as_str();
+        let reporter = Reporter::new(progress, Some(WOWI), key, name);
+        reporter.download(0, None);
+        let bytes = match self.download(&file, &mut |received, total| {
+            reporter.download(received, total)
+        }) {
+            Ok(bytes) => bytes,
+            Err(error) => return UpdateOutcome::error(WOWI, key, name, error),
+        };
+        reporter.downloaded(bytes.len() as u64);
+        let addons_dir = installation.path.join("Interface").join("AddOns");
+        let folders = match updates::install_bytes(&bytes, &addons_dir, &[], check, &reporter) {
+            Ok(folders) => folders,
+            Err(error) => return UpdateOutcome::error(WOWI, key, name, error),
+        };
+        let message = record(
+            WOWI,
+            key,
+            SourceRecord {
+                file: file.version.clone(),
+                folders,
+            },
+        )
+        .err()
+        .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
+        UpdateOutcome::updated(
+            WOWI,
+            key,
+            name,
+            summary(&file.version, file.last_update),
+            message,
+        )
+    }
+}
+
+fn not_listed(key: &str) -> String {
+    format!("WoWInterface does not list the addon with id {key}.")
+}
+
 /// La risposta di un id che non esiste: `404` con un oggetto `ERROR`.
 fn is_not_found(body: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(body)
@@ -262,7 +332,7 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
                     project: None,
                     installed_file: None,
                     status: UpdateStatus::Error {
-                        message: format!("WoWInterface does not list the addon with id {key}."),
+                        message: not_listed(key),
                     },
                     version_override: None,
                     project_folders: Vec::new(),
