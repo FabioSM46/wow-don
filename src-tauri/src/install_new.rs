@@ -352,7 +352,9 @@ fn find_file<'a, T: Transport>(
     )
     .map_err(|error| match error {
         FileError::Skipped(message) => InstallOutcome::skipped(mod_id, name, &message),
-        FileError::Error(message) => InstallOutcome::error(mod_id, name, message),
+        FileError::Unsupported(message) | FileError::Error(message) => {
+            InstallOutcome::error(mod_id, name, message)
+        }
     })?;
     if let Some(github) = mirror {
         return match github.resolve(project, &file, &installation.flavor) {
@@ -391,6 +393,9 @@ fn unavailable(mod_id: u32, name: &str, reason: &Reason) -> InstallOutcome {
 /// Perché non c'è un file da installare: un esito `skipped` o un errore.
 enum FileError {
     Skipped(String),
+    /// La versione del gioco dell'installazione non è supportata: un errore dell'installazione,
+    /// un motivo per il controllo del mirror.
+    Unsupported(String),
     Error(String),
 }
 
@@ -410,7 +415,7 @@ fn chosen_file<T: Transport>(
         Some(id) => id,
         None => {
             let Some(version_type) = version_type else {
-                return Err(FileError::Error(format!(
+                return Err(FileError::Unsupported(format!(
                     "Installing addons does not support the game version \"{}\" yet.",
                     installation.name
                 )));
@@ -458,16 +463,19 @@ impl MirrorAvailability {
 }
 
 /// Il mirror GitHub del progetto `mod_id` per l'installazione, con lo stesso file e la stessa
-/// regola di [`install_addon`] senza `file_id`: si chiama su richiesta (dettaglio o Install), mai
-/// durante la ricerca, per stare nel limite di 60 richieste l'ora. Un progetto che CurseForge
-/// lascia scaricare non fa nessuna richiesta a GitHub. `Err` solo quando CurseForge non risponde
-/// o non conosce il progetto; i problemi di GitHub sono un `reason`.
+/// regola di [`install_addon`] con lo stesso `file_id` (il file indicato, oppure l'ultimo per la
+/// versione del gioco): si chiama su richiesta (dettaglio o Install), mai durante la ricerca, per
+/// stare nel limite di 60 richieste l'ora. Un progetto che CurseForge lascia scaricare non fa
+/// nessuna richiesta a GitHub. `Err` solo quando CurseForge non risponde, non conosce il
+/// progetto o dà un file di un altro progetto; una versione del gioco non supportata, un file
+/// mancante e i problemi di GitHub sono un `reason`.
 pub fn github_mirror<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
     github: &dyn MirrorSource,
     overrides: &VersionOverrides,
     mod_id: u32,
+    file_id: Option<u32>,
     allow_beta: bool,
 ) -> Result<MirrorAvailability, String> {
     let project = client
@@ -489,10 +497,10 @@ pub fn github_mirror<T: Transport>(
         &project,
         version_type,
         allow_beta,
-        None,
+        file_id,
     ) {
         Ok(file) => file,
-        Err(FileError::Skipped(message)) => {
+        Err(FileError::Skipped(message) | FileError::Unsupported(message)) => {
             return Ok(MirrorAvailability::unavailable(Some(message)));
         }
         Err(FileError::Error(message)) => return Err(message),
@@ -1913,15 +1921,51 @@ mod tests {
     }
 
     fn check_mirror(routes: Routes, mirror: &FakeMirror) -> Result<MirrorAvailability, String> {
-        let fx = fixture();
+        check_mirror_file(&fixture(), routes, mirror, None)
+    }
+
+    fn check_mirror_file(
+        fx: &Fixture,
+        routes: Routes,
+        mirror: &FakeMirror,
+        file_id: Option<u32>,
+    ) -> Result<MirrorAvailability, String> {
         github_mirror(
             &fx.installation,
             &client(routes),
             mirror,
             &VersionOverrides::new(),
             1,
+            file_id,
             false,
         )
+    }
+
+    #[test]
+    fn the_mirror_check_uses_the_requested_file_like_the_install() {
+        // Il file indicato (per esempio la Beta scelta nel dettaglio), anche senza un Release
+        // per la versione del gioco.
+        let mut routes = blocked_routes(1, 12);
+        routes.projects[0]["latestFilesIndexes"] = json!([]);
+        let mirror = FakeMirror::default().with_release(1, &[]);
+        let result = check_mirror_file(&fixture(), routes, &mirror, Some(12)).unwrap();
+        assert!(result.available, "{result:?}");
+        assert_eq!(*mirror.resolved.lock().unwrap(), [(1, 12)]);
+    }
+
+    #[test]
+    fn an_unsupported_game_version_is_a_reason_not_an_error() {
+        let mut fx = fixture();
+        fx.installation.flavor = "unknown_flavor".to_owned();
+        fx.installation.name = "Unknown".to_owned();
+        let mirror = FakeMirror::default().with_release(1, &[]);
+        let result = check_mirror_file(&fx, blocked_routes(1, 10), &mirror, None).unwrap();
+        assert!(!result.available);
+        assert_eq!(
+            result.reason.as_deref(),
+            Some("Installing addons does not support the game version \"Unknown\" yet.")
+        );
+        assert!(mirror.resolved.lock().unwrap().is_empty());
     }
 
     #[test]

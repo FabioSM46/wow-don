@@ -1094,13 +1094,15 @@ pub async fn install_addon(
 }
 
 /// Il mirror GitHub del progetto CurseForge `mod_id` per l'installazione (D34, issue #164):
-/// `{ available, repo, tag, reason }`. Si chiama su richiesta (dettaglio o Install), mai dalla
+/// `{ available, repo, tag, reason }`, per il file `file_id` se indicato (come `install_addon`),
+/// altrimenti per l'ultimo della versione del gioco. Si chiama su richiesta (dettaglio o Install), mai dalla
 /// ricerca; un progetto che CurseForge lascia scaricare risponde `available: false` con
 /// `reason: null` senza richieste a GitHub. Rete fuori dal thread principale.
 #[tauri::command]
 pub async fn github_mirror(
     installation_id: String,
     mod_id: u32,
+    file_id: Option<u32>,
     app: AppHandle,
     store: Store<'_>,
     settings: Settings<'_>,
@@ -1124,6 +1126,7 @@ pub async fn github_mirror(
             &github,
             &overrides,
             mod_id,
+            file_id,
             allow_beta,
         )
     })
