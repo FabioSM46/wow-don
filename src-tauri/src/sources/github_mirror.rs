@@ -77,6 +77,17 @@ pub struct MirrorStatus {
     pub github_mirror: Option<GithubMirror>,
     /// Perché il mirror non si può usare (D27, in inglese).
     pub github_mirror_reason: Option<String>,
+    /// Il progetto e il file da cui calcolare il mirror alla fine del controllo
+    /// (`updates::resolve_mirrors`); vuoto dopo. Resta nel backend.
+    #[serde(skip)]
+    pub pending: Option<Box<Pending>>,
+}
+
+/// Il progetto CurseForge bloccato e il file da confrontare con la release di GitHub.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pending {
+    pub project: Mod,
+    pub file: File,
 }
 
 impl MirrorStatus {
@@ -88,10 +99,12 @@ impl MirrorStatus {
                     tag: tag.clone(),
                 }),
                 github_mirror_reason: None,
+                pending: None,
             },
             Outcome::Unavailable { reason } => Self {
                 github_mirror: None,
                 github_mirror_reason: Some(reason.message()),
+                pending: None,
             },
         }
     }

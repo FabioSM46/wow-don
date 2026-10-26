@@ -484,7 +484,7 @@ fn check_scanned(
         return Err(error);
     }
 
-    let updates = addons
+    let mut updates: Vec<AddonUpdate> = addons
         .iter()
         .zip(results)
         .zip(failures)
@@ -494,6 +494,11 @@ fn check_scanned(
                 .unwrap_or_else(|| unclaimed(addon, UpdateStatus::NotMatched))
         })
         .collect();
+    // Il lavoro che una fonte rimanda a dopo il controllo di tutte (il mirror GitHub di
+    // CurseForge, D34): nell'ordine delle fonti.
+    for source in sources {
+        source.finish(installation, &mut updates);
+    }
     Ok(updates)
 }
 
@@ -564,10 +569,16 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
             self.overrides,
             self.allow_beta,
         );
-        if let Some(github) = self.github {
-            attach_mirrors(&mut updates, &matches, &mods, github, &installation.flavor);
+        if self.github.is_some() {
+            mark_mirrors(&mut updates, &matches, &mods);
         }
         Ok(updates)
+    }
+
+    fn finish(&self, installation: &Installation, updates: &mut [AddonUpdate]) {
+        if let Some(github) = self.github {
+            resolve_mirrors(updates, github, &installation.flavor);
+        }
     }
 
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome {
@@ -595,17 +606,12 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
     }
 }
 
-/// Il mirror GitHub (D34) dei progetti bloccati con un aggiornamento disponibile, calcolato una
-/// volta per progetto e file. Nessuna richiesta a GitHub per i progetti aggiornati, con una
-/// sola Beta o che CurseForge lascia scaricare.
-fn attach_mirrors(
-    updates: &mut [AddonUpdate],
-    matches: &FingerprintMatches,
-    mods: &[Mod],
-    github: &dyn MirrorSource,
-    flavor: &str,
-) {
-    let mut resolved: HashMap<(u32, u32), MirrorStatus> = HashMap::new();
+/// Segna per il mirror GitHub (D34) i progetti bloccati con un aggiornamento disponibile, con
+/// il progetto e il file che servono a [`resolve_mirrors`]. Nessuna rete: il mirror si calcola
+/// dopo che tutte le fonti hanno fatto il controllo (`Source::finish`), così le richieste dei
+/// progetti GitHub registrati passano prima e non trovano il limite consumato dai mirror.
+/// Niente per i progetti aggiornati, con una sola Beta o che CurseForge lascia scaricare.
+fn mark_mirrors(updates: &mut [AddonUpdate], matches: &FingerprintMatches, mods: &[Mod]) {
     for update in updates {
         let (Some(project), UpdateStatus::UpdateAvailable { latest }) =
             (&update.project, &update.status)
@@ -628,11 +634,26 @@ fn attach_mirrors(
         else {
             continue;
         };
-        let status = resolved
-            .entry((project.id, latest.id))
-            .or_insert_with(|| MirrorStatus::of(&github.resolve(found, file, flavor)))
+        update.mirror.pending = Some(Box::new(github_mirror::Pending {
+            project: found.clone(),
+            file: file.clone(),
+        }));
+    }
+}
+
+/// Calcola il mirror delle voci segnate da [`mark_mirrors`], una volta per progetto e file.
+fn resolve_mirrors(updates: &mut [AddonUpdate], github: &dyn MirrorSource, flavor: &str) {
+    let mut resolved: HashMap<(u32, u32), MirrorStatus> = HashMap::new();
+    for update in updates {
+        let Some(pending) = update.mirror.pending.take() else {
+            continue;
+        };
+        update.mirror = resolved
+            .entry((pending.project.id, pending.file.id))
+            .or_insert_with(|| {
+                MirrorStatus::of(&github.resolve(&pending.project, &pending.file, flavor))
+            })
             .clone();
-        update.mirror = status;
     }
 }
 
@@ -1626,6 +1647,7 @@ mod tests {
                     tag: "4.18.3.1".to_owned(),
                 }),
                 github_mirror_reason: None,
+                pending: None,
             },
             ..update.clone()
         };
@@ -1639,6 +1661,7 @@ mod tests {
             mirror: MirrorStatus {
                 github_mirror: None,
                 github_mirror_reason: Some("why".to_owned()),
+                pending: None,
             },
             ..update.clone()
         };
@@ -3429,6 +3452,7 @@ mod tests {
                             tag: "11".to_owned(),
                         }),
                         github_mirror_reason: None,
+                        pending: None,
                     }
                 );
                 let json = serde_json::to_value(&updates[0]).unwrap();
@@ -3467,6 +3491,43 @@ mod tests {
                 assert!(cf_log.downloads.lock().unwrap().is_empty());
                 let calls = calls.lock().unwrap().clone();
                 assert_eq!(calls, [latest_url(), asset_url("11")]);
+            }
+
+            #[test]
+            fn mirrors_are_resolved_after_the_github_source_checks() {
+                // Un progetto GitHub registrato e un progetto CurseForge bloccato: la release del
+                // primo si legge prima di quella del mirror, così il limite di 60 richieste l'ora
+                // non lo consumano i mirror (finding della review su PR #173).
+                let fx = fixture(&[("Alpha", "alpha v1"), ("Gamma", "gamma")]);
+                let client = client(routes(&fx, blocked(1, "Alpha")));
+                let mut hub = hub("11", alpha_zip("x"));
+                let gamma = "https://api.github.com/repos/owner/Gamma/releases/latest";
+                let body = json!({"tag_name": "2", "assets": []});
+                hub.api
+                    .insert(gamma.to_owned(), (200, body.to_string(), 58));
+                let calls = Arc::clone(&hub.calls);
+                let github = GithubSource::new(hub);
+                let overrides = no_overrides();
+                let cf = source(&client, &overrides, &github);
+                let records = SourceRecords::from([(
+                    SourceKind::Github,
+                    ProjectRecords::from([(
+                        "owner/Gamma".to_owned(),
+                        SourceRecord {
+                            file: "1".to_owned(),
+                            folders: vec!["Gamma".to_owned()],
+                        },
+                    )]),
+                )]);
+
+                let updates = check_updates(&fx.installation, &[&cf, &github], &records).unwrap();
+                assert_eq!(*calls.lock().unwrap(), [gamma.to_owned(), latest_url()]);
+                let alpha = updates.iter().find(|u| u.folder == "Alpha").unwrap();
+                assert_eq!(
+                    alpha.mirror.github_mirror.as_ref().map(|m| m.tag.as_str()),
+                    Some("11")
+                );
+                assert!(updates.iter().all(|u| u.mirror.pending.is_none()));
             }
 
             #[test]

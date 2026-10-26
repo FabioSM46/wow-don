@@ -111,4 +111,11 @@ pub trait Source {
     /// progetto già aggiornato. Le regole di distribuzione della fonte
     /// (per CurseForge `allowModDistribution`, D13) restano qui.
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome;
+
+    /// Dopo il controllo di tutte le fonti, con le voci finali: il lavoro che non deve passare
+    /// prima delle fonti successive. CurseForge calcola qui il mirror GitHub dei progetti
+    /// bloccati (D34, issue #163), dopo le richieste della fonte GitHub. Di default niente.
+    fn finish(&self, installation: &Installation, updates: &mut [AddonUpdate]) {
+        let _ = (installation, updates);
+    }
 }
