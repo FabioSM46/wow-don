@@ -768,17 +768,36 @@ fn update_project<T: Transport>(
         if !target.reinstall {
             return UpdateOutcome::skipped(CF, key, name, "Already up to date.");
         }
+        // La regola non sceglie niente: con l'opzione spenta il motivo può essere una Beta più
+        // recente (`betaOnly`), e lo si dice; altrimenti non c'è un file da reinstallare.
+        let beta_only = folders
+            .iter()
+            .any(|u| matches!(u.status, UpdateStatus::BetaOnly { .. }));
+        let reason = match (allow_beta, beta_only) {
+            (false, true) => {
+                "No Release for this game version: turn on the Beta option to reinstall the Beta."
+            }
+            (false, false) => "No Release for this game version: nothing to reinstall.",
+            (true, _) => "No Release or Beta for this game version: nothing to reinstall.",
+        };
+        return UpdateOutcome::skipped(CF, key, name, reason);
+    };
+    // Senza un aggiornamento la scelta della regola non è più recente dell'installato: se è un
+    // altro file (per esempio un'Alpha installata a mano, o una Beta con l'opzione ora spenta)
+    // reinstallarla sarebbe un ritorno a una versione precedente, e non si fa in silenzio.
+    if available.is_none()
+        && installed
+            .installed_file
+            .as_ref()
+            .is_some_and(|file| file.id != latest.id)
+    {
         return UpdateOutcome::skipped(
             CF,
             key,
             name,
-            if allow_beta {
-                "No Release or Beta for this game version: nothing to reinstall."
-            } else {
-                "No Release for this game version: turn on the Beta option to reinstall a Beta."
-            },
+            "The installed file is newer than the one the app would install: reinstalling would downgrade it.",
         );
-    };
+    }
     if !project.allow_mod_distribution {
         return UpdateOutcome::skipped(
             CF,
@@ -2250,9 +2269,7 @@ mod tests {
             assert_eq!(off.status, OutcomeStatus::Skipped);
             assert_eq!(
                 off.message.as_deref(),
-                Some(
-                    "No Release for this game version: turn on the Beta option to reinstall a Beta."
-                )
+                Some("No Release for this game version: nothing to reinstall.")
             );
             assert!(log.downloads.lock().unwrap().is_empty());
 
@@ -2260,6 +2277,81 @@ mod tests {
             assert_eq!(on.status, OutcomeStatus::Updated);
             assert_eq!(on.file.as_ref().map(|f| f.id), Some(10));
             assert_eq!(*log.downloads.lock().unwrap(), [download_url(10)]);
+        }
+
+        /// Una Beta installata con l'opzione accesa, poi spenta, e una Release più vecchia: la
+        /// regola sceglie la Release, ma reinstallarla tornerebbe indietro.
+        #[test]
+        fn reinstall_never_downgrades() {
+            let fx = fixture(&[("Alpha", "alpha")]);
+            let (mut found, current) = up_to_date(&fx, 1, "Alpha", 2);
+            let older = file_json(1, 9, "2026-08-01T00:00:00Z", &[]);
+            found["latestFiles"] = json!([current, older.clone()]);
+            let routes = reinstall_routes(
+                found,
+                project(1, "Alpha", true),
+                &older,
+                zip_of(&[("Alpha/Alpha.lua", "old")]),
+            );
+            let log = Arc::clone(&routes.log);
+            let client = client(routes);
+
+            let outcome = cf_update_addons_with(
+                &fx.installation,
+                &client,
+                &no_overrides(),
+                &[1],
+                REINSTALL,
+                &mut |_, _| panic!("nothing is installed"),
+                &crate::progress::ignore,
+            )
+            .unwrap()
+            .remove(0);
+
+            assert_eq!(outcome.status, OutcomeStatus::Skipped);
+            assert_eq!(
+                outcome.message.as_deref(),
+                Some(
+                    "The installed file is newer than the one the app would install: reinstalling would downgrade it."
+                )
+            );
+            assert!(log.downloads.lock().unwrap().is_empty());
+        }
+
+        /// Con l'opzione spenta e una Beta più recente dell'installato il motivo la nomina.
+        #[test]
+        fn reinstall_names_a_newer_beta_when_the_option_is_off() {
+            let fx = fixture(&[("Alpha", "alpha")]);
+            let (mut found, mut newer) = up_to_date(&fx, 1, "Alpha", 2);
+            newer["id"] = json!(12);
+            newer["fileDate"] = json!("2026-10-01T00:00:00Z");
+            found["latestFiles"] = json!([newer]);
+            let routes = reinstall_routes(
+                found,
+                project(1, "Alpha", true),
+                &newer,
+                zip_of(&[("Alpha/Alpha.lua", "beta")]),
+            );
+            let client = client(routes);
+
+            let outcome = cf_update_addons_with(
+                &fx.installation,
+                &client,
+                &no_overrides(),
+                &[1],
+                REINSTALL,
+                &mut |_, _| panic!("nothing is installed"),
+                &crate::progress::ignore,
+            )
+            .unwrap()
+            .remove(0);
+
+            assert_eq!(
+                outcome.message.as_deref(),
+                Some(
+                    "No Release for this game version: turn on the Beta option to reinstall the Beta."
+                )
+            );
         }
 
         #[test]
