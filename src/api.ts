@@ -125,6 +125,25 @@ export type UpdateOutcome = {
 };
 
 /**
+ * Anteprima di `resolve_link` (issue #109): il progetto di GitHub, WoWInterface o Tukui indicato
+ * da un link. `id` va passato a `install_from_link`; `message` spiega un progetto non
+ * scaricabile o avvisa.
+ */
+export type LinkPreview = {
+  source: SourceKind;
+  id: string;
+  name: string;
+  version: string;
+  /** WoW-don lo può scaricare per il gioco dell'installazione. */
+  downloadable: boolean;
+  message?: string;
+  /** La pagina del progetto sul sito della fonte. */
+  url: string;
+  /** L'app l'ha già installato. */
+  installed: boolean;
+};
+
+/**
  * Esito di `install_addon` per un progetto: il primo è quello scelto, poi le dipendenze
  * obbligatorie in ampiezza. `name` può essere vuoto; `message` spiega `skipped` ed `error` o
  * avvisa su un'installazione riuscita.
@@ -344,6 +363,12 @@ export const api = {
   /** `fileId` assente: l'ultimo Release per la versione del gioco del progetto. */
   installAddon: (installationId: string, modId: number, fileId?: number) =>
     invoke<InstallOutcome[]>("install_addon", { installationId, modId, fileId: fileId ?? null }),
+  /** Un link non riconosciuto o malformato è rifiutato con un messaggio che dice cosa incollare. */
+  resolveLink: (installationId: string, url: string) =>
+    invoke<LinkPreview>("resolve_link", { installationId, url }),
+  /** L'esito ha la forma di `UpdateOutcome`: `updated` vuol dire installato. */
+  installFromLink: (installationId: string, source: SourceKind, id: string) =>
+    invoke<UpdateOutcome>("install_from_link", { installationId, source, id }),
   /** `path` è il percorso dello zip trascinato o scelto: il file lo legge il backend. */
   installZip: (installationId: string, path: string) =>
     invoke<LocalInstall>("install_zip", { installationId, path }),
