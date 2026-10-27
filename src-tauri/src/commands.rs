@@ -176,7 +176,8 @@ fn save_auto_update(
 }
 
 /// Se l'installazione partecipa all'aggiornamento automatico e quali progetti ne sono esclusi
-/// (issue #199). Il frontend abbina i progetti esclusi alle righe con fonte e id del progetto.
+/// (issue #199). Ogni escluso è `{ source, key }`: il frontend lo abbina a una riga confrontando
+/// `project.source` e `project.key` del suo `AddonUpdate` (vedi [`ProjectKey`]).
 #[tauri::command]
 pub fn get_auto_update(
     installation_id: String,
@@ -1702,6 +1703,37 @@ mod tests {
         assert_eq!(
             AppSettingsStore::load(file).get().unwrap().theme,
             Theme::Light
+        );
+    }
+
+    /// Il frontend esclude un addon con i campi `source` e `key` del `project` di un
+    /// `AddonUpdate`: quei due campi devono bastare a costruire un `ProjectKey`.
+    #[test]
+    fn a_project_of_an_update_row_reads_as_a_project_key() {
+        let project = serde_json::to_value(updates::Project {
+            id: 0,
+            source: SourceKind::Github,
+            key: "owner/repo".to_owned(),
+            name: "Addon".to_owned(),
+            url: None,
+            allow_mod_distribution: true,
+        })
+        .unwrap();
+        let key: ProjectKey = serde_json::from_value(serde_json::json!({
+            "source": project["source"],
+            "key": project["key"],
+        }))
+        .unwrap();
+        assert_eq!(
+            key,
+            ProjectKey {
+                source: SourceKind::Github,
+                key: "owner/repo".to_owned(),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&key).unwrap(),
+            serde_json::json!({"source": "github", "key": "owner/repo"})
         );
     }
 

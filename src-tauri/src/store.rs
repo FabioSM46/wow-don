@@ -1405,6 +1405,27 @@ mod tests {
     }
 
     #[test]
+    fn clearing_the_last_override_keeps_the_automatic_update_settings() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(ADDON_SETTINGS_FILE);
+        let mut store = AddonSettingsStore::load(file.clone());
+        store.set_override("a", 7, RETAIL).unwrap();
+        store.set_installation_auto_update("a", false).unwrap();
+        store
+            .set_auto_update_excluded("a", project(SourceKind::Curseforge, "9"), true)
+            .unwrap();
+        store.clear_override("a", 7).unwrap();
+
+        let reloaded = AddonSettingsStore::load(file.clone());
+        let entry = reloaded.auto_update_for("a").unwrap();
+        assert!(entry.disabled);
+        assert_eq!(entry.excluded.len(), 1);
+        assert!(reloaded.overrides_for("a").unwrap().is_empty());
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["installations"], serde_json::json!({}));
+    }
+
+    #[test]
     fn a_file_without_automatic_update_settings_reads_as_no_exclusions() {
         let tmp = TempDir::new();
         let file = tmp.path().join(ADDON_SETTINGS_FILE);

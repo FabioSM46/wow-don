@@ -29,6 +29,11 @@ pub use crate::store::SourceKind;
 
 /// Un progetto di una fonte: la fonte e l'id del progetto in quella fonte, come stringa
 /// (`61284` per CurseForge, `owner/repo` per GitHub, `-2` per ElvUI su Tukui).
+///
+/// In JSON è `{ "source": …, "key": … }`, gli stessi due campi di `project` in un `AddonUpdate`
+/// (`updates::Project`): il frontend costruisce un `ProjectKey` da `{ source: project.source,
+/// key: project.key }` e confronta gli esclusi di `get_auto_update` su quei due campi, mai su
+/// `project.id`, che vale `0` fuori da CurseForge.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ProjectKey {
     pub source: SourceKind,
