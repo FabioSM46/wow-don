@@ -507,6 +507,34 @@ mod tests {
         );
     }
 
+    /// Le cartelle vere di `install::WorkDir` (staging e quelle di `previous`) nascono accanto ad
+    /// `AddOns`, cioè al primo livello di `Interface`, con il prefisso che il backup salta: se
+    /// `install.rs` le spostasse altrove o cambiasse nome, questo test fallirebbe.
+    #[test]
+    fn real_install_work_folders_are_left_out() {
+        let tmp = TempDir::new();
+        let inst = installation(&tmp);
+        let interface = inst.path.join("Interface");
+        let addons = interface.join("AddOns");
+        write(&addons.join("A/A.toc"), b"x");
+        let staging = crate::install::WorkDir::staging(&addons).unwrap();
+        let next = crate::install::WorkDir::create(&addons, "next").unwrap();
+        for work in [&staging, &next] {
+            assert_eq!(work.path().parent(), Some(interface.as_path()));
+            write(&work.path().join("B/B.toc"), b"y");
+        }
+        let info = create_backup(&inst, &tmp.path().join("backups")).unwrap();
+        assert_eq!(
+            names(&read_zip(&info.path)),
+            [
+                "Interface/",
+                "Interface/AddOns/",
+                "Interface/AddOns/A/",
+                "Interface/AddOns/A/A.toc"
+            ]
+        );
+    }
+
     #[test]
     fn the_prefix_is_skipped_only_for_folders_at_the_top_of_interface() {
         let tmp = TempDir::new();
