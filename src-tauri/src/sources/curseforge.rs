@@ -405,6 +405,11 @@ pub struct Mod {
     pub links: ModLinks,
     #[serde(default, deserialize_with = "null_as_default")]
     pub latest_files_indexes: Vec<FileIndex>,
+    /// Gli ultimi file del progetto, come i `latestFiles` di un match dei fingerprint (stesso
+    /// schema `File`, con `sortableGameVersions` e `isAvailable`): servono al controllo dei
+    /// progetti riconosciuti dai record dell'app (issue #216).
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub latest_files: Vec<File>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -981,8 +986,11 @@ mod tests {
            "links": {"websiteUrl": "https://www.curseforge.com/wow/addons/full",
              "sourceUrl": "https://github.com/Nevcairiel/Bartender4"},
            "latestFilesIndexes": [{"gameVersion": "12.1.5", "fileId": 9, "filename": "f.zip",
-             "releaseType": 1, "gameVersionTypeId": 517}]},
-          {"id": 2, "name": "Minimal"}
+             "releaseType": 1, "gameVersionTypeId": 517}],
+           "latestFiles": [{"id": 9, "modId": 1, "releaseType": 1, "isAvailable": true,
+             "fileDate": "2026-10-01T00:00:00Z",
+             "sortableGameVersions": [{"gameVersionName": "12.1.5", "gameVersionTypeId": 517}]}]},
+          {"id": 2, "name": "Minimal", "latestFiles": null}
         ]}"#;
 
     /// La forma esatta di una risposta reale di `POST /v1/fingerprints/1` per un fingerprint
@@ -1044,6 +1052,14 @@ mod tests {
             serde_json::from_str(r#"{"websiteUrl": null, "sourceUrl": null}"#).unwrap();
         assert_eq!(links, ModLinks::default());
         assert!(mods[1].latest_files_indexes.is_empty());
+        // `latestFiles` ha lo schema `File` dei match dei fingerprint; `null` vale vuota.
+        let latest = &mods[0].latest_files[0];
+        assert_eq!((latest.id, latest.mod_id), (9, 1));
+        assert_eq!(
+            latest.sortable_game_versions[0].game_version_type_id,
+            Some(517)
+        );
+        assert!(mods[1].latest_files.is_empty());
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(seen[0].0, "https://api.curseforge.com/v1/mods");
         assert_eq!(seen[0].2.as_deref(), Some(r#"{"modIds":[1,2]}"#));
