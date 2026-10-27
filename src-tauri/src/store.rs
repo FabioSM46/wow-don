@@ -1,5 +1,6 @@
 //! Stato locale salvato su disco: l'elenco delle installazioni (`installations.json`), le
-//! impostazioni degli addon (`addon-settings.json`, per ora la versione del gioco forzata, D6)
+//! impostazioni degli addon (`addon-settings.json`: la versione del gioco forzata, D6, e le
+//! esclusioni dall'aggiornamento automatico, D41),
 //! i progetti installati dall'app con le loro cartelle (`installed-addons.json`, issue #62) e le
 //! impostazioni dell'app (`settings.json`, per ora il tema, issue #92).
 //!
@@ -13,7 +14,7 @@
 //! davvero simultanee da due istanze possono ancora perdersene una: non c'è un lock sul file,
 //! e l'app non impedisce di aprire due istanze.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::installations::{self, Installation};
+use crate::sources::ProjectKey;
 use crate::updates::{self, VersionOverrides};
 
 pub const INSTALLATIONS_FILE: &str = "installations.json";
@@ -134,10 +136,44 @@ struct AddonSetting {
 /// Id dell'installazione → id del progetto CurseForge → impostazioni.
 type SettingsByInstallation = BTreeMap<String, BTreeMap<u32, AddonSetting>>;
 
+/// L'aggiornamento automatico di un'installazione (D41, issue #199). Senza voce l'installazione
+/// partecipa e nessun progetto è escluso.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallationAutoUpdate {
+    /// L'installazione è esclusa per intero.
+    #[serde(default)]
+    pub disabled: bool,
+    /// I progetti esclusi, di qualunque fonte.
+    #[serde(default)]
+    pub excluded: BTreeSet<ProjectKey>,
+}
+
+impl InstallationAutoUpdate {
+    fn is_default(&self) -> bool {
+        !self.disabled && self.excluded.is_empty()
+    }
+}
+
+/// Id dell'installazione → aggiornamento automatico.
+type AutoUpdateByInstallation = BTreeMap<String, InstallationAutoUpdate>;
+
+/// Tutto `addon-settings.json` in memoria.
+#[derive(Debug, Clone, Default)]
+struct AddonSettings {
+    overrides: SettingsByInstallation,
+    auto_update: AutoUpdateByInstallation,
+}
+
+/// Il campo `autoUpdate` è un'aggiunta della issue #199: un file di prima non lo ha e vale
+/// "nessuna esclusione", senza cambiare versione (come i campi aggiunti a `settings.json`).
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StoredAddonSettings {
     version: u32,
     installations: SettingsByInstallation,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    auto_update: AutoUpdateByInstallation,
 }
 
 /// Le impostazioni per addon, con le stesse regole di [`InstallationStore`]: rilettura prima
@@ -146,7 +182,7 @@ struct StoredAddonSettings {
 #[derive(Debug)]
 pub struct AddonSettingsStore {
     file: PathBuf,
-    settings: SettingsByInstallation,
+    settings: AddonSettings,
     load_error: Option<String>,
 }
 
@@ -160,7 +196,7 @@ impl AddonSettingsStore {
             },
             Err(error) => Self {
                 file,
-                settings: SettingsByInstallation::new(),
+                settings: AddonSettings::default(),
                 load_error: Some(error),
             },
         }
@@ -173,6 +209,7 @@ impl AddonSettingsStore {
         self.check_loaded()?;
         Ok(self
             .settings
+            .overrides
             .get(installation_id)
             .into_iter()
             .flatten()
@@ -193,12 +230,15 @@ impl AddonSettingsStore {
         }
         self.reload()?;
         let mut next = self.settings.clone();
-        next.entry(installation_id.to_owned()).or_default().insert(
-            mod_id,
-            AddonSetting {
-                game_version_type_id: version_type,
-            },
-        );
+        next.overrides
+            .entry(installation_id.to_owned())
+            .or_default()
+            .insert(
+                mod_id,
+                AddonSetting {
+                    game_version_type_id: version_type,
+                },
+            );
         self.save(next)
     }
 
@@ -206,26 +246,84 @@ impl AddonSettingsStore {
     pub fn clear_override(&mut self, installation_id: &str, mod_id: u32) -> Result<(), String> {
         self.reload()?;
         let mut next = self.settings.clone();
-        let Some(addons) = next.get_mut(installation_id) else {
+        let Some(addons) = next.overrides.get_mut(installation_id) else {
             return Ok(());
         };
         if addons.remove(&mod_id).is_none() {
             return Ok(());
         }
-        if addons.is_empty() {
-            next.remove(installation_id);
-        }
         self.save(next)
     }
 
-    /// Toglie tutte le impostazioni di un'installazione rimossa.
+    /// L'aggiornamento automatico di un'installazione: se partecipa e quali progetti sono
+    /// esclusi.
+    pub fn auto_update_for(&self, installation_id: &str) -> Result<InstallationAutoUpdate, String> {
+        self.check_loaded()?;
+        Ok(self
+            .settings
+            .auto_update
+            .get(installation_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// Esclude il progetto dall'aggiornamento automatico, o lo riammette.
+    pub fn set_auto_update_excluded(
+        &mut self,
+        installation_id: &str,
+        project: ProjectKey,
+        excluded: bool,
+    ) -> Result<InstallationAutoUpdate, String> {
+        self.change_auto_update(installation_id, |entry| {
+            if excluded {
+                entry.excluded.insert(project);
+            } else {
+                entry.excluded.remove(&project);
+            }
+        })
+    }
+
+    /// Fa partecipare l'installazione all'aggiornamento automatico, o la esclude per intero.
+    /// Le esclusioni dei singoli progetti restano.
+    pub fn set_installation_auto_update(
+        &mut self,
+        installation_id: &str,
+        enabled: bool,
+    ) -> Result<InstallationAutoUpdate, String> {
+        self.change_auto_update(installation_id, |entry| entry.disabled = !enabled)
+    }
+
+    fn change_auto_update(
+        &mut self,
+        installation_id: &str,
+        change: impl FnOnce(&mut InstallationAutoUpdate),
+    ) -> Result<InstallationAutoUpdate, String> {
+        self.reload()?;
+        let mut next = self.settings.clone();
+        let entry = next
+            .auto_update
+            .entry(installation_id.to_owned())
+            .or_default();
+        change(entry);
+        let changed = entry.clone();
+        if next.auto_update == self.settings.auto_update {
+            return Ok(changed);
+        }
+        self.save(next)?;
+        Ok(changed)
+    }
+
+    /// Toglie tutte le impostazioni di un'installazione rimossa: versioni forzate ed esclusioni.
     pub fn remove_installation(&mut self, installation_id: &str) -> Result<(), String> {
         self.reload()?;
-        if !self.settings.contains_key(installation_id) {
+        if !self.settings.overrides.contains_key(installation_id)
+            && !self.settings.auto_update.contains_key(installation_id)
+        {
             return Ok(());
         }
         let mut next = self.settings.clone();
-        next.remove(installation_id);
+        next.overrides.remove(installation_id);
+        next.auto_update.remove(installation_id);
         self.save(next)
     }
 
@@ -242,28 +340,33 @@ impl AddonSettingsStore {
         }
     }
 
-    /// Scrive le impostazioni senza i tipi che l'app non conosce più.
-    fn save(&mut self, mut settings: SettingsByInstallation) -> Result<(), String> {
-        for addons in settings.values_mut() {
+    /// Scrive le impostazioni senza i tipi che l'app non conosce più e senza le voci vuote.
+    fn save(&mut self, mut settings: AddonSettings) -> Result<(), String> {
+        for addons in settings.overrides.values_mut() {
             addons
                 .retain(|_, setting| updates::is_known_version_type(setting.game_version_type_id));
         }
-        settings.retain(|_, addons| !addons.is_empty());
+        settings.overrides.retain(|_, addons| !addons.is_empty());
+        settings.auto_update.retain(|_, entry| !entry.is_default());
         let stored = StoredAddonSettings {
             version: ADDON_SETTINGS_VERSION,
-            installations: settings,
+            installations: settings.overrides,
+            auto_update: settings.auto_update,
         };
         write_atomically(&self.file, &stored)
             .map_err(|error| format!("Could not save the addon settings ({}).", error.kind()))?;
-        self.settings = stored.installations;
+        self.settings = AddonSettings {
+            overrides: stored.installations,
+            auto_update: stored.auto_update,
+        };
         Ok(())
     }
 }
 
-fn read_addon_settings(file: &Path) -> Result<SettingsByInstallation, String> {
+fn read_addon_settings(file: &Path) -> Result<AddonSettings, String> {
     let text = match read_text(file) {
         Ok(Some(text)) => text,
-        Ok(None) => return Ok(SettingsByInstallation::new()),
+        Ok(None) => return Ok(AddonSettings::default()),
         Err(error) => {
             return Err(format!(
                 "Could not read {ADDON_SETTINGS_FILE} ({}).",
@@ -280,7 +383,10 @@ fn read_addon_settings(file: &Path) -> Result<SettingsByInstallation, String> {
             stored.version
         ));
     }
-    Ok(stored.installations)
+    Ok(AddonSettings {
+        overrides: stored.installations,
+        auto_update: stored.auto_update,
+    })
 }
 
 // ── Addon installati dall'app ───────────────────────────────────────────────
@@ -657,8 +763,48 @@ impl Theme {
     }
 }
 
-/// Le impostazioni dell'app, come le riceve il frontend (`get_settings`).
+/// Cosa fa l'aggiornamento automatico degli addon (D41, issue #199): niente, solo il
+/// controllo, oppure il controllo e l'installazione.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoUpdateMode {
+    Off,
+    #[default]
+    Notify,
+    Install,
+}
+
+impl AutoUpdateMode {
+    /// La modalità dal suo nome; un valore sconosciuto è un errore con un messaggio in inglese.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "off" => Ok(Self::Off),
+            "notify" => Ok(Self::Notify),
+            "install" => Ok(Self::Install),
+            _ => Err("Unknown automatic update mode: use off, notify or install.".to_owned()),
+        }
+    }
+}
+
+/// Gli intervalli ammessi tra due giri dell'aggiornamento automatico, in ore.
+pub const AUTO_UPDATE_INTERVALS_HOURS: [u32; 5] = [1, 3, 6, 12, 24];
+pub const DEFAULT_AUTO_UPDATE_INTERVAL_HOURS: u32 = 6;
+
+/// Controlla un intervallo scelto dall'utente.
+pub fn check_auto_update_interval(hours: u32) -> Result<u32, String> {
+    if AUTO_UPDATE_INTERVALS_HOURS.contains(&hours) {
+        Ok(hours)
+    } else {
+        Err("Unsupported automatic update interval: use 1, 3, 6, 12 or 24 hours.".to_owned())
+    }
+}
+
+fn default_auto_update_interval() -> u32 {
+    DEFAULT_AUTO_UPDATE_INTERVAL_HOURS
+}
+
+/// Le impostazioni dell'app, come le riceve il frontend (`get_settings`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub theme: Theme,
@@ -670,6 +816,26 @@ pub struct AppSettings {
     /// #158, D35). Un `settings.json` di prima non ha il campo: vale falso, la X chiude.
     #[serde(default)]
     pub close_to_tray: bool,
+    /// L'aggiornamento automatico (D41, issue #199). Un `settings.json` di prima non ha il
+    /// campo: vale `notify`, che controlla senza toccare il disco.
+    #[serde(default)]
+    pub auto_update: AutoUpdateMode,
+    /// Le ore tra due giri, uno di [`AUTO_UPDATE_INTERVALS_HOURS`]. Un file senza il campo vale
+    /// 6; un valore non ammesso scritto a mano si legge come 6, senza bloccare le impostazioni.
+    #[serde(default = "default_auto_update_interval")]
+    pub auto_update_interval_hours: u32,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            theme: Theme::default(),
+            beta_when_no_release: false,
+            close_to_tray: false,
+            auto_update: AutoUpdateMode::default(),
+            auto_update_interval_hours: DEFAULT_AUTO_UPDATE_INTERVAL_HOURS,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -725,6 +891,22 @@ impl AppSettingsStore {
         self.reload()?;
         let mut next = self.settings;
         next.beta_when_no_release = enabled;
+        self.save(next)?;
+        Ok(next)
+    }
+
+    /// Salva modalità e intervallo dell'aggiornamento automatico e restituisce le impostazioni
+    /// aggiornate. Un intervallo non ammesso non tocca né la memoria né il file.
+    pub fn set_auto_update(
+        &mut self,
+        mode: AutoUpdateMode,
+        interval_hours: u32,
+    ) -> Result<AppSettings, String> {
+        let interval_hours = check_auto_update_interval(interval_hours)?;
+        self.reload()?;
+        let mut next = self.settings;
+        next.auto_update = mode;
+        next.auto_update_interval_hours = interval_hours;
         self.save(next)?;
         Ok(next)
     }
@@ -788,7 +970,11 @@ fn read_app_settings(file: &Path) -> Result<AppSettings, String> {
     }
     let stored: StoredAppSettings =
         serde_json::from_value(value).map_err(|_| damaged_settings())?;
-    Ok(stored.settings)
+    let mut settings = stored.settings;
+    if check_auto_update_interval(settings.auto_update_interval_hours).is_err() {
+        settings.auto_update_interval_hours = DEFAULT_AUTO_UPDATE_INTERVAL_HOURS;
+    }
+    Ok(settings)
 }
 
 fn damaged_settings() -> String {
@@ -1119,6 +1305,164 @@ mod tests {
         );
     }
 
+    fn project(source: SourceKind, key: &str) -> ProjectKey {
+        ProjectKey {
+            source,
+            key: key.to_owned(),
+        }
+    }
+
+    #[test]
+    fn without_settings_every_installation_takes_part_in_automatic_updates() {
+        let tmp = TempDir::new();
+        let store = AddonSettingsStore::load(tmp.path().join(ADDON_SETTINGS_FILE));
+        assert_eq!(
+            store.auto_update_for("a").unwrap(),
+            InstallationAutoUpdate::default()
+        );
+    }
+
+    #[test]
+    fn excluded_projects_of_any_source_survive_a_reload_and_keep_the_overrides() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(ADDON_SETTINGS_FILE);
+        let mut store = AddonSettingsStore::load(file.clone());
+        store.set_override("a", 7, CLASSIC_ERA).unwrap();
+        store
+            .set_auto_update_excluded("a", project(SourceKind::Curseforge, "7"), true)
+            .unwrap();
+        store
+            .set_auto_update_excluded("a", project(SourceKind::Github, "owner/repo"), true)
+            .unwrap();
+        // Escludere due volte lo stesso progetto non lo duplica.
+        let entry = store
+            .set_auto_update_excluded("a", project(SourceKind::Tukui, "-2"), true)
+            .unwrap();
+        store
+            .set_auto_update_excluded("a", project(SourceKind::Tukui, "-2"), true)
+            .unwrap();
+        assert_eq!(entry.excluded.len(), 3);
+        assert!(!entry.disabled);
+
+        let reloaded = AddonSettingsStore::load(file.clone());
+        let entry = reloaded.auto_update_for("a").unwrap();
+        assert_eq!(
+            entry.excluded,
+            BTreeSet::from([
+                project(SourceKind::Curseforge, "7"),
+                project(SourceKind::Github, "owner/repo"),
+                project(SourceKind::Tukui, "-2"),
+            ])
+        );
+        assert_eq!(
+            reloaded.overrides_for("a").unwrap(),
+            VersionOverrides::from([(7, CLASSIC_ERA)])
+        );
+        assert_eq!(
+            reloaded.auto_update_for("b").unwrap(),
+            InstallationAutoUpdate::default()
+        );
+
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["version"], 1);
+        assert_eq!(
+            saved["autoUpdate"]["a"]["excluded"][0],
+            serde_json::json!({"source": "curseforge", "key": "7"})
+        );
+
+        let mut store = reloaded;
+        store
+            .set_auto_update_excluded("a", project(SourceKind::Github, "owner/repo"), false)
+            .unwrap();
+        assert_eq!(store.auto_update_for("a").unwrap().excluded.len(), 2);
+    }
+
+    #[test]
+    fn an_installation_can_leave_automatic_updates_and_keep_its_exclusions() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(ADDON_SETTINGS_FILE);
+        let mut store = AddonSettingsStore::load(file.clone());
+        store
+            .set_auto_update_excluded("a", project(SourceKind::Wowinterface, "5"), true)
+            .unwrap();
+        let entry = store.set_installation_auto_update("a", false).unwrap();
+        assert!(entry.disabled);
+        assert_eq!(entry.excluded.len(), 1);
+        assert!(
+            AddonSettingsStore::load(file.clone())
+                .auto_update_for("a")
+                .unwrap()
+                .disabled
+        );
+
+        store.set_installation_auto_update("a", true).unwrap();
+        store
+            .set_auto_update_excluded("a", project(SourceKind::Wowinterface, "5"), false)
+            .unwrap();
+        // Una voce tornata al default non resta nel file.
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert!(saved.get("autoUpdate").is_none());
+    }
+
+    #[test]
+    fn clearing_the_last_override_keeps_the_automatic_update_settings() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(ADDON_SETTINGS_FILE);
+        let mut store = AddonSettingsStore::load(file.clone());
+        store.set_override("a", 7, RETAIL).unwrap();
+        store.set_installation_auto_update("a", false).unwrap();
+        store
+            .set_auto_update_excluded("a", project(SourceKind::Curseforge, "9"), true)
+            .unwrap();
+        store.clear_override("a", 7).unwrap();
+
+        let reloaded = AddonSettingsStore::load(file.clone());
+        let entry = reloaded.auto_update_for("a").unwrap();
+        assert!(entry.disabled);
+        assert_eq!(entry.excluded.len(), 1);
+        assert!(reloaded.overrides_for("a").unwrap().is_empty());
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved["installations"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn a_file_without_automatic_update_settings_reads_as_no_exclusions() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(ADDON_SETTINGS_FILE);
+        fs::write(
+            &file,
+            r#"{"version": 1, "installations": {"a": {"7": {"gameVersionTypeId": 517}}}}"#,
+        )
+        .unwrap();
+        let store = AddonSettingsStore::load(file);
+        assert_eq!(
+            store.auto_update_for("a").unwrap(),
+            InstallationAutoUpdate::default()
+        );
+        assert_eq!(
+            store.overrides_for("a").unwrap(),
+            VersionOverrides::from([(7, RETAIL)])
+        );
+    }
+
+    #[test]
+    fn removing_an_installation_removes_its_exclusions() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(ADDON_SETTINGS_FILE);
+        let mut store = AddonSettingsStore::load(file.clone());
+        store.set_installation_auto_update("a", false).unwrap();
+        store
+            .set_auto_update_excluded("b", project(SourceKind::Curseforge, "9"), true)
+            .unwrap();
+        store.remove_installation("a").unwrap();
+        let reloaded = AddonSettingsStore::load(file);
+        assert_eq!(
+            reloaded.auto_update_for("a").unwrap(),
+            InstallationAutoUpdate::default()
+        );
+        assert_eq!(reloaded.auto_update_for("b").unwrap().excluded.len(), 1);
+    }
+
     #[test]
     fn corrupt_addon_settings_are_reported_and_left_untouched() {
         let tmp = TempDir::new();
@@ -1129,6 +1473,13 @@ mod tests {
         assert!(store.set_override("a", 7, RETAIL).is_err());
         assert!(store.clear_override("a", 7).is_err());
         assert!(store.remove_installation("a").is_err());
+        assert!(store.auto_update_for("a").is_err());
+        assert!(store.set_installation_auto_update("a", false).is_err());
+        assert!(
+            store
+                .set_auto_update_excluded("a", project(SourceKind::Curseforge, "7"), true)
+                .is_err()
+        );
         assert_eq!(fs::read(&file).unwrap(), b"{ not json");
 
         fs::write(&file, br#"{"version": 2, "installations": {}}"#).unwrap();
@@ -1434,7 +1785,9 @@ mod tests {
                 "version": 1,
                 "theme": "dark",
                 "betaWhenNoRelease": false,
-                "closeToTray": false
+                "closeToTray": false,
+                "autoUpdate": "notify",
+                "autoUpdateIntervalHours": 6
             })
         );
 
@@ -1503,6 +1856,82 @@ mod tests {
         assert!(store.get().is_err());
         assert!(store.set_close_to_tray(true).is_err());
         assert_eq!(fs::read(&file).unwrap(), b"not json");
+    }
+
+    #[test]
+    fn automatic_updates_default_to_notify_every_six_hours() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        let missing = AppSettingsStore::load(file.clone()).get().unwrap();
+        assert_eq!(missing.auto_update, AutoUpdateMode::Notify);
+        assert_eq!(missing.auto_update_interval_hours, 6);
+
+        // Un file scritto prima della issue #199 non ha i campi.
+        fs::write(
+            &file,
+            r#"{"version": 1, "theme": "dark", "closeToTray": true}"#,
+        )
+        .unwrap();
+        let mut store = AppSettingsStore::load(file.clone());
+        let old = store.get().unwrap();
+        assert_eq!(old.auto_update, AutoUpdateMode::Notify);
+        assert_eq!(old.auto_update_interval_hours, 6);
+
+        let saved = store.set_auto_update(AutoUpdateMode::Off, 24).unwrap();
+        assert_eq!(saved.auto_update, AutoUpdateMode::Off);
+        assert_eq!(saved.auto_update_interval_hours, 24);
+        assert_eq!(saved.theme, Theme::Dark);
+        assert!(saved.close_to_tray);
+        let reloaded = AppSettingsStore::load(file).get().unwrap();
+        assert_eq!(reloaded, saved);
+    }
+
+    #[test]
+    fn an_unsupported_interval_is_rejected_and_one_written_by_hand_reads_as_six_hours() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        let mut store = AppSettingsStore::load(file.clone());
+        assert!(store.set_auto_update(AutoUpdateMode::Install, 5).is_err());
+        assert!(!file.exists());
+
+        fs::write(
+            &file,
+            r#"{"version": 1, "theme": "system", "autoUpdate": "install", "autoUpdateIntervalHours": 5}"#,
+        )
+        .unwrap();
+        let settings = AppSettingsStore::load(file).get().unwrap();
+        assert_eq!(settings.auto_update, AutoUpdateMode::Install);
+        assert_eq!(settings.auto_update_interval_hours, 6);
+    }
+
+    #[test]
+    fn an_unknown_mode_in_the_file_blocks_the_settings() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        fs::write(
+            &file,
+            r#"{"version": 1, "theme": "system", "autoUpdate": "always"}"#,
+        )
+        .unwrap();
+        let mut store = AppSettingsStore::load(file.clone());
+        assert!(store.get().unwrap_err().contains("damaged"));
+        assert!(store.set_auto_update(AutoUpdateMode::Off, 6).is_err());
+    }
+
+    #[test]
+    fn auto_update_mode_names_are_parsed_and_unknown_ones_rejected() {
+        assert_eq!(AutoUpdateMode::parse("off").unwrap(), AutoUpdateMode::Off);
+        assert_eq!(
+            AutoUpdateMode::parse("notify").unwrap(),
+            AutoUpdateMode::Notify
+        );
+        assert_eq!(
+            AutoUpdateMode::parse("install").unwrap(),
+            AutoUpdateMode::Install
+        );
+        for unknown in ["", "Notify", "always"] {
+            assert!(AutoUpdateMode::parse(unknown).is_err());
+        }
     }
 
     #[test]

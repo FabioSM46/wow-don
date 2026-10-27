@@ -106,6 +106,10 @@ pub fn run() {
             commands::set_theme,
             commands::set_beta_when_no_release,
             commands::set_close_to_tray,
+            commands::set_auto_update,
+            commands::get_auto_update,
+            commands::set_auto_update_excluded,
+            commands::set_installation_auto_update,
             commands::get_autostart,
             commands::set_autostart,
         ])
