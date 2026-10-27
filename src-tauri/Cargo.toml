@@ -1,9 +1,10 @@
 [package]
 name = "wow-don"
 version = "0.1.0"
-description = "Gestore di addon per World of Warcraft su Linux"
-authors = ["Fabio Sdringola Maranga"]
+description = "World of Warcraft addon manager for Linux and Windows"
+authors = ["FabioSM46 <124870035+FabioSM46@users.noreply.github.com>"]
 edition = "2024"
+license = "GPL-3.0-or-later"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -18,12 +19,30 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dotenvy = "0.15"
+tauri-plugin-dialog = "2"
+tauri-plugin-window-state = "2"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "blocking"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+tauri-plugin-autostart = "2"
 
+# Lettura di `InstallPath` dal registro per la ricerca delle installazioni (D30).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
+
+# `tauri dev` usa questo profilo: senza ottimizzazioni la scansione degli addon (fingerprint di
+# centinaia di MB di file), l'estrazione degli zip e TLS sono un ordine di grandezza più lenti.
+# Il codice del progetto resta a `opt-level = 1` per non allungare troppo la compilazione.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

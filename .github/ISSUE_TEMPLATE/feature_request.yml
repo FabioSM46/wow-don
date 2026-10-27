@@ -1,0 +1,135 @@
+name: Funzionalità
+description: Richiedi una funzionalità o un miglioramento (strutturata per gli agenti AI)
+title: "[Feature]: "
+labels: ["feature", "needs-refinement"]
+assignees: []
+body:
+  - type: dropdown
+    id: workspace
+    attributes:
+      label: Area
+      description: Quale parte del repository tocca?
+      options:
+        - backend (Rust / Tauri)
+        - frontend (React / TypeScript)
+        - shared (Trasversale)
+      default: 0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Tipo
+      description: Decide il prefisso del branch e il tipo di commit
+      options:
+        - feature (Nuova funzionalità)
+        - enhancement (Miglioramento di una funzionalità esistente)
+        - refactor (Ristrutturazione senza cambi di comportamento)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priorità
+      description: Quanto è urgente?
+      options:
+        - high (Blocca altro lavoro)
+        - medium (Priorità normale)
+        - low (Utile ma non urgente)
+      default: 1
+    validations:
+      required: true
+
+  - type: textarea
+    id: user_story
+    attributes:
+      label: User story
+      description: Nella forma "Come [ruolo], voglio [obiettivo], così che [motivo]". Sii preciso, l'agente la legge alla lettera.
+      placeholder: |
+        Come giocatore che usa WoW dentro un prefisso Wine
+        voglio aggiungere a mano la cartella `_classic_beta_`
+        così che l'app legga gli addon di quella versione
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Criteri di accettazione
+      description: Condizioni verificabili come passa/non passa. Niente voci vaghe come "funziona bene".
+      placeholder: |
+        - [ ] Si può scegliere una cartella `_<flavor>_` dal selettore di file
+        - [ ] Una cartella senza `Interface/AddOns` viene rifiutata con un messaggio chiaro
+        - [ ] L'installazione aggiunta resta salvata dopo il riavvio dell'app
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical_context
+    attributes:
+      label: Contesto tecnico
+      description: |
+        **OBBLIGATORIO**. È la guida principale dell'agente.
+        Sottosezioni consigliate: File da modificare, Pattern da seguire, Vincoli.
+      placeholder: |
+        ### File da modificare
+        - src-tauri/src/installations.rs (nuovo modulo)
+        - src-tauri/src/commands.rs (comando `add_installation`)
+        - src/App.tsx (pulsante e lista)
+
+        ### Pattern da seguire
+        - I comandi Tauri restituiscono `Result<T, String>` serializzabile
+
+        ### Vincoli
+        - Rete, disco e chiavi solo nel backend
+        - Nessuna nuova dipendenza (crate o pacchetti npm) senza discuterne
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Fuori scope
+      description: |
+        **OBBLIGATORIO**. Cosa questa issue NON copre.
+        Evita che l'agente faccia più del necessario.
+      placeholder: |
+        - Non implementare la scoperta automatica dei prefissi Lutris (issue separata)
+        - Non leggere ancora i file `.toc`
+    validations:
+      required: true
+
+  - type: textarea
+    id: code_pointers
+    attributes:
+      label: Riferimenti nel codice
+      description: |
+        Riferimenti `file:riga` al codice esistente da leggere per primo.
+      placeholder: |
+        - src-tauri/src/lib.rs:10 (registrazione dei comandi)
+        - src-tauri/src/config.rs:5 (lettura della configurazione)
+    validations:
+      required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dipendenze
+      description: Issue, PR o configurazioni che devono essere completate prima.
+      placeholder: |
+        - Richiede #12 (stato locale persistente)
+    validations:
+      required: false
+
+  - type: textarea
+    id: test_strategy
+    attributes:
+      label: Strategia di test
+      description: Cosa testare, casi limite e come verificare il risultato.
+      placeholder: |
+        - Unit test: una cartella senza `Interface/AddOns` viene rifiutata
+        - Caso limite: percorso con spazi dentro `drive_c/Program Files (x86)`
+    validations:
+      required: false

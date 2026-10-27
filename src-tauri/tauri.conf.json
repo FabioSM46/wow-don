@@ -16,7 +16,8 @@
         "width": 1100,
         "height": 720,
         "minWidth": 800,
-        "minHeight": 500
+        "minHeight": 500,
+        "visible": false
       }
     ],
     "security": {
@@ -25,7 +26,26 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "license": "GPL-3.0-or-later",
+    "licenseFile": "../LICENSE",
+    "linux": {
+      "deb": {
+        "section": "games",
+        "depends": ["libayatana-appindicator3-1"],
+        "desktopTemplate": "linux/wow-don.desktop",
+        "files": {
+          "/usr/share/doc/wow-don/copyright": "../LICENSE"
+        }
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -1,0 +1,8 @@
+[toolchain]
+# Pinned exactly: the gates must run the same compiler everywhere, and "stable"
+# means a different compiler every six weeks. CI pins the matching
+# dtolnay/rust-toolchain release by full SHA, so bump this channel and the
+# workflow action pin together when moving to a new compiler.
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

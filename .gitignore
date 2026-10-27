@@ -25,3 +25,7 @@ dist-ssr
 
 # Segreti locali: la chiave API di CurseForge sta qui
 .env
+
+# Bytecode Python dei test del reviewer
+__pycache__/
+*.py[cod]
