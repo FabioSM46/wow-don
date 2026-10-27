@@ -98,6 +98,7 @@ Iteration 6:
 ## M5 — Chiave per applicazioni di terzi e primo rilascio
 
 - Inviare a CurseForge/Overwolf il form per la chiave da applicazione.
+- Chiedere a Wago un accesso in lettura all'API (D39), in parallelo.
 - Decidere come la chiave arriva nell'app installata: oggi il backend la legge solo da
   `CURSEFORGE_API_KEY` o dalla `.env` del checkout, quindi un pacchetto installato parte senza
   chiave.
@@ -109,4 +110,5 @@ Iteration 6:
 - Token GitHub personale facoltativo, per superare il limite di 60 richieste l'ora.
 - Ricerca nel catalogo WoWInterface.
 
-Fuori dal progetto (D39): Wago Addons, anche come idea per il futuro.
+- Wago Addons (D39): richiesta di accesso all'API inviata dall'utente; la fonte si specifica
+  solo se Wago concede una chiave da usare in WoW-don.
