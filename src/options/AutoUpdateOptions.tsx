@@ -42,6 +42,11 @@ export function AutoUpdateOptions({ active, installations }: Props) {
   // nessuna lettura parte mentre un salvataggio è in corso.
   const generation = useRef(0);
   const savingRef = useRef(false);
+  // Una lettura saltata durante un salvataggio, o scartata perché il salvataggio ha cambiato
+  // generazione, non tornerebbe più: per esempio un'installazione aggiunta mentre si salva
+  // resterebbe senza valore e con la casella disattivata. Ogni salvataggio finito fa quindi
+  // ripartire la lettura cambiando `retry`.
+  const [retry, setRetry] = useState(0);
   const ids = installations.map((installation) => installation.id).join("\n");
 
   useEffect(() => {
@@ -79,7 +84,7 @@ export function AutoUpdateOptions({ active, installations }: Props) {
     }
 
     void refresh();
-  }, [active, ids]);
+  }, [active, ids, retry]);
 
   async function saveSchedule(next: Schedule) {
     savingRef.current = true;
@@ -93,6 +98,7 @@ export function AutoUpdateOptions({ active, installations }: Props) {
       setError(errorMessage(err));
     } finally {
       savingRef.current = false;
+      setRetry((n) => n + 1);
       setPending(undefined);
     }
   }
@@ -109,6 +115,7 @@ export function AutoUpdateOptions({ active, installations }: Props) {
       setError(errorMessage(err));
     } finally {
       savingRef.current = false;
+      setRetry((n) => n + 1);
       setPendingInstallation(undefined);
     }
   }

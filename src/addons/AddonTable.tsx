@@ -39,6 +39,7 @@ import { refreshCheck } from "./refresh";
 import { ContextMenu } from "./ContextMenu";
 import {
   EXCLUDED_TITLE,
+  excludedAfter,
   excludedIds,
   exclusionChoice,
   exclusionProjects,
@@ -313,6 +314,12 @@ export function AddonTable({
   const [excluded, setExcluded] = useState<ReadonlySet<string> | undefined>();
   const [excludedError, setExcludedError] = useState<string | null>(null);
   const [savingExclusion, setSavingExclusion] = useState(false);
+  // La scelta in salvataggio: le righe la mostrano finché il backend non risponde, poi vale lo
+  // stato salvato (anche dopo un errore, che riporta le righe a quello che c'è davvero).
+  const [pendingExclusion, setPendingExclusion] = useState<{
+    projects: ProjectRef[];
+    exclude: boolean;
+  } | null>(null);
   const [exclusionError, setExclusionError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -320,6 +327,7 @@ export function AddonTable({
     setExcluded(undefined);
     setExcludedError(null);
     setSavingExclusion(false);
+    setPendingExclusion(null);
     setExclusionError(null);
     api
       .getAutoUpdate(installation.id)
@@ -338,6 +346,7 @@ export function AddonTable({
     const id = installation.id;
     if (projects.length === 0 || savingExclusion) return;
     setSavingExclusion(true);
+    setPendingExclusion({ projects, exclude });
     setExclusionError(null);
     try {
       for (const project of projects) {
@@ -351,9 +360,18 @@ export function AddonTable({
         setExclusionError(`Could not save the automatic update choice: ${errorMessage(err)}`);
       }
     } finally {
-      if (mounted.current && currentId.current === id) setSavingExclusion(false);
+      if (mounted.current && currentId.current === id) {
+        setSavingExclusion(false);
+        setPendingExclusion(null);
+      }
     }
   }
+
+  // Quello che le righe mostrano: la scelta in salvataggio sopra lo stato salvato.
+  const shownExcluded =
+    pendingExclusion && excluded
+      ? excludedAfter(excluded, pendingExclusion.projects, pendingExclusion.exclude)
+      : excluded;
 
   // `reinstall` (issue #149): riscarica anche i progetti già aggiornati, con la stessa barra e
   // lo stesso riepilogo di un aggiornamento.
@@ -752,6 +770,11 @@ export function AddonTable({
           {rescanError}
         </p>
       )}
+      {excludedError && (
+        <p className="message error" role="alert">
+          Could not read the automatic update choices: {excludedError}
+        </p>
+      )}
       {exclusionError && (
         <p className="message error" role="alert">
           {exclusionError}{" "}
@@ -962,7 +985,7 @@ export function AddonTable({
                             {/* `aria-selected` su una riga di tabella non è letto da tutti gli
                                 screen reader: lo stato è anche nel testo della riga. */}
                             {isSelected && <span className="visually-hidden"> (selected)</span>}
-                            {isExcluded(update, excluded) && (
+                            {isExcluded(update, shownExcluded) && (
                               <span className="auto-update-off" title={EXCLUDED_TITLE}>
                                 No auto-update
                               </span>

@@ -53,7 +53,10 @@ export function exclusionLabel(exclude: boolean): string {
   return exclude ? "Don't auto-update" : "Allow auto-update";
 }
 
-/** Chi è escluso dopo la scelta su `projects`: gli altri esclusi restano come sono. */
+/**
+ * Chi è escluso dopo la scelta su `projects`: gli altri esclusi restano come sono. Le righe di
+ * Installed lo mostrano mentre la scelta si salva; poi vale lo stato restituito dal backend.
+ */
 export function excludedAfter(
   excluded: ReadonlySet<string>,
   projects: ProjectRef[],
