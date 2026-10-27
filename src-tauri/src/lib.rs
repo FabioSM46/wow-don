@@ -15,6 +15,7 @@ mod install_local;
 mod install_new;
 mod installations;
 mod parallel;
+mod previous;
 mod progress;
 mod sources;
 mod store;
@@ -69,6 +70,11 @@ pub fn run() {
             app.manage(Mutex::new(AppSettingsStore::load(
                 config_dir.join(APP_SETTINGS_FILE),
             )));
+            // La versione precedente dell'ultimo giro automatico (issue #201): il manifesto si
+            // rilegge a ogni uso e si scrive solo sotto `InstallLock`, quindi niente `Mutex`.
+            app.manage(previous::PreviousManifest::new(
+                config_dir.join(previous::PREVIOUS_FILE),
+            ));
             tray::create(app.handle());
             // The main window is declared invisible in `tauri.conf.json` (no flash, D36), and
             // the window-state plugin above never restores visibility (no `VISIBLE` flag):
@@ -116,6 +122,7 @@ pub fn run() {
             commands::set_auto_update_excluded,
             commands::set_installation_auto_update,
             commands::get_auto_update_status,
+            commands::undo_last_auto_update,
             commands::get_autostart,
             commands::set_autostart,
         ])

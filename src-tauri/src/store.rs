@@ -570,6 +570,34 @@ impl InstalledAddonsStore {
         self.save(next)
     }
 
+    /// Toglie il record di un solo progetto, se c'è (l'Undo del giro automatico per un
+    /// progetto che prima non aveva record, issue #201). Senza record da togliere non scrive.
+    pub fn forget_project(
+        &mut self,
+        installation_id: &str,
+        source: SourceKind,
+        project_id: &str,
+    ) -> Result<(), String> {
+        self.reload()?;
+        let mut next = self.records.clone();
+        let Some(sources) = next.get_mut(installation_id) else {
+            return Ok(());
+        };
+        let Some(projects) = sources.get_mut(&source) else {
+            return Ok(());
+        };
+        if projects.remove(project_id).is_none() {
+            return Ok(());
+        }
+        if projects.is_empty() {
+            sources.remove(&source);
+        }
+        if sources.is_empty() {
+            next.remove(installation_id);
+        }
+        self.save(next)
+    }
+
     /// Toglie i record (di qualsiasi fonte) dell'installazione che nominano almeno una delle
     /// cartelle `folders`, senza distinguere maiuscole e minuscole: servono quando uno zip
     /// installato a mano scrive quelle cartelle (D32), così il record non descrive più un file
@@ -1013,7 +1041,7 @@ fn read(file: &Path) -> Result<Vec<Installation>, String> {
 }
 
 /// Il contenuto del file; `None` se non esiste.
-fn read_text(file: &Path) -> std::io::Result<Option<String>> {
+pub(crate) fn read_text(file: &Path) -> std::io::Result<Option<String>> {
     match fs::read_to_string(file) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -1021,7 +1049,7 @@ fn read_text(file: &Path) -> std::io::Result<Option<String>> {
     }
 }
 
-fn write_atomically<S: Serialize>(file: &Path, stored: &S) -> std::io::Result<()> {
+pub(crate) fn write_atomically<S: Serialize>(file: &Path, stored: &S) -> std::io::Result<()> {
     let dir = file.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(dir)?;
     let json = serde_json::to_vec_pretty(stored).map_err(std::io::Error::other)?;
@@ -1660,6 +1688,37 @@ mod tests {
         assert_eq!(a["github"]["owner/repo"]["file"], "v1.2");
         assert_eq!(a["wowinterface"]["5108"]["file"], "v5.0.15");
         assert_eq!(a["tukui"]["-2"]["file"], "16.00");
+    }
+
+    #[test]
+    fn forgetting_a_project_drops_only_its_record() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(INSTALLED_ADDONS_FILE);
+        let mut store = InstalledAddonsStore::load(file.clone());
+        store.record("a", 7, record(70, &["Alpha"])).unwrap();
+        store.record("a", 8, record(80, &["Beta"])).unwrap();
+        store.record("b", 7, record(70, &["Alpha"])).unwrap();
+        store
+            .forget_project("a", SourceKind::Curseforge, "7")
+            .unwrap();
+        // Un progetto senza record non scrive e non fallisce.
+        store
+            .forget_project("a", SourceKind::Github, "x/y")
+            .unwrap();
+        store
+            .forget_project("c", SourceKind::Curseforge, "7")
+            .unwrap();
+        let reloaded = InstalledAddonsStore::load(file.clone());
+        assert_eq!(
+            reloaded.records_for("a").unwrap(),
+            InstalledRecords::from([(8, record(80, &["Beta"]))])
+        );
+        assert_eq!(reloaded.records_for("b").unwrap().len(), 1);
+        store
+            .forget_project("a", SourceKind::Curseforge, "8")
+            .unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert!(saved["installations"].get("a").is_none());
     }
 
     #[test]

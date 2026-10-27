@@ -12,6 +12,10 @@
 //! L'esito dell'ultimo giro resta in memoria in [`AutoUpdate`], si legge con
 //! `get_auto_update_status` e parte come evento [`EVENT`] alla fine di ogni giro: entrambi
 //! portano un [`AutoUpdateStatus`]. Nessun esito contiene la chiave CurseForge, URL o percorsi.
+//!
+//! In `install` il giro tiene la versione precedente delle cartelle che sostituisce
+//! ([`NextGeneration`], issue #201): l'ultimo giro di un'installazione si annulla con
+//! `undo_last_auto_update`, e lo stato dice quali installazioni hanno un giro annullabile.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -26,6 +30,7 @@ use crate::addons::scan::InstalledAddon;
 use crate::backup::iso_utc;
 use crate::commands::{self, InstallLock, LiveSources};
 use crate::installations::Installation;
+use crate::previous::{NextGeneration, PreviousManifest, UndoableRound};
 use crate::sources::{ProjectKey, RecordWriter, Source, SourceKind, UpdateTarget};
 use crate::store::{
     AUTO_UPDATE_INTERVALS_HOURS, AddonSettingsStore, AppSettingsStore, AutoUpdateMode,
@@ -72,6 +77,12 @@ pub struct AutoUpdateStatus {
     /// L'ultimo giro finito; `null` prima del primo. Un giro saltato perché un comando teneva il
     /// lock non lo sostituisce.
     pub last_round: Option<RoundReport>,
+    /// Le installazioni con un giro automatico annullabile (`undo_last_auto_update`, issue
+    /// #201), nell'ordine di `installations.json`: una voce `{ installationId, roundAt, addons }`
+    /// per installazione, dove `addons` è quanti progetti l'Undo rimetterebbe. Un'installazione
+    /// senza voce non ha niente da annullare. Si legge dal manifesto `auto-update-previous.json`,
+    /// quindi vale anche dopo un riavvio, prima del primo giro.
+    pub undoable: Vec<UndoableRound>,
 }
 
 /// Un giro finito.
@@ -108,7 +119,9 @@ pub struct InstallationReport {
     pub skipped: Vec<UpdateOutcome>,
     /// Gli errori di singoli progetti o cartelle, con il messaggio di oggi: un aggiornamento
     /// fallito (su Windows un file aperto dal gioco blocca il `rename`) o una cartella che
-    /// nessuna fonte ha potuto controllare. Si riprovano al giro successivo.
+    /// nessuna fonte ha potuto controllare. Si riprovano al giro successivo. In `install` c'è
+    /// anche, con `source`, `key` e `name` vuoti, l'errore della versione precedente che non si
+    /// è potuta tenere per l'Undo (gli aggiornamenti sono comunque installati).
     pub errors: Vec<AutoUpdateError>,
     /// Il controllo dell'installazione è fallito per intero (cartella irraggiungibile, tutte le
     /// fonti senza risposta, impostazioni illeggibili): le liste sopra restano vuote, o con quello
@@ -339,8 +352,10 @@ impl Source for Watched<'_> {
 }
 
 /// Il giro su un'installazione che partecipa: controlla e, in `install`, aggiorna i soli
-/// progetti di [`plan`] senza reinstallare, con `record` per il registro. Restituisce l'esito e
-/// le fonti il cui controllo è fallito per intero (per [`needs_retry`]). Bloccante.
+/// progetti di [`plan`] senza reinstallare, con `record` per il registro. Con `previous`
+/// l'aggiornamento tiene le cartelle sostituite in quella generazione (issue #201); il chiamante
+/// la conferma con [`NextGeneration::commit`]. Restituisce l'esito e le fonti il cui controllo è
+/// fallito per intero (per [`needs_retry`]). Bloccante.
 #[allow(clippy::too_many_arguments)]
 pub fn run_installation(
     installation: &Installation,
@@ -350,6 +365,7 @@ pub fn run_installation(
     sources: &[&dyn Source],
     records: &SourceRecords,
     record: &mut RecordWriter<'_>,
+    previous: Option<&mut NextGeneration>,
     checked_at: String,
 ) -> (InstallationReport, Vec<SourceKind>) {
     let failed = RefCell::new(Vec::new());
@@ -380,16 +396,23 @@ pub fn run_installation(
             report.errors = plan.errors;
             if mode == AutoUpdateMode::Install && !plan.projects.is_empty() {
                 // `update_addons_with` rifà il controllo: un fallimento lì non tocca niente.
-                match updates::update_addons_with(
-                    installation,
-                    cache,
-                    &watched,
-                    records,
-                    &plan.projects,
-                    false,
-                    record,
-                    &|_| {},
-                ) {
+                let update = |record: &mut RecordWriter<'_>| {
+                    updates::update_addons_with(
+                        installation,
+                        cache,
+                        &watched,
+                        records,
+                        &plan.projects,
+                        false,
+                        record,
+                        &|_| {},
+                    )
+                };
+                let result = match previous {
+                    Some(previous) => previous.run(records, record, update),
+                    None => update(record),
+                };
+                match result {
                     Err(error) => report.check_error = Some(error),
                     Ok(outcomes) => {
                         for outcome in outcomes {
@@ -476,6 +499,26 @@ impl AutoUpdate {
     }
 }
 
+/// Lo stato del giro con `undoable` letto dal manifesto, per le installazioni ancora presenti:
+/// la risposta di `get_auto_update_status` e il payload di ogni evento [`EVENT`].
+pub fn current_status(app: &AppHandle) -> AutoUpdateStatus {
+    with_undoable(app, app.state::<AutoUpdate>().status())
+}
+
+fn with_undoable(app: &AppHandle, mut status: AutoUpdateStatus) -> AutoUpdateStatus {
+    let ids: Vec<String> = match app.state::<Mutex<InstallationStore>>().lock() {
+        Ok(store) => store
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|installation| installation.id)
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    status.undoable = crate::previous::undoable(&app.state::<PreviousManifest>(), &ids);
+    status
+}
+
 /// Avvia il thread del giro; va chiamata in `setup`, dopo aver registrato gli stati.
 pub fn start(app: AppHandle) {
     let spawned = std::thread::Builder::new()
@@ -548,7 +591,7 @@ fn round(app: &AppHandle, state: &AutoUpdate, mode: AutoUpdateMode) -> RoundResu
         });
     });
     // Un evento che non parte non ferma il giro: l'esito resta leggibile con il comando.
-    let _ = app.emit(EVENT, &status);
+    let _ = app.emit(EVENT, &with_undoable(app, status));
     if retrying {
         RoundResult::Failed
     } else {
@@ -608,7 +651,9 @@ fn round_installations(app: &AppHandle, mode: AutoUpdateMode) -> (Vec<Installati
         };
         let records = commands::records_for_matching(&installed, &installation.id);
         let mut record = commands::record_writer(&installed, &cache, installation);
-        let (report, failed) = sources.with(&overrides, allow_beta, |sources| {
+        let mut previous =
+            (mode == AutoUpdateMode::Install).then(|| NextGeneration::new(installation));
+        let (mut report, failed) = sources.with(&overrides, allow_beta, |sources| {
             run_installation(
                 installation,
                 mode,
@@ -617,9 +662,26 @@ fn round_installations(app: &AppHandle, mode: AutoUpdateMode) -> (Vec<Installati
                 sources,
                 &records,
                 &mut record,
+                previous.as_mut(),
                 iso_utc(SystemTime::now()),
             )
         });
+        if let Some(previous) = previous {
+            let manifest = app.state::<PreviousManifest>();
+            if let Err(message) = previous.commit(
+                &manifest,
+                &installation.id,
+                &report.checked_at,
+                &report.updated,
+            ) {
+                report.errors.push(AutoUpdateError {
+                    source: None,
+                    key: None,
+                    name: String::new(),
+                    message,
+                });
+            }
+        }
         retrying |= needs_retry(&failed, sources.has_curseforge_key());
         reports.push(report);
     }
@@ -907,8 +969,15 @@ mod tests {
                     check_error: None,
                 }],
             }),
+            undoable: vec![UndoableRound {
+                installation_id: "id".to_owned(),
+                round_at: "t".to_owned(),
+                addons: 2,
+            }],
         };
         let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["undoable"][0]["installationId"], "id");
+        assert_eq!(json["undoable"][0]["addons"], 2);
         assert_eq!(json["nextRoundAt"], "2026-10-27T10:00:00Z");
         let round = &json["lastRound"];
         assert_eq!(round["mode"], "install");
@@ -979,6 +1048,12 @@ mod tests {
                     "Could not replace the addon folder: a file is in use.".to_owned(),
                 );
             }
+            // Come una fonte vera: la cartella del progetto si sostituisce con `replace`.
+            let staging = crate::install::WorkDir::staging(target.addons_dir).unwrap();
+            let dir = staging.path().join(target.key);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(format!("{}.lua", target.key)), "new").unwrap();
+            crate::install::replace(target.addons_dir, staging.path(), &[]).unwrap();
             record(
                 self.kind,
                 target.key,
@@ -1035,6 +1110,7 @@ mod tests {
                 written.push(key.to_owned());
                 Ok(())
             },
+            None,
             "2026-10-27T10:00:00Z".to_owned(),
         );
         (report, failed, written)
@@ -1094,6 +1170,60 @@ mod tests {
         assert_eq!(report.skipped.len(), 1);
         assert_eq!(report.skipped[0].key, "Gamma");
         assert!(failed.is_empty());
+    }
+
+    #[test]
+    fn only_a_round_with_a_generation_keeps_the_previous_version() {
+        let tmp = TempDir::new();
+        let installation = installation_with(&tmp, &["Alpha"]);
+        let interface = installation.path.join("Interface");
+        let addons = interface.join("AddOns");
+        let source = FakeSource::new(SourceKind::Tukui, &["Alpha"]);
+        let auto = InstallationAutoUpdate::default();
+
+        // Senza generazione (come un aggiornamento manuale) la versione vecchia si cancella.
+        let (report, _, _) = run(&installation, AutoUpdateMode::Install, &auto, &[&source]);
+        assert_eq!(report.updated.len(), 1);
+        assert_eq!(
+            fs::read_to_string(addons.join("Alpha/Alpha.lua")).unwrap(),
+            "new"
+        );
+        assert_eq!(
+            crate::install::folder_names(&interface).unwrap(),
+            ["AddOns"]
+        );
+
+        write_addon(&addons, "Alpha");
+        let manifest = PreviousManifest::new(tmp.path().join("config").join("previous.json"));
+        let mut next = NextGeneration::new(&installation);
+        let (report, _) = run_installation(
+            &installation,
+            AutoUpdateMode::Install,
+            &auto,
+            None,
+            &[&source],
+            &SourceRecords::new(),
+            &mut |_, _, _| Ok(()),
+            Some(&mut next),
+            "2026-10-27T10:00:00Z".to_owned(),
+        );
+        next.commit(
+            &manifest,
+            &installation.id,
+            &report.checked_at,
+            &report.updated,
+        )
+        .unwrap();
+        let generation = interface.join(crate::previous::GENERATION_DIR);
+        assert_eq!(
+            fs::read_to_string(generation.join("0").join("Alpha").join("Alpha.lua")).unwrap(),
+            "Alpha"
+        );
+        let undoable = crate::previous::undoable(&manifest, std::slice::from_ref(&installation.id));
+        assert_eq!(undoable.len(), 1);
+        assert_eq!(undoable[0].addons, 1);
+        assert_eq!(undoable[0].round_at, "2026-10-27T10:00:00Z");
+        assert_eq!(manifest.read().unwrap()["test"].projects[0].name, "Alpha");
     }
 
     #[test]
