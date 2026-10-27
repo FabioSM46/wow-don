@@ -11,7 +11,7 @@ import {
   versionName,
 } from "./detail";
 import { Gallery } from "./Gallery";
-import { galleryLabel, tabIndexForKey } from "./gallery";
+import { galleryLabel, tabIndexForKey } from "./screenshots";
 
 type Props = {
   installationId: string;

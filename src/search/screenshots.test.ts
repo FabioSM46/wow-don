@@ -10,7 +10,7 @@ import {
   previousIndex,
   screenshotTitle,
   tabIndexForKey,
-} from "./gallery.ts";
+} from "./screenshots.ts";
 
 describe("gallery labels", () => {
   it("counts the screenshots in the tab label, zero included", () => {
