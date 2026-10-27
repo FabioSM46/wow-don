@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::addons::scan::InstalledAddon;
 use crate::installations::Installation;
@@ -29,7 +29,7 @@ pub use crate::store::SourceKind;
 
 /// Un progetto di una fonte: la fonte e l'id del progetto in quella fonte, come stringa
 /// (`61284` per CurseForge, `owner/repo` per GitHub, `-2` per ElvUI su Tukui).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ProjectKey {
     pub source: SourceKind,
     pub key: String,

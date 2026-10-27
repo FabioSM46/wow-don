@@ -33,8 +33,8 @@ use crate::sources::tukui::{self, TukuiSource};
 use crate::sources::wowinterface::{self, WowInterfaceSource};
 use crate::sources::{ProjectKey, SourceKind};
 use crate::store::{
-    AddonSettingsStore, AppSettings, AppSettingsStore, InstallationStore, InstalledAddonsStore,
-    InstalledRecords, SourceRecord, SourceRecords, Theme,
+    AddonSettingsStore, AppSettings, AppSettingsStore, AutoUpdateMode, InstallationAutoUpdate,
+    InstallationStore, InstalledAddonsStore, InstalledRecords, SourceRecord, SourceRecords, Theme,
 };
 use crate::tray::TrayStatus;
 use crate::updates::{
@@ -151,6 +151,67 @@ pub fn set_close_to_tray(
     )
 }
 
+/// Salva modalità (`off`, `notify` o `install`) e intervallo in ore dell'aggiornamento
+/// automatico (D41, issue #199) e restituisce le impostazioni aggiornate.
+#[tauri::command]
+pub fn set_auto_update(
+    mode: String,
+    interval_hours: u32,
+    settings: AppSettingsState<'_>,
+    tray: State<'_, TrayStatus>,
+) -> Result<SettingsView, String> {
+    settings_view(save_auto_update(&settings, &mode, interval_hours), &tray)
+}
+
+/// Il corpo di [`set_auto_update`], separato dallo `State` di Tauri per i test. I valori si
+/// controllano prima del lock: uno sconosciuto non tocca né la memoria né il file.
+fn save_auto_update(
+    settings: &Mutex<AppSettingsStore>,
+    mode: &str,
+    interval_hours: u32,
+) -> Result<AppSettings, String> {
+    let mode = AutoUpdateMode::parse(mode)?;
+    crate::store::check_auto_update_interval(interval_hours)?;
+    locked_app_settings(settings)?.set_auto_update(mode, interval_hours)
+}
+
+/// Se l'installazione partecipa all'aggiornamento automatico e quali progetti ne sono esclusi
+/// (issue #199). Il frontend abbina i progetti esclusi alle righe con fonte e id del progetto.
+#[tauri::command]
+pub fn get_auto_update(
+    installation_id: String,
+    store: Store<'_>,
+    settings: Settings<'_>,
+) -> Result<InstallationAutoUpdate, String> {
+    find_installation(&store, &installation_id)?;
+    locked_settings(&settings)?.auto_update_for(&installation_id)
+}
+
+/// Esclude un progetto dall'aggiornamento automatico (`excluded`) o lo riammette.
+#[tauri::command]
+pub fn set_auto_update_excluded(
+    installation_id: String,
+    project: ProjectKey,
+    excluded: bool,
+    store: Store<'_>,
+    settings: Settings<'_>,
+) -> Result<InstallationAutoUpdate, String> {
+    find_installation(&store, &installation_id)?;
+    locked_settings(&settings)?.set_auto_update_excluded(&installation_id, project, excluded)
+}
+
+/// Fa partecipare un'installazione all'aggiornamento automatico (`enabled`) o la esclude.
+#[tauri::command]
+pub fn set_installation_auto_update(
+    installation_id: String,
+    enabled: bool,
+    store: Store<'_>,
+    settings: Settings<'_>,
+) -> Result<InstallationAutoUpdate, String> {
+    find_installation(&store, &installation_id)?;
+    locked_settings(&settings)?.set_installation_auto_update(&installation_id, enabled)
+}
+
 /// Se l'app parte con il sistema (issue #159). Lo stato si legge dal sistema operativo a ogni
 /// chiamata: non è in `settings.json`.
 #[tauri::command]
@@ -165,8 +226,8 @@ pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     autostart::set_enabled(&app, enabled)
 }
 
-/// Le impostazioni dell'app (tema, opzione della Beta, "Close to tray") e se l'icona nella
-/// tray c'è; senza `settings.json` valgono i default.
+/// Le impostazioni dell'app (tema, opzione della Beta, "Close to tray", aggiornamento
+/// automatico) e se l'icona nella tray c'è; senza `settings.json` valgono i default.
 #[tauri::command]
 pub fn get_settings(
     settings: AppSettingsState<'_>,
@@ -1644,6 +1705,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn set_auto_update_rejects_unknown_values_before_touching_the_file() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        let settings = Mutex::new(AppSettingsStore::load(file.clone()));
+
+        assert_eq!(
+            save_auto_update(&settings, "always", 6).unwrap_err(),
+            "Unknown automatic update mode: use off, notify or install."
+        );
+        for hours in [0, 2, 48] {
+            assert_eq!(
+                save_auto_update(&settings, "install", hours).unwrap_err(),
+                "Unsupported automatic update interval: use 1, 3, 6, 12 or 24 hours."
+            );
+        }
+        assert!(!file.exists());
+
+        let saved = save_auto_update(&settings, "install", 1).unwrap();
+        assert_eq!(saved.auto_update, AutoUpdateMode::Install);
+        assert_eq!(saved.auto_update_interval_hours, 1);
+        let reloaded = AppSettingsStore::load(file).get().unwrap();
+        assert_eq!(reloaded.auto_update, AutoUpdateMode::Install);
+        assert_eq!(reloaded.auto_update_interval_hours, 1);
+    }
+
     /// Issue #179: un progetto bloccato con un repository GitHub si importa dal mirror.
     #[test]
     fn a_blocked_project_with_a_github_repository_can_be_imported() {
@@ -1687,11 +1774,19 @@ mod tests {
             theme: Theme::Dark,
             beta_when_no_release: true,
             close_to_tray: true,
+            auto_update: AutoUpdateMode::Install,
+            auto_update_interval_hours: 12,
         })
         .unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"theme": "dark", "betaWhenNoRelease": true, "closeToTray": true})
+            serde_json::json!({
+                "theme": "dark",
+                "betaWhenNoRelease": true,
+                "closeToTray": true,
+                "autoUpdate": "install",
+                "autoUpdateIntervalHours": 12
+            })
         );
     }
 
@@ -1705,6 +1800,8 @@ mod tests {
                 "theme": "system",
                 "betaWhenNoRelease": false,
                 "closeToTray": false,
+                "autoUpdate": "notify",
+                "autoUpdateIntervalHours": 6,
                 "trayAvailable": false
             })
         );
