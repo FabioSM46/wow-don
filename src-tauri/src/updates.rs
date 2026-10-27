@@ -219,8 +219,9 @@ struct MatchIndex<'a> {
     by_fingerprint: HashMap<u64, &'a FingerprintMatch>,
     /// Nome di una cartella (`modules[].name`, in minuscolo) → il match del file che la elenca.
     by_folder: HashMap<String, &'a FingerprintMatch>,
-    /// Nome di una cartella (in minuscolo) → il match del record che la nomina.
-    by_record: HashMap<String, &'a FingerprintMatch>,
+    /// Nome di una cartella (in minuscolo) → il match del record che la nomina; `None` se la
+    /// nominano i record di più progetti, che allora non decidono.
+    by_record: HashMap<String, Option<&'a FingerprintMatch>>,
 }
 
 impl<'a> MatchIndex<'a> {
@@ -235,7 +236,12 @@ impl<'a> MatchIndex<'a> {
                 index
                     .by_record
                     .entry(folder.to_lowercase())
-                    .or_insert(&record.found);
+                    .and_modify(|owner| {
+                        if owner.is_some_and(|found| found.id != record.found.id) {
+                            *owner = None;
+                        }
+                    })
+                    .or_insert(Some(&record.found));
             }
         }
         for found in &matches.partial_matches {
@@ -277,7 +283,7 @@ impl<'a> MatchIndex<'a> {
             None => self.by_folder.get(&folder),
         };
         found
-            .or_else(|| self.by_record.get(&folder))
+            .or_else(|| self.by_record.get(&folder).and_then(Option::as_ref))
             .map_or(Located::NotMatched, |&found| Located::Found(found))
     }
 }
@@ -644,7 +650,7 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
         mod_ids.sort_unstable();
         mod_ids.dedup();
         let mods = self.client.get_mods(&mod_ids).map_err(|e| e.to_string())?;
-        let recorded = self.recorded_matches(&candidates, &mods)?;
+        let recorded = self.recorded_matches(&candidates, &mods);
         let mut updates = evaluate_with(
             offered,
             &matches,
@@ -744,13 +750,14 @@ impl<T: Transport> CurseForgeSource<'_, T> {
     /// I match dei record `candidates`: il file installato si legge con una sola `get_files`, gli
     /// ultimi file dal mod già letto in `mods`. Un record il cui progetto non è in `mods` o il cui
     /// file CurseForge non restituisce più (o restituisce per un altro progetto) non dà un match,
-    /// e le sue cartelle restano non riconosciute. Solo una richiesta fallita è un errore, come
-    /// per `get_mods`.
+    /// e le sue cartelle restano non riconosciute. Il ripiego non peggiora mai il controllo: se
+    /// la richiesta `get_files` fallisce, non c'è nessun match dei record (le loro cartelle
+    /// restano `notMatched`, senza messaggio) e i match del fingerprint valgono come prima.
     fn recorded_matches(
         &self,
         candidates: &[RecordCandidate<'_>],
         mods: &[Mod],
-    ) -> Result<Vec<RecordedMatch>, String> {
+    ) -> Vec<RecordedMatch> {
         let project_of = |id: u32| mods.iter().find(|m| m.id == id);
         let mut file_ids: Vec<u32> = candidates
             .iter()
@@ -760,13 +767,12 @@ impl<T: Transport> CurseForgeSource<'_, T> {
         file_ids.sort_unstable();
         file_ids.dedup();
         if file_ids.is_empty() {
-            return Ok(Vec::new());
+            return Vec::new();
         }
-        let files = self
-            .client
-            .get_files(&file_ids)
-            .map_err(|e| e.to_string())?;
-        Ok(candidates
+        let Ok(files) = self.client.get_files(&file_ids) else {
+            return Vec::new();
+        };
+        candidates
             .iter()
             .filter_map(|candidate| {
                 let project = project_of(candidate.mod_id)?;
@@ -782,7 +788,7 @@ impl<T: Transport> CurseForgeSource<'_, T> {
                     },
                 })
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -3125,25 +3131,78 @@ mod tests {
         }
 
         #[test]
-        fn a_failed_read_of_the_recorded_files_fails_the_check_with_a_clear_message() {
+        fn a_failed_read_of_the_recorded_files_keeps_the_fingerprint_results() {
             let fx = forever_fixture();
+            let plain = fx.fingerprints["Plain"];
             let routes = Routes {
+                fingerprints: json!({"data": {"exactMatches": [{
+                    "id": 1,
+                    "file": forever_file(1, 10, "2026-09-01T00:00:00Z", &[("Plain", plain)]),
+                    "latestFiles": [forever_file(1, 11, "2026-10-01T00:00:00Z", &[])],
+                }]}})
+                .to_string(),
+                mods: json!({"data": [
+                    project(1, "Plain", true),
+                    {"id": 77, "name": "Ess", "allowModDistribution": true},
+                ]})
+                .to_string(),
+                // `POST /v1/mods/files` risponde 404.
                 file_list: None,
-                ..recorded_routes(true)
+                ..Routes::default()
+            };
+            let log = Arc::clone(&routes.log);
+            let client = client(routes);
+            let updates = check_with_records(&fx, &client, &ess_record("770"));
+
+            assert!(
+                log.posts
+                    .lock()
+                    .unwrap()
+                    .contains(&format!("{API}/v1/mods/files"))
+            );
+            // Il controllo non fallisce e il fingerprint vale come prima del ripiego.
+            let plain = status_of(&updates, "Plain");
+            assert_eq!(plain.project.as_ref().map(|p| p.id), Some(1));
+            assert!(matches!(plain.status, UpdateStatus::UpdateAvailable { .. }));
+            let ess = status_of(&updates, "Ess");
+            assert_eq!(ess.status, UpdateStatus::NotMatched);
+            assert_eq!(ess.source, None);
+            let json = serde_json::to_string(&updates).unwrap();
+            assert!(!json.contains("Unreadable") && !json.contains("test-key"));
+        }
+
+        #[test]
+        fn a_folder_named_by_the_records_of_two_projects_is_not_matched() {
+            let fx = forever_fixture();
+            let file = |mod_id: u32, id: u32| {
+                forever_file(mod_id, id, "2026-09-01T00:00:00Z", &[("Ess", 5)])
+            };
+            let routes = Routes {
+                fingerprints: json!({"data": {}}).to_string(),
+                mods: json!({"data": [
+                    {"id": 77, "name": "Ess", "allowModDistribution": true},
+                    {"id": 78, "name": "Other Ess", "allowModDistribution": true},
+                ]})
+                .to_string(),
+                file_list: Some(json!({ "data": [file(77, 770), file(78, 780)] }).to_string()),
+                ..Routes::default()
             };
             let client = client(routes);
-            let overrides = no_overrides();
-            let source = CurseForgeSource {
-                client: &client,
-                overrides: &overrides,
-                allow_beta: false,
-                github: None,
+            let record = |file: &str| SourceRecord {
+                file: file.to_owned(),
+                folders: vec!["Ess".to_owned()],
             };
-            let error =
-                check_updates(&fx.installation, &[&source], &ess_record("770")).unwrap_err();
-            assert!(!error.is_empty());
-            assert!(!error.contains("Unreadable"));
-            assert!(!error.contains("test-key"));
+            let records = SourceRecords::from([(
+                SourceKind::Curseforge,
+                ProjectRecords::from([
+                    ("77".to_owned(), record("770")),
+                    ("78".to_owned(), record("780")),
+                ]),
+            )]);
+            let updates = check_with_records(&fx, &client, &records);
+            let ess = status_of(&updates, "Ess");
+            assert_eq!(ess.status, UpdateStatus::NotMatched);
+            assert!(ess.project.is_none());
         }
 
         #[test]
