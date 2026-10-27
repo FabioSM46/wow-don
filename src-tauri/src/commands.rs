@@ -23,6 +23,7 @@ use crate::install_local::{self, LocalInstall};
 use crate::install_new::{self, InstallOutcome, MirrorAvailability};
 use crate::installations::Installation;
 use crate::parallel;
+use crate::previous::{self, PreviousManifest, UndoOutcome};
 use crate::progress::{self, Progress, ProgressEvent};
 use crate::sources::curseforge::{
     self, CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder,
@@ -170,11 +171,43 @@ pub fn set_auto_update(
     settings_view(saved, &tray)
 }
 
-/// L'esito dell'ultimo giro automatico e quando è previsto il prossimo (issue #200): lo stesso
-/// payload dell'evento `auto-update`, vedi [`AutoUpdateStatus`]. Solo memoria, nessuna rete.
+/// L'esito dell'ultimo giro automatico e quando è previsto il prossimo (issue #200), con le
+/// installazioni che hanno un giro annullabile (`undoable`, issue #201): lo stesso payload
+/// dell'evento `auto-update`, vedi [`AutoUpdateStatus`]. Memoria e il manifesto
+/// `auto-update-previous.json`, nessuna rete.
 #[tauri::command]
-pub fn get_auto_update_status(auto_update: State<'_, AutoUpdate>) -> AutoUpdateStatus {
-    auto_update.status()
+pub fn get_auto_update_status(app: AppHandle) -> AutoUpdateStatus {
+    crate::auto_update::current_status(&app)
+}
+
+/// Annulla l'ultimo giro automatico di un'installazione (issue #201): per ogni progetto del giro
+/// rimette le cartelle e il record di prima, saltando quelli cambiati dopo. Restituisce un
+/// esito per progetto ([`UndoOutcome`]) ed emette l'evento `auto-update` con lo stato nuovo.
+/// Bloccante, sotto [`InstallLock`] come gli aggiornamenti.
+#[tauri::command]
+pub async fn undo_last_auto_update(
+    installation_id: String,
+    app: AppHandle,
+    store: Store<'_>,
+) -> Result<Vec<UndoOutcome>, String> {
+    let installation = find_installation(&store, &installation_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = app.state::<InstallLock>();
+        let _held = lock.hold();
+        let result = previous::undo(
+            &installation,
+            &app.state::<PreviousManifest>(),
+            &app.state::<Mutex<InstalledAddonsStore>>(),
+            Some(&app.state::<FingerprintCache>()),
+        );
+        let _ = app.emit(
+            crate::auto_update::EVENT,
+            crate::auto_update::current_status(&app),
+        );
+        result
+    })
+    .await
+    .map_err(|error| format!("The undo was interrupted ({error})."))?
 }
 
 /// Il corpo di [`set_auto_update`], separato dallo `State` di Tauri per i test. I valori si
