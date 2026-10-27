@@ -443,6 +443,31 @@ mod tests {
         assert_eq!(addons.len(), 1);
         assert_eq!(addons[0].folder, "Linked");
         assert!(addons[0].error.as_deref().unwrap().contains("Unreadable"));
+        assert!(addons[0].is_unreadable());
+    }
+
+    /// Solo l'errore di una cartella che non si è potuta elencare la rende illeggibile: gli altri
+    /// errori della scansione nascono dopo un `read_dir` riuscito (issue #212).
+    #[test]
+    fn only_a_folder_that_cannot_be_listed_is_unreadable() {
+        let tmp = TempDir::new();
+        let addons_dir = tmp.path().join("Interface").join("AddOns");
+        // Una cartella leggibile senza `.toc` per il flavor: ha un errore, ma si legge.
+        fs::create_dir_all(addons_dir.join("NoToc")).unwrap();
+        fs::write(addons_dir.join("NoToc").join("core.lua"), "-- x\n").unwrap();
+        let addons = scan_addons(tmp.path(), "retail").unwrap();
+        assert!(addons[0].error.is_some());
+        assert!(!addons[0].is_unreadable());
+
+        let mut addon = addons[0].clone();
+        addon.error = Some(unreadable_folder(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )));
+        assert!(addon.is_unreadable());
+        addon.error = Some("Unreadable .toc file (permission denied).".to_owned());
+        assert!(!addon.is_unreadable());
+        addon.error = None;
+        assert!(!addon.is_unreadable());
     }
 
     #[test]
