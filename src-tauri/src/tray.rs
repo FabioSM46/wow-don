@@ -8,14 +8,19 @@
 //!
 //! [`on_window_event`] intercetta la chiusura della finestra principale; [`on_run_event`]
 //! riapre la finestra su macOS dal clic sull'icona nel Dock.
+//!
+//! Dopo ogni giro automatico (D41, issue #202) [`show_round`] mette sopra "Show WoW-don" una voce
+//! non cliccabile "N updates available" e la ripete nel tooltip; testo e tooltip vengono dalla
+//! funzione pura [`round_summary`]. Senza icona non succede niente.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tauri::menu::{MenuBuilder, MenuEvent};
+use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
 
+use crate::auto_update::RoundReport;
 use crate::store::AppSettingsStore;
 
 /// L'etichetta della finestra principale (quella di `tauri.conf.json`, senza `label`).
@@ -23,6 +28,8 @@ const MAIN_WINDOW: &str = "main";
 const TRAY_ID: &str = "main";
 const MENU_SHOW: &str = "show";
 const MENU_QUIT: &str = "quit";
+const MENU_UPDATES: &str = "updates";
+const TOOLTIP: &str = "WoW-don";
 
 /// Se l'icona nella tray è stata creata. Stato gestito da Tauri, letto da `get_settings`
 /// (`trayAvailable`) e dalla gestione della chiusura.
@@ -69,15 +76,10 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .default_window_icon()
         .cloned()
         .ok_or_else(|| "the app has no icon".to_owned())?;
-    let menu = MenuBuilder::new(app)
-        .text(MENU_SHOW, "Show WoW-don")
-        .separator()
-        .text(MENU_QUIT, "Quit")
-        .build()
-        .map_err(|error| error.to_string())?;
+    let menu = menu(app, None).map_err(|error| error.to_string())?;
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
-        .tooltip("WoW-don")
+        .tooltip(TOOLTIP)
         .menu(&menu)
         // Left click shows the window where the platform reports it (Windows, macOS); the
         // menu stays on the right click. On Linux AppIndicator always opens the menu.
@@ -87,6 +89,74 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .build(app)
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Il menu della tray: "Show WoW-don" e "Quit", con sopra la voce non cliccabile `updates`
+/// quando c'è.
+fn menu<R: Runtime>(app: &AppHandle<R>, updates: Option<&str>) -> tauri::Result<Menu<R>> {
+    let mut builder = MenuBuilder::new(app);
+    if let Some(text) = updates {
+        let item = MenuItemBuilder::with_id(MENU_UPDATES, text)
+            .enabled(false)
+            .build(app)?;
+        builder = builder.item(&item).separator();
+    }
+    builder
+        .text(MENU_SHOW, "Show WoW-don")
+        .separator()
+        .text(MENU_QUIT, "Quit")
+        .build()
+}
+
+/// Testo della voce del menu e tooltip dopo un giro automatico.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoundSummary {
+    /// La voce non cliccabile sopra "Show WoW-don"; `None` senza aggiornamenti.
+    pub menu_item: Option<String>,
+    pub tooltip: String,
+}
+
+/// Quanti aggiornamenti restano da fare dopo il giro, sommati su tutte le installazioni che
+/// partecipano: in `notify` quelli disponibili; in `install` quelli che il giro ha provato a
+/// installare e non ha installato (saltati dalla fonte o falliti). In `notify` `updated` è vuoto,
+/// quindi la stessa sottrazione vale per entrambe le modalità. Si contano i progetti e non le
+/// chiavi: un aggiornamento installato dal mirror GitHub (issue #162) può tornare con una fonte
+/// diversa da quella del controllo. Gli esclusi dall'utente non contano: non sono in `available`.
+pub fn pending_updates(round: &RoundReport) -> usize {
+    round
+        .installations
+        .iter()
+        .map(|report| report.available.len().saturating_sub(report.updated.len()))
+        .sum()
+}
+
+/// Testo della voce e tooltip per l'esito di un giro (o per nessun giro).
+pub fn round_summary(round: Option<&RoundReport>) -> RoundSummary {
+    let pending = round.map_or(0, pending_updates);
+    let menu_item = match pending {
+        0 => None,
+        1 => Some("1 update available".to_owned()),
+        n => Some(format!("{n} updates available")),
+    };
+    let tooltip = match &menu_item {
+        Some(text) => format!("{TOOLTIP} \u{2014} {text}"),
+        None => TOOLTIP.to_owned(),
+    };
+    RoundSummary { menu_item, tooltip }
+}
+
+/// Aggiorna menu e tooltip della tray con l'esito di un giro. Senza icona (creazione fallita o
+/// mai avvenuta) non fa niente; gli errori si ignorano, come in [`show_main_window`]: il menu
+/// resta quello di prima e l'esito si legge comunque nell'app.
+pub fn show_round<R: Runtime>(app: &AppHandle<R>, round: Option<&RoundReport>) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    let summary = round_summary(round);
+    if let Ok(menu) = menu(app, summary.menu_item.as_deref()) {
+        let _ = tray.set_menu(Some(menu));
+    }
+    let _ = tray.set_tooltip(Some(summary.tooltip));
 }
 
 fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
@@ -331,6 +401,127 @@ mod tests {
         assert!(!status.available());
         status.set_created(true);
         assert!(status.created());
+    }
+
+    fn report(available: usize, updated: usize) -> crate::auto_update::InstallationReport {
+        use crate::auto_update::{AvailableUpdate, InstallationReport};
+        use crate::sources::SourceKind;
+        use crate::updates::{FileSummary, UpdateOutcome};
+        let file = || FileSummary {
+            id: 2,
+            name: "v2".to_owned(),
+            date: "2026-10-27T10:00:00Z".to_owned(),
+        };
+        InstallationReport {
+            installation_id: "retail".to_owned(),
+            installation_name: "Retail".to_owned(),
+            checked_at: "2026-10-27T10:00:00Z".to_owned(),
+            available: (0..available)
+                .map(|i| AvailableUpdate {
+                    source: SourceKind::Curseforge,
+                    key: i.to_string(),
+                    name: format!("Addon {i}"),
+                    latest: file(),
+                })
+                .collect(),
+            updated: (0..updated)
+                .map(|i| {
+                    UpdateOutcome::updated(
+                        SourceKind::Curseforge,
+                        &i.to_string(),
+                        &format!("Addon {i}"),
+                        file(),
+                        None,
+                    )
+                })
+                .collect(),
+            skipped: Vec::new(),
+            errors: Vec::new(),
+            check_error: None,
+        }
+    }
+
+    fn round(
+        mode: crate::store::AutoUpdateMode,
+        installations: Vec<crate::auto_update::InstallationReport>,
+    ) -> RoundReport {
+        RoundReport {
+            mode,
+            started_at: "2026-10-27T10:00:00Z".to_owned(),
+            finished_at: "2026-10-27T10:01:00Z".to_owned(),
+            retrying: false,
+            installations,
+        }
+    }
+
+    fn summary(menu_item: Option<&str>, tooltip: &str) -> RoundSummary {
+        RoundSummary {
+            menu_item: menu_item.map(str::to_owned),
+            tooltip: tooltip.to_owned(),
+        }
+    }
+
+    #[test]
+    fn without_updates_there_is_no_menu_item_and_the_plain_tooltip() {
+        use crate::store::AutoUpdateMode::{Install, Notify};
+        let plain = summary(None, "WoW-don");
+        assert_eq!(round_summary(None), plain);
+        assert_eq!(round_summary(Some(&round(Notify, Vec::new()))), plain);
+        assert_eq!(
+            round_summary(Some(&round(Notify, vec![report(0, 0)]))),
+            plain
+        );
+        // Everything installed: nothing left.
+        assert_eq!(
+            round_summary(Some(&round(Install, vec![report(3, 3)]))),
+            plain
+        );
+    }
+
+    #[test]
+    fn one_and_many_updates_are_counted() {
+        use crate::store::AutoUpdateMode::Notify;
+        assert_eq!(
+            round_summary(Some(&round(Notify, vec![report(1, 0)]))),
+            summary(
+                Some("1 update available"),
+                "WoW-don \u{2014} 1 update available"
+            )
+        );
+        assert_eq!(
+            round_summary(Some(&round(Notify, vec![report(7, 0)]))),
+            summary(
+                Some("7 updates available"),
+                "WoW-don \u{2014} 7 updates available"
+            )
+        );
+    }
+
+    #[test]
+    fn the_count_is_the_sum_over_every_installation() {
+        use crate::store::AutoUpdateMode::Notify;
+        let installations = vec![report(2, 0), report(0, 0), report(3, 0)];
+        let round = round(Notify, installations);
+        assert_eq!(pending_updates(&round), 5);
+        assert_eq!(
+            round_summary(Some(&round)).menu_item.as_deref(),
+            Some("5 updates available")
+        );
+    }
+
+    #[test]
+    fn in_install_mode_only_the_updates_left_are_counted() {
+        use crate::store::AutoUpdateMode::Install;
+        // Retail: 4 tried, 3 installed (one skipped or failed); Classic: 2 tried, none installed.
+        let round = round(Install, vec![report(4, 3), report(2, 0)]);
+        assert_eq!(pending_updates(&round), 3);
+        assert_eq!(
+            round_summary(Some(&round)),
+            summary(
+                Some("3 updates available"),
+                "WoW-don \u{2014} 3 updates available"
+            )
+        );
     }
 
     /// Calls the real loader and the real session bus: it must answer without crashing
