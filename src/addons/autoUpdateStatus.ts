@@ -13,8 +13,21 @@ import type {
 /** Il nome dell'evento Tauri, come `auto_update::EVENT` nel backend. */
 export const AUTO_UPDATE_EVENT = "auto-update";
 
-/** Il motivo dei progetti esclusi dall'utente (`EXCLUDED` nel backend): una scelta, non un problema. */
+/**
+ * Il motivo dei progetti esclusi dall'utente: una scelta, non un problema. È un contratto con il
+ * backend, che non manda un campo apposta: deve restare uguale a `EXCLUDED` in
+ * `src-tauri/src/auto_update.rs`, e `autoUpdateStatus.test.ts` confronta le due copie.
+ */
 export const EXCLUDED_MESSAGE = "Excluded from automatic updates.";
+
+/**
+ * Il progetto saltato è stato escluso dall'utente. Il confronto ignora maiuscole, spazi e il
+ * punto finale, così un ritocco di forma nel backend non fa comparire gli esclusi tra i problemi.
+ */
+export function isExcluded(message: string | undefined): boolean {
+  const normalize = (text: string) => text.trim().replace(/\.$/, "").toLowerCase();
+  return message !== undefined && normalize(message).startsWith(normalize(EXCLUDED_MESSAGE));
+}
 
 /** Un progetto (o una cartella) da mostrare nel dettaglio, con il motivo. */
 export type StatusProblem = {
@@ -78,7 +91,7 @@ export function reportProblems(report: InstallationReport): StatusProblem[] {
     });
   }
   for (const skipped of report.skipped) {
-    if (skipped.message === EXCLUDED_MESSAGE) continue;
+    if (isExcluded(skipped.message)) continue;
     problems.push({
       name: skipped.name || skipped.key,
       message: skipped.message ?? "Skipped.",
@@ -119,6 +132,9 @@ function reportText(
  * mostrare: aggiornamento automatico spento (o modalità non ancora letta), nessun giro per
  * l'installazione, oppure un giro che non ha trovato niente e niente da annullare.
  *
+ * `undoneRound` è il `finishedAt` di un giro che l'utente ha annullato per l'installazione: il
+ * suo esito si ignora.
+ *
  * Un giro annullabile (`undoable`) vale anche senza l'esito in memoria, per esempio dopo un
  * riavvio o dopo un giro successivo che non ha trovato niente: la riga dice allora quanti addon
  * ha aggiornato quel giro.
@@ -128,11 +144,17 @@ export function statusLine(
   installationId: string,
   mode: AutoUpdateMode | null,
   clock: Clock = (iso) => clockTime(iso),
+  undoneRound: string | null = null,
 ): StatusLine | null {
   if (status === null || mode === null || mode === "off") return null;
   const undo = status.undoable.find((round) => round.installationId === installationId) ?? null;
   const round = status.lastRound;
-  const report = round?.installations.find((r) => r.installationId === installationId);
+  // Dopo un Undo il backend tiene `lastRound` com'era: l'esito di quel giro non descrive più il
+  // disco e non si mostra (`undoneRound` è il suo `finishedAt`).
+  const report =
+    round && round.finishedAt !== undoneRound
+      ? round.installations.find((r) => r.installationId === installationId)
+      : undefined;
   const problems = report ? reportProblems(report) : [];
   let text = round && report ? reportText(round.mode, report, clock) : null;
   if (text === null && undo !== null) {

@@ -8,8 +8,13 @@ type Props = {
   installationId: string;
   /** La modalità salvata; `null` finché non è letta. */
   mode: AutoUpdateMode | null;
-  /** Un Undo ha cambiato (o può aver cambiato) gli addon sul disco. */
-  onUndone: (installationId: string) => void;
+  /** Il `finishedAt` del giro annullato per l'installazione, o `null`: il suo esito si nasconde. */
+  undoneRound: string | null;
+  /**
+   * Un Undo ha cambiato (o può aver cambiato) gli addon sul disco. `undoneRound` è il
+   * `finishedAt` dell'ultimo giro quando l'Undo ha rimesso almeno un addon, altrimenti `null`.
+   */
+  onUndone: (installationId: string, undoneRound: string | null) => void;
 };
 
 type UndoResult = { text: string; problems: StatusProblem[] } | { error: string };
@@ -19,24 +24,28 @@ type UndoResult = { text: string; problems: StatusProblem[] } | { error: string 
  * cosa ha fatto l'ultimo giro per l'installazione, i problemi in linea con un clic e "Undo" per
  * un giro annullabile. Lo stato arriva da `get_auto_update_status` e dall'evento `auto-update`.
  */
-export function AutoUpdateLine({ status, installationId, mode, onUndone }: Props) {
+export function AutoUpdateLine({ status, installationId, mode, undoneRound, onUndone }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<UndoResult | null>(null);
-  const line = statusLine(status, installationId, mode);
+  const line = statusLine(status, installationId, mode, undefined, undoneRound);
 
   async function undo() {
+    // Il giro di cui si annulla l'esito: quello mostrato adesso.
+    const round = status?.lastRound?.finishedAt ?? null;
+    let restored = false;
     setBusy(true);
     setResult(null);
     try {
       const outcomes = await api.undoLastAutoUpdate(installationId);
+      restored = outcomes.some((outcome) => outcome.status === "restored");
       setResult(describeUndo(outcomes));
     } catch (err) {
       setResult({ error: errorMessage(err) });
     } finally {
       setBusy(false);
       // Anche un Undo fallito può aver rimesso qualche cartella: la lista si rilegge.
-      onUndone(installationId);
+      onUndone(installationId, restored ? round : null);
     }
   }
 

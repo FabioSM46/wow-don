@@ -74,6 +74,9 @@ function App() {
   const [autoUpdateMode, setAutoUpdateMode] = useState<AutoUpdateMode | null>(null);
   const [autoUpdateStatus, setAutoUpdateStatus] = useState<AutoUpdateStatus | null>(null);
   const lastAutoUpdate = useRef<AutoUpdateStatus | null>(null);
+  // Id dell'installazione → `finishedAt` del giro che l'utente ha annullato: il suo esito non
+  // descrive più il disco e la riga non lo mostra.
+  const [undoneRounds, setUndoneRounds] = useState<ReadonlyMap<string, string>>(() => new Map());
   // Installazione di uno zip trascinato o scelto (D32): una alla volta, con il suo esito.
   const [zipBusy, setZipBusy] = useState(false);
   // La fase dell'installazione da zip (issue #128). Il ref è aggiornato subito: il primo evento
@@ -130,19 +133,21 @@ function App() {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
-    const receive = (next: AutoUpdateStatus) => {
+    const receive = (next: AutoUpdateStatus, fromEvent: boolean) => {
       if (disposed) return;
       const previous = lastAutoUpdate.current;
       lastAutoUpdate.current = next;
       setAutoUpdateStatus(next);
-      // La prima lettura è la linea di base: la lista appena aperta è già quella del disco.
-      if (previous === null) return;
+      // Solo la lettura all'apertura è la linea di base: la lista appena aperta è già quella del
+      // disco. Un evento arrivato per primo può essere di un giro finito dopo la lettura della
+      // lista, e quindi conta.
+      if (previous === null && !fromEvent) return;
       const changed = changedInstallations(previous, next);
       if (changed.length === 0) return;
       setInstalledStale(true);
       changed.forEach(markSearchStale);
     };
-    listen<AutoUpdateStatus>(AUTO_UPDATE_EVENT, ({ payload }) => receive(payload))
+    listen<AutoUpdateStatus>(AUTO_UPDATE_EVENT, ({ payload }) => receive(payload, true))
       .then((stop) => {
         if (disposed) stop();
         else unlisten = stop;
@@ -153,7 +158,7 @@ function App() {
       .getAutoUpdateStatus()
       .then((first) => {
         // Un evento arrivato prima della risposta è più recente: la lettura non lo sostituisce.
-        if (lastAutoUpdate.current === null) receive(first);
+        if (lastAutoUpdate.current === null) receive(first, false);
       })
       .catch(() => {});
     return () => {
@@ -347,7 +352,11 @@ function App() {
               status={autoUpdateStatus}
               installationId={active.id}
               mode={autoUpdateMode}
-              onUndone={(installationId) => {
+              undoneRound={undoneRounds.get(active.id) ?? null}
+              onUndone={(installationId, round) => {
+                if (round !== null) {
+                  setUndoneRounds((previous) => new Map(previous).set(installationId, round));
+                }
                 setInstalledStale(true);
                 markSearchStale(installationId);
               }}

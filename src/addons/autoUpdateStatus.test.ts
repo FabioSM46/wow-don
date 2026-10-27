@@ -1,6 +1,7 @@
 // Tests for the automatic update status line: `pnpm test` (node --test, Node strips the types).
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import type {
@@ -15,6 +16,7 @@ import {
   changedInstallations,
   clockTime,
   describeUndo,
+  isExcluded,
   statusLine,
 } from "./autoUpdateStatus.ts";
 
@@ -154,6 +156,40 @@ describe("statusLine in install", () => {
       assert.equal(line?.text, "Auto-updated 3 addons · @T0");
       assert.deepEqual(line?.undo, undo);
     }
+  });
+});
+
+describe("excluded projects", () => {
+  it("matches the backend message, tolerating case, spaces and the final period", () => {
+    assert.equal(isExcluded(EXCLUDED_MESSAGE), true);
+    assert.equal(isExcluded(" excluded from automatic updates "), true);
+    assert.equal(isExcluded("Excluded from automatic updates by the user."), true);
+    assert.equal(isExcluded("Not distributable."), false);
+    assert.equal(isExcluded(undefined), false);
+  });
+
+  it("keeps the same text as EXCLUDED in the backend", () => {
+    const rust = readFileSync(
+      new URL("../../src-tauri/src/auto_update.rs", import.meta.url),
+      "utf8",
+    );
+    const match = /const EXCLUDED: &str = "([^"]*)";/.exec(rust);
+    assert.equal(match?.[1], EXCLUDED_MESSAGE);
+  });
+});
+
+describe("statusLine after an Undo", () => {
+  const undone = status("install", [report({ updated: [outcome("A", "updated")] })]);
+
+  it("hides the outcome of the undone round", () => {
+    assert.equal(statusLine(undone, "retail", "install", clock, "T2"), null);
+  });
+
+  it("shows a newer round again", () => {
+    assert.equal(
+      statusLine(undone, "retail", "install", clock, "T-old")?.text,
+      "Auto-updated 1 addon · @T1",
+    );
   });
 });
 
