@@ -24,7 +24,7 @@ import {
   importSummary,
   newProjects,
   previewSummary,
-} from "./importExport";
+} from "./addonList";
 
 type Props = {
   /** L'installazione attiva; `null` se non ce n'è nessuna. */

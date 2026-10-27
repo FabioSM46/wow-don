@@ -13,7 +13,7 @@ import {
   newProjects,
   previewCounts,
   previewSummary,
-} from "./importExport.ts";
+} from "./addonList.ts";
 
 function entry(key: string, state: PreviewEntry["state"]): PreviewEntry {
   return { source: "curseforge", key, name: `Addon ${key}`, state };
