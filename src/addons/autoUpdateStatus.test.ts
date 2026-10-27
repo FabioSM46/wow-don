@@ -1,7 +1,6 @@
 // Tests for the automatic update status line: `pnpm test` (node --test, Node strips the types).
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import type {
@@ -12,15 +11,14 @@ import type {
   UpdateOutcome,
 } from "../api";
 import {
-  EXCLUDED_MESSAGE,
   changedInstallations,
   clockTime,
   describeUndo,
-  isExcluded,
   statusLine,
 } from "./autoUpdateStatus.ts";
 
 const clock = (iso: string) => `@${iso}`;
+const EXCLUDED = "Excluded from automatic updates.";
 const file = { id: 1, name: "v2", date: "2026-10-27T10:00:00Z" };
 
 function outcome(name: string, status: UpdateOutcome["status"], message?: string): UpdateOutcome {
@@ -34,6 +32,7 @@ function report(overrides: Partial<InstallationReport> = {}): InstallationReport
     checkedAt: "T1",
     available: [],
     updated: [],
+    excluded: [],
     skipped: [],
     errors: [],
     checkError: null,
@@ -79,7 +78,7 @@ describe("statusLine in notify", () => {
   });
 
   it("does not count excluded projects as problems", () => {
-    const s = status("notify", [report({ skipped: [outcome("A", "skipped", EXCLUDED_MESSAGE)] })]);
+    const s = status("notify", [report({ excluded: [outcome("A", "skipped", EXCLUDED)] })]);
     assert.equal(statusLine(s, "retail", "notify", clock), null);
   });
 
@@ -101,10 +100,8 @@ describe("statusLine in install", () => {
     const s = status("install", [
       report({
         updated: [outcome("A", "updated")],
-        skipped: [
-          outcome("B", "skipped", "Not distributable."),
-          outcome("C", "skipped", EXCLUDED_MESSAGE),
-        ],
+        excluded: [outcome("C", "skipped", EXCLUDED)],
+        skipped: [outcome("B", "skipped", "Not distributable.")],
         errors: [
           { source: "github", key: "d", name: "D", message: "File in use." },
           { source: null, key: null, name: "", message: "Previous version not kept." },
@@ -156,25 +153,6 @@ describe("statusLine in install", () => {
       assert.equal(line?.text, "Auto-updated 3 addons · @T0");
       assert.deepEqual(line?.undo, undo);
     }
-  });
-});
-
-describe("excluded projects", () => {
-  it("matches the backend message, tolerating case, spaces and the final period", () => {
-    assert.equal(isExcluded(EXCLUDED_MESSAGE), true);
-    assert.equal(isExcluded(" excluded from automatic updates "), true);
-    assert.equal(isExcluded("Excluded from automatic updates by the user."), true);
-    assert.equal(isExcluded("Not distributable."), false);
-    assert.equal(isExcluded(undefined), false);
-  });
-
-  it("keeps the same text as EXCLUDED in the backend", () => {
-    const rust = readFileSync(
-      new URL("../../src-tauri/src/auto_update.rs", import.meta.url),
-      "utf8",
-    );
-    const match = /const EXCLUDED: &str = "([^"]*)";/.exec(rust);
-    assert.equal(match?.[1], EXCLUDED_MESSAGE);
   });
 });
 

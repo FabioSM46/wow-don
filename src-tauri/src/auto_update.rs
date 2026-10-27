@@ -113,9 +113,11 @@ pub struct InstallationReport {
     pub available: Vec<AvailableUpdate>,
     /// Solo `install`: i progetti aggiornati, con il file installato (`file`).
     pub updated: Vec<UpdateOutcome>,
-    /// I progetti con un aggiornamento non installati e il motivo (`message`): esclusi
-    /// dall'utente (`"Excluded from automatic updates."`) e, in `install`, quelli che la fonte
-    /// salta (per esempio `allowModDistribution = false` senza mirror GitHub).
+    /// I progetti con un aggiornamento esclusi dall'utente, con `message`
+    /// `"Excluded from automatic updates."`: una scelta, non un problema (issue #214).
+    pub excluded: Vec<UpdateOutcome>,
+    /// Solo `install`: i progetti con un aggiornamento che la fonte salta, con il motivo
+    /// (`message`), per esempio `allowModDistribution = false` senza mirror GitHub.
     pub skipped: Vec<UpdateOutcome>,
     /// Gli errori di singoli progetti o cartelle, con il messaggio di oggi: un aggiornamento
     /// fallito (su Windows un file aperto dal gioco blocca il `rename`) o una cartella che
@@ -386,6 +388,7 @@ pub fn run_installation(
         checked_at,
         available: Vec::new(),
         updated: Vec::new(),
+        excluded: Vec::new(),
         skipped: Vec::new(),
         errors: Vec::new(),
         check_error: None,
@@ -395,7 +398,7 @@ pub fn run_installation(
         Ok(found) => {
             let plan = plan(&found, auto);
             report.available = plan.available;
-            report.skipped = plan.excluded;
+            report.excluded = plan.excluded;
             report.errors = plan.errors;
             if mode == AutoUpdateMode::Install && !plan.projects.is_empty() {
                 // `update_addons_with` rifà il controllo: un fallimento lì non tocca niente.
@@ -704,6 +707,7 @@ fn failed_report(installation: &Installation, error: String) -> InstallationRepo
         checked_at: iso_utc(SystemTime::now()),
         available: Vec::new(),
         updated: Vec::new(),
+        excluded: Vec::new(),
         skipped: Vec::new(),
         errors: Vec::new(),
         check_error: Some(error),
@@ -973,6 +977,7 @@ mod tests {
                         latest: summary(1),
                     }],
                     updated: Vec::new(),
+                    excluded: Vec::new(),
                     skipped: Vec::new(),
                     errors: Vec::new(),
                     check_error: None,
@@ -996,15 +1001,19 @@ mod tests {
         assert_eq!(installation["checkError"], serde_json::Value::Null);
         assert_eq!(installation["available"][0]["source"], "github");
         assert_eq!(installation["available"][0]["latest"]["id"], 1);
+        assert_eq!(installation["excluded"], serde_json::json!([]));
+        assert_eq!(installation["skipped"], serde_json::json!([]));
     }
 
     /// Una fonte finta: reclama le cartelle di `claims` con un aggiornamento (progetto =
     /// cartella), fallisce il controllo con `fails`, e all'aggiornamento dà un errore per i
-    /// progetti di `broken`. Ricorda i progetti che le chiedono di aggiornare.
+    /// progetti di `broken` e salta quelli di `skips`. Ricorda i progetti che le chiedono di
+    /// aggiornare.
     struct FakeSource {
         kind: SourceKind,
         claims: Vec<&'static str>,
         broken: Vec<&'static str>,
+        skips: Vec<&'static str>,
         /// Progetti che sostituiscono le cartelle e poi falliscono senza scrivere il record.
         unrecorded: Vec<&'static str>,
         fails: bool,
@@ -1017,6 +1026,7 @@ mod tests {
                 kind,
                 claims: claims.to_vec(),
                 broken: Vec::new(),
+                skips: Vec::new(),
                 unrecorded: Vec::new(),
                 fails: false,
                 asked: RefCell::new(Vec::new()),
@@ -1058,6 +1068,14 @@ mod tests {
                     target.key,
                     target.key,
                     "Could not replace the addon folder: a file is in use.".to_owned(),
+                );
+            }
+            if self.skips.contains(&target.key) {
+                return UpdateOutcome::skipped(
+                    self.kind,
+                    target.key,
+                    target.key,
+                    "Not distributable.",
                 );
             }
             // Come una fonte vera: la cartella del progetto si sostituisce con `replace`.
@@ -1151,8 +1169,10 @@ mod tests {
         assert_eq!(report.checked_at, "2026-10-27T10:00:00Z");
         assert_eq!(report.available.len(), 1);
         assert_eq!(report.available[0].key, "Alpha");
-        assert_eq!(report.skipped.len(), 1);
-        assert_eq!(report.skipped[0].message.as_deref(), Some(EXCLUDED));
+        assert_eq!(report.excluded.len(), 1);
+        assert_eq!(report.excluded[0].key, "Beta");
+        assert_eq!(report.excluded[0].message.as_deref(), Some(EXCLUDED));
+        assert!(report.skipped.is_empty());
         assert!(report.updated.is_empty());
         assert!(report.check_error.is_none());
         assert!(failed.is_empty());
@@ -1187,8 +1207,37 @@ mod tests {
                 message: "Could not replace the addon folder: a file is in use.".to_owned(),
             }]
         );
-        assert_eq!(report.skipped.len(), 1);
-        assert_eq!(report.skipped[0].key, "Gamma");
+        assert_eq!(report.excluded.len(), 1);
+        assert_eq!(report.excluded[0].key, "Gamma");
+        assert!(report.skipped.is_empty());
+        assert!(failed.is_empty());
+    }
+
+    #[test]
+    fn an_excluded_project_goes_to_excluded_and_a_source_skip_to_skipped() {
+        let tmp = TempDir::new();
+        let installation = installation_with(&tmp, &["Alpha", "Beta", "Gamma"]);
+        let mut source = FakeSource::new(SourceKind::Tukui, &["Alpha", "Beta", "Gamma"]);
+        source.skips = vec!["Beta"];
+        let auto = InstallationAutoUpdate {
+            disabled: false,
+            excluded: [key(SourceKind::Tukui, "Gamma")].into(),
+        };
+        let (report, failed, written) =
+            run(&installation, AutoUpdateMode::Install, &auto, &[&source]);
+        assert_eq!(*source.asked.borrow(), ["Alpha", "Beta"]);
+        assert_eq!(written, ["Alpha"]);
+        assert_eq!(report.available.len(), 2);
+        let keys = |list: &[UpdateOutcome]| list.iter().map(|o| o.key.clone()).collect::<Vec<_>>();
+        assert_eq!(keys(&report.updated), ["Alpha"]);
+        assert_eq!(keys(&report.excluded), ["Gamma"]);
+        assert_eq!(report.excluded[0].message.as_deref(), Some(EXCLUDED));
+        assert_eq!(keys(&report.skipped), ["Beta"]);
+        assert_eq!(
+            report.skipped[0].message.as_deref(),
+            Some("Not distributable.")
+        );
+        assert!(report.errors.is_empty());
         assert!(failed.is_empty());
     }
 
