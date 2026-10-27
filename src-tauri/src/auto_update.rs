@@ -593,6 +593,8 @@ fn round(app: &AppHandle, state: &AutoUpdate, mode: AutoUpdateMode) -> RoundResu
             installations,
         });
     });
+    // Il conteggio nella tray (issue #202); senza icona non fa niente.
+    crate::tray::show_round(app, status.last_round.as_ref());
     // Un evento che non parte non ferma il giro: l'esito resta leggibile con il comando.
     let _ = app.emit(EVENT, &with_undoable(app, status));
     if retrying {
