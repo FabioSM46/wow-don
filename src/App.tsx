@@ -9,6 +9,7 @@ import { describeZipInstall, fileName, pickZip } from "./addons/zip";
 import { Discovered } from "./installations/Discovered";
 import { Installations } from "./installations/Installations";
 import { Appearance } from "./options/Appearance";
+import { AutoUpdateOptions } from "./options/AutoUpdateOptions";
 import { BetaOption } from "./options/BetaOption";
 import { SystemOptions } from "./options/SystemOptions";
 import { ImportExport } from "./options/ImportExport";
@@ -363,6 +364,9 @@ function App() {
               setInstalledStale(true);
             }}
           />
+          {installations !== null && (
+            <AutoUpdateOptions active={tab === "options"} installations={installations} />
+          )}
           <SystemOptions active={tab === "options"} />
           {installations !== null && (
             <ImportExport
