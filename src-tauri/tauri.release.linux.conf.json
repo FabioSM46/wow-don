@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/doc/wow-don/copyright": "../LICENSE",
+          "/usr/share/doc/wow-don/THIRD-PARTY-LICENSES": "target/THIRD-PARTY-LICENSES"
+        }
+      }
+    }
+  }
+}

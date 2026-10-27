@@ -195,6 +195,11 @@ Un tag `v<versione>` su un commit di `main` avvia `.github/workflows/release.yml
 l'installer per Windows e il `.dmg` universale per macOS e li allega a una release di GitHub
 in bozza. La release si pubblica a mano dopo averla controllata.
 
+Ogni pacchetto contiene `THIRD-PARTY-LICENSES`, con le licenze delle crate e dei pacchetti npm
+compilati nell'app. Lo scrive `scripts/third-party-licenses.py` prima di ogni build, e la
+configurazione `src-tauri/tauri.release*.conf.json` lo mette nel pacchetto: su Linux in
+`/usr/share/doc/wow-don/` accanto a `copyright`, su Windows e macOS tra le risorse dell'app.
+
 ### Installare su macOS
 
 Apri il `.dmg` e trascina WoW-don in Applicazioni. L'app non è firmata né notarizzata,

@@ -13,6 +13,12 @@ name: Release
 # installer from Linux. The bundle targets come from tauri.linux.conf.json,
 # tauri.windows.conf.json and tauri.macos.conf.json; `--bundles` repeats them so a
 # config change cannot silently produce a different package here.
+#
+# Every package carries the licenses of the crates and npm packages compiled into it
+# (issue #194): scripts/third-party-licenses.py writes src-tauri/target/THIRD-PARTY-LICENSES
+# for the job's targets, and the `--config` overlay ships it — beside `copyright` in
+# /usr/share/doc/wow-don on Linux, as a bundle resource on Windows and macOS. The
+# overlays are not read by `cargo build`, so the PR CI does not need the file.
 
 on:
   push:
@@ -66,8 +72,10 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Collect third-party licenses
+        run: python3 scripts/third-party-licenses.py --target x86_64-unknown-linux-gnu --output src-tauri/target/THIRD-PARTY-LICENSES
       - name: Build the .deb
-        run: pnpm tauri build --bundles deb
+        run: pnpm tauri build --bundles deb --config src-tauri/tauri.release.linux.conf.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: linux-deb
@@ -92,8 +100,10 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Collect third-party licenses
+        run: python scripts/third-party-licenses.py --target x86_64-pc-windows-msvc --output src-tauri/target/THIRD-PARTY-LICENSES
       - name: Build the NSIS installer
-        run: pnpm tauri build --bundles nsis
+        run: pnpm tauri build --bundles nsis --config src-tauri/tauri.release.conf.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-nsis
@@ -124,8 +134,10 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Collect third-party licenses
+        run: python3 scripts/third-party-licenses.py --target aarch64-apple-darwin --target x86_64-apple-darwin --output src-tauri/target/THIRD-PARTY-LICENSES
       - name: Build the universal .dmg
-        run: pnpm tauri build --target universal-apple-darwin --bundles dmg
+        run: pnpm tauri build --target universal-apple-darwin --bundles dmg --config src-tauri/tauri.release.conf.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-dmg
