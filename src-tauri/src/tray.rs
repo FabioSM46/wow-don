@@ -435,6 +435,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            excluded: Vec::new(),
             skipped: Vec::new(),
             errors: Vec::new(),
             check_error: None,
