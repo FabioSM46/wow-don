@@ -27,11 +27,15 @@
   "bundle": {
     "active": true,
     "license": "GPL-3.0-or-later",
+    "licenseFile": "../LICENSE",
     "linux": {
       "deb": {
         "section": "games",
         "depends": ["libayatana-appindicator3-1"],
-        "desktopTemplate": "linux/wow-don.desktop"
+        "desktopTemplate": "linux/wow-don.desktop",
+        "files": {
+          "/usr/share/doc/wow-don/copyright": "../LICENSE"
+        }
       }
     },
     "windows": {
