@@ -2,6 +2,7 @@ mod addon_import;
 mod addon_list;
 mod addon_remove;
 mod addons;
+mod auto_update;
 mod autostart;
 mod backup;
 mod catalog;
@@ -53,6 +54,7 @@ pub fn run() {
         .manage(commands::InstallLock::default())
         .manage(addons::cache::FingerprintCache::default())
         .manage(tray::TrayStatus::default())
+        .manage(auto_update::AutoUpdate::default())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             app.manage(Mutex::new(InstallationStore::load(
@@ -72,6 +74,9 @@ pub fn run() {
             // the window-state plugin above never restores visibility (no `VISIBLE` flag):
             // shown here unless an autostart launch stays in the tray.
             autostart::show_main_window_unless_hidden_start(app.handle());
+            // Il giro automatico degli aggiornamenti (D41, issue #200) parte anche con
+            // `--autostart`: il primo giro aspetta `STARTUP_DELAY`, gli stati sono già registrati.
+            auto_update::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(tray::on_window_event)
@@ -110,6 +115,7 @@ pub fn run() {
             commands::get_auto_update,
             commands::set_auto_update_excluded,
             commands::set_installation_auto_update,
+            commands::get_auto_update_status,
             commands::get_autostart,
             commands::set_autostart,
         ])
