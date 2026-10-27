@@ -39,7 +39,7 @@ const updates = new Map<string, AddonUpdate>([
   ["DBM-StatusBarTimers", linked("DBM-StatusBarTimers", "curseforge", "3358")],
   ["Details", linked("Details", "github", "Tercioo/Details")],
 ]);
-const idle = { updates, busy: false, checking: false };
+const idle = { updates, busy: false, checking: false, excluded: new Set<string>() };
 
 describe("selection state", () => {
   it("Select starts the mode with the row and adds rows later", () => {
@@ -100,20 +100,21 @@ describe("menu targets and folders", () => {
 });
 
 describe("menuItems", () => {
-  it("offers Select, Reinstall and Remove for one row", () => {
+  it("offers Select, Reinstall, Don't auto-update and Remove for one row", () => {
     const items = menuItems([details], false, idle);
     assert.deepEqual(
       items.map((i) => [i.label, i.disabledReason]),
       [
         ["Select", null],
         ["Reinstall", null],
+        ["Don't auto-update", null],
         ["Remove", null],
       ],
     );
   });
 
   it("disables Reinstall with a reason for a row without a source", () => {
-    const [, reinstall, remove] = menuItems([loose], false, idle);
+    const [, reinstall, , remove] = menuItems([loose], false, idle);
     assert.equal(/No recognized source/.test(reinstall.disabledReason ?? ""), true);
     assert.equal(remove.disabledReason, null);
   });
@@ -131,6 +132,7 @@ describe("menuItems", () => {
       items.map((i) => [i.action, i.label, i.disabledReason]),
       [
         ["reinstall", "Reinstall 2", null],
+        ["autoUpdate", "Don't auto-update", null],
         ["remove", "Remove 2", null],
         ["clear", "Clear selection", null],
       ],
@@ -141,10 +143,13 @@ describe("menuItems", () => {
     const empty = menuItems([], true, idle);
     assert.equal(empty[0].disabledReason, "No addons selected.");
     assert.equal(empty[1].disabledReason, "No addons selected.");
+    assert.equal(empty[2].disabledReason, "No addons selected.");
     const busy = menuItems([details], false, { ...idle, busy: true });
     assert.equal(/Wait/.test(busy[1].disabledReason ?? ""), true);
-    assert.equal(/Wait/.test(busy[2].disabledReason ?? ""), true);
+    assert.equal(/Wait/.test(busy[3].disabledReason ?? ""), true);
     assert.equal(busy[0].disabledReason, null);
+    // Escludere un addon non tocca il disco: resta possibile durante un aggiornamento.
+    assert.equal(busy[2].disabledReason, null);
   });
 });
 
@@ -232,5 +237,35 @@ describe("Reinstall of projects CurseForge blocks (issue #165)", () => {
     assert.equal(reinstall.disabledReason, null);
     const [mixed] = menuItems([blocked, loose], true, state);
     assert.equal(/^None of these addons can be reinstalled/.test(mixed.disabledReason ?? ""), true);
+  });
+});
+
+describe("menuItems: automatic updates", () => {
+  it("allows again when every target is excluded, and excludes a mixed selection", () => {
+    const excluded = new Set(["github:Tercioo/Details"]);
+    const [, , one] = menuItems([details], false, { ...idle, excluded });
+    assert.equal(one.label, "Allow auto-update");
+    const [, mixed] = menuItems([details, dbm], true, { ...idle, excluded });
+    assert.equal(mixed.label, "Don't auto-update");
+  });
+
+  it("disables the item while the choices load, save or have no source", () => {
+    const [, , loading] = menuItems([details], false, { ...idle, excluded: undefined });
+    assert.equal(loading.disabledReason, "Wait for the automatic update choices to be loaded.");
+    const [, , failed] = menuItems([details], false, {
+      ...idle,
+      excluded: undefined,
+      excludedError: "settings.json is damaged",
+    });
+    assert.equal(
+      failed.disabledReason,
+      "Could not read the automatic update choices: settings.json is damaged",
+    );
+    const [, , saving] = menuItems([details], false, { ...idle, savingExclusion: true });
+    assert.equal(/Wait/.test(saving.disabledReason ?? ""), true);
+    const [, , noSource] = menuItems([loose], false, idle);
+    assert.equal(/No recognized source/.test(noSource.disabledReason ?? ""), true);
+    const [, , unchecked] = menuItems([details], false, { ...idle, updates: undefined });
+    assert.equal(/Check for updates first/.test(unchecked.disabledReason ?? ""), true);
   });
 });

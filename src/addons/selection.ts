@@ -2,6 +2,12 @@
 // selezione, voci del menu e testi della conferma. Funzioni pure, senza React né I/O.
 
 import type { AddonUpdate, RemoveResult } from "../api";
+import {
+  exclusionChoice,
+  exclusionDisabledReason,
+  exclusionLabel,
+  exclusionProjects,
+} from "./exclusion.ts";
 import { groupUpdate, type AddonGroup } from "./filter.ts";
 import { reinstallBlockedReason } from "./mirror.ts";
 import { projectId, type ProjectRef } from "./sources.ts";
@@ -76,7 +82,7 @@ export function reinstallProjects(
   return [...projects.values()];
 }
 
-export type MenuAction = "select" | "reinstall" | "remove" | "clear";
+export type MenuAction = "select" | "reinstall" | "autoUpdate" | "remove" | "clear";
 
 export type MenuItem = {
   action: MenuAction;
@@ -92,13 +98,23 @@ export type MenuState = {
   busy: boolean;
   /** Un controllo degli aggiornamenti in corso. */
   checking: boolean;
+  /**
+   * I progetti esclusi dall'aggiornamento automatico (`projectId`); `undefined` finché
+   * `get_auto_update` non ha risposto (issue #204).
+   */
+  excluded?: ReadonlySet<string>;
+  /** L'errore della lettura degli esclusi, se non è riuscita. */
+  excludedError?: string | null;
+  /** Una scelta "Don't auto-update" / "Allow auto-update" in salvataggio. */
+  savingExclusion?: boolean;
 };
 
 const BUSY_REASON = "Wait for the current operation to finish.";
 
 /**
- * Le voci del menu. Fuori dalla modalità selezione: Select, Reinstall e Remove per la riga;
- * dentro: Reinstall N, Remove N e Clear selection per la selezione.
+ * Le voci del menu. Fuori dalla modalità selezione: Select, Reinstall, la voce
+ * dell'aggiornamento automatico e Remove per la riga; dentro: Reinstall N, la stessa voce,
+ * Remove N e Clear selection per la selezione.
  */
 export function menuItems(
   targets: AddonGroup[],
@@ -112,18 +128,38 @@ export function menuItems(
   else if (count === 0) reinstallReason = "No addons selected.";
   else if (projects.length === 0) reinstallReason = noProjectsReason(targets, state);
   const removeReason = state.busy ? BUSY_REASON : count === 0 ? "No addons selected." : null;
+  const autoUpdate = autoUpdateItem(targets, state);
   if (!selecting) {
     return [
       { action: "select", label: "Select", disabledReason: null },
       { action: "reinstall", label: "Reinstall", disabledReason: reinstallReason },
+      autoUpdate,
       { action: "remove", label: "Remove", disabledReason: removeReason },
     ];
   }
   return [
     { action: "reinstall", label: `Reinstall ${count}`, disabledReason: reinstallReason },
+    autoUpdate,
     { action: "remove", label: `Remove ${count}`, disabledReason: removeReason },
     { action: "clear", label: "Clear selection", disabledReason: null },
   ];
+}
+
+/** "Don't auto-update" o "Allow auto-update" per i progetti dei gruppi (issue #204). */
+function autoUpdateItem(targets: AddonGroup[], state: MenuState): MenuItem {
+  const projects = exclusionProjects(targets, state.updates);
+  return {
+    action: "autoUpdate",
+    label: exclusionLabel(exclusionChoice(projects, state.excluded)),
+    disabledReason: exclusionDisabledReason(projects, {
+      updates: state.updates,
+      checking: state.checking,
+      excluded: state.excluded,
+      saving: state.savingExclusion ?? false,
+      loadError: state.excludedError,
+      count: targets.length,
+    }),
+  };
 }
 
 /** Perché Reinstall è spento quando nessuno dei gruppi ha un progetto da reinstallare. */
