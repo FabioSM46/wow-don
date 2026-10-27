@@ -172,13 +172,56 @@ describe("statusLine after an Undo", () => {
 });
 
 describe("statusLine when off", () => {
-  it("shows nothing when automatic updates are off or not read yet", () => {
+  const undo = { installationId: "retail", roundAt: "T0", addons: 2 };
+
+  it("shows nothing without an undoable round, or before the mode is read", () => {
     const s = status("install", [report({ updated: [outcome("A", "updated")] })], {
-      undoable: [{ installationId: "retail", roundAt: "T0", addons: 1 }],
+      undoable: [{ installationId: "classic", roundAt: "T0", addons: 1 }],
     });
     assert.equal(statusLine(s, "retail", "off", clock), null);
-    assert.equal(statusLine(s, "retail", null, clock), null);
+    assert.equal(statusLine(status(null, []), "retail", "off", clock), null);
+    assert.equal(statusLine(s, "classic", null, clock), null);
     assert.equal(statusLine(null, "retail", "install", clock), null);
+    assert.equal(statusLine(null, "retail", "off", clock), null);
+  });
+
+  it("still offers Undo for an undoable round", () => {
+    for (const s of [
+      status(null, [], { undoable: [undo] }),
+      status("install", [report({ updated: [outcome("A", "updated")] })], { undoable: [undo] }),
+    ]) {
+      assert.deepEqual(statusLine(s, "retail", "off", clock), {
+        text: "Auto-updated 2 addons · @T0",
+        problemText: null,
+        problems: [],
+        undo,
+        failed: false,
+      });
+    }
+  });
+
+  it("never shows available updates or check errors", () => {
+    for (const r of [
+      report({ available: [available("A")] }),
+      report({ checkError: "No network." }),
+      report({ errors: [{ source: null, key: null, name: "B", message: "Disk full." }] }),
+      report({ skipped: [outcome("C", "skipped", "Not distributable.")] }),
+    ]) {
+      for (const mode of ["notify", "install"] as const) {
+        assert.equal(statusLine(status(mode, [r]), "retail", "off", clock), null);
+        const line = statusLine(status(mode, [r], { undoable: [undo] }), "retail", "off", clock);
+        assert.equal(line?.text, "Auto-updated 2 addons · @T0");
+        assert.deepEqual(line?.problems, []);
+        assert.equal(line?.problemText, null);
+      }
+    }
+  });
+
+  it("disappears after a successful Undo", () => {
+    // L'Undo emette lo stato senza il giro annullabile; il giro annullato resta in `lastRound`.
+    const after = status("install", [report({ updated: [outcome("A", "updated")] })]);
+    assert.equal(statusLine(after, "retail", "off", clock, "T2"), null);
+    assert.equal(statusLine(after, "retail", "off", clock), null);
   });
 });
 
