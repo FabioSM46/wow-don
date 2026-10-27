@@ -44,12 +44,20 @@ fi
 
 process_skill=.claude/skills/process-pr/SKILL.md
 dev_skill=.claude/skills/dev-issue/SKILL.md
+iteration_skill=.claude/skills/develop-iteration/SKILL.md
 
 grep -qF 'Bash(mktemp *) Bash(trap *)' "$dev_skill" || {
   echo "FAIL: dev-issue creates and traps a temporary PR body without authorizing both commands" >&2
   exit 1
 }
 
+# The iteration loop must actively route a conflicting PR into remediation. Merely making the
+# frozen rule fail closed leaves the orchestrator waiting forever because a conflicting PR has no
+# merge ref and therefore no CI run that could wake it up.
+grep -qF 'o `mergeable == CONFLICTING`' "$iteration_skill" || {
+  echo "FAIL: develop-iteration no longer routes merge conflicts through process-pr" >&2
+  exit 1
+}
 grep -qF 'Un conflitto è una correzione da fare' "$process_skill" || {
   echo "FAIL: process-pr no longer owns base-conflict remediation" >&2
   exit 1
@@ -106,5 +114,28 @@ grep -qF '[ "$(echo "$CURRENT_PR" | jq -r '\''.state'\'')" = "OPEN" ] || exit 1'
   exit 1
 }
 
+# A moving base invalidates its children's evidence even when their own head SHA did not move,
+# and develop has no post-merge verification here: both the instruction and the merge helper
+# binding must remain visible.
+grep -qF 'la cui **testa o base** è il branch' "$iteration_skill" || {
+  echo "FAIL: develop-iteration does not refresh PRs whose base moved" >&2
+  exit 1
+}
+grep -qF 'unisci in `develop` **una PR alla' "$iteration_skill" || {
+  echo "FAIL: develop-iteration no longer serializes merges into develop" >&2
+  exit 1
+}
+grep -qF -- '--base-head "$OBSERVED_BASE_HEAD"' "$iteration_skill" || {
+  echo "FAIL: develop-iteration does not bind the observed base head at merge time" >&2
+  exit 1
+}
+if grep -qF -- '--json baseRefOid' "$iteration_skill"; then
+  echo "FAIL: develop-iteration requests a gh JSON field unavailable in the minimum gh" >&2
+  exit 1
+fi
+grep -qF -- "--jq '.base.sha'" "$iteration_skill" || {
+  echo "FAIL: develop-iteration does not read the observed base SHA from REST" >&2
+  exit 1
+}
 echo "no skill refuses model invocation"
-echo "remediation ordering and worktree safety are pinned"
+echo "iteration remediation ordering and worktree safety are pinned"
