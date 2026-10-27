@@ -574,7 +574,7 @@ fn run(app: &AppHandle) {
 /// Un giro su tutte le installazioni che partecipano, sotto [`InstallLock`].
 fn round(app: &AppHandle, state: &AutoUpdate, mode: AutoUpdateMode) -> RoundResult {
     let lock = app.state::<InstallLock>();
-    let Some(_held) = lock.try_hold() else {
+    let Some(held) = lock.try_hold() else {
         return RoundResult::Busy;
     };
     let started_at = iso_utc(SystemTime::now());
@@ -593,10 +593,14 @@ fn round(app: &AppHandle, state: &AutoUpdate, mode: AutoUpdateMode) -> RoundResu
             installations,
         });
     });
-    // Il conteggio nella tray (issue #202); senza icona non fa niente.
-    crate::tray::show_round(app, status.last_round.as_ref());
+    let last_round = status.last_round.clone();
     // Un evento che non parte non ferma il giro: l'esito resta leggibile con il comando.
     let _ = app.emit(EVENT, &with_undoable(app, status));
+    drop(held);
+    // Il conteggio nella tray (issue #202); senza icona non fa niente. Menu e tooltip si
+    // cambiano sul thread principale e questo thread aspetta che lo faccia: si chiama senza
+    // tenere nessun lock, così un comando che aspetta `InstallLock` non può bloccare il giro.
+    crate::tray::show_round(app, last_round.as_ref());
     if retrying {
         RoundResult::Failed
     } else {
