@@ -148,8 +148,9 @@ ci = (workflows / "ci.yml").read_text()
 automation = exactly_one(
     r"^  automation:\s*$\n([\s\S]*?)(?=^  [A-Za-z_][A-Za-z0-9_-]*:\s*$|\Z)", ci, "automation job"
 )
-assert automation.count("bash scripts/test/apt-install-fallback.test.sh") == 1, (
-    "ci.yml's automation job must execute this test exactly once"
+# The job runs every scripts/test/*.test.sh by glob, so this file is in it once.
+assert automation.count("for t in scripts/test/*.test.sh; do") == 1, (
+    "ci.yml's automation job must run every scripts/test/*.test.sh exactly once"
 )
 print(f"  ok   — {len(steps)} workflows agree; budget {probe}s + {budget}s of {step_seconds}s")
 PY

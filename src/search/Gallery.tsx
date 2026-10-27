@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Screenshot } from "../api";
-import { nextIndex, positionLabel, previousIndex, screenshotTitle } from "./gallery";
+import { nextIndex, positionLabel, previousIndex, screenshotTitle } from "./screenshots";
 
 type Props = {
   screenshots: Screenshot[];
