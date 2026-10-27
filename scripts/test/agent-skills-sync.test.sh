@@ -133,6 +133,28 @@ if grep -qF -- '--json baseRefOid' "$iteration_skill"; then
   echo "FAIL: develop-iteration requests a gh JSON field unavailable in the minimum gh" >&2
   exit 1
 fi
+grep -qF -- 'compare/$OBSERVED_BASE_HEAD...$OBSERVED_HEAD' "$iteration_skill" || {
+  echo "FAIL: develop-iteration does not check ancestry on the observed SHAs it merges with" >&2
+  exit 1
+}
+# The watch projects pr-status-json by field name. A renamed field would make jq print null and
+# hide a conflict or a ready PR, so every name the watch reads must still be emitted by the helper.
+status_fields=$(grep -F 'printf '"'"'{"pr":%s,"unresolved_threads"' scripts/gh-automation.sh)
+[ -n "$status_fields" ] || {
+  echo "FAIL: cannot find the pr-status-json output format in gh-automation.sh" >&2
+  exit 1
+}
+for field in ready_to_merge ci_pending ci_failing required_check_state unresolved_threads \
+    deepseek_unread_findings deepseek_review_complete deepseek_rounds_exhausted mergeable; do
+  printf '%s' "$status_fields" | grep -qF "\"${field}\":" || {
+    echo "FAIL: pr-status-json no longer emits '${field}', which the develop-iteration watch reads" >&2
+    exit 1
+  }
+  grep -qF "\"${field}\"" "$iteration_skill" || {
+    echo "FAIL: the develop-iteration watch no longer requires '${field}'" >&2
+    exit 1
+  }
+done
 grep -qF -- "--jq '.base.sha'" "$iteration_skill" || {
   echo "FAIL: develop-iteration does not read the observed base SHA from REST" >&2
   exit 1

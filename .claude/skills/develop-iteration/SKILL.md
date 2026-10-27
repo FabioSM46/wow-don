@@ -136,8 +136,11 @@ numero della issue, la base prevista, le dipendenze rilevanti e questa istruzion
 
 Mai due agenti sulla stessa issue. Se una issue va divisa in più PR, il suo agente ne resta
 proprietario mentre l'orchestratore aggiunge quelle PR e i loro archi di base al grafo. Quando
-l'agente proprietario ha già restituito il suo report, il lavoro successivo gli arriva con
-`SendMessage` (stesso agente, contesto intatto), non con un agente nuovo.
+l'agente proprietario ha già restituito il suo report, il lavoro successivo va a quello stesso
+agente, con il suo contesto intatto: in Claude Code con `SendMessage`, in un altro runtime con il
+meccanismo equivalente per riprendere un sotto-agente. Solo se il runtime non permette di
+riprenderlo, avvia un agente nuovo per la stessa issue, dopo che il precedente ha finito, e
+passagli il report del precedente.
 
 ## 4. Sorvegliare e correggere l'insieme delle PR aperte
 
@@ -148,9 +151,13 @@ DeepSeek può durare decine di minuti (vedi "Tempi reali" in `/process-pr`).
 
 **Sorveglia l'insieme con una sola sorveglianza persistente costruita su `pr-status-json`.**
 Avviala appena esiste la prima PR dell'esecuzione: in Claude Code con lo strumento `Monitor` e
-`persistent: true`, in un altro runtime con il ciclo in background equivalente. Non aspettare
-con `sleep` in primo piano: tra un evento e l'altro il controllo torna all'utente, e ogni riga
-emessa ti risveglia. Agisci su ogni riga: `ready:true` va al Passo 5; thread, finding non letti,
+`persistent: true`, che esegue il ciclo in background e consegna ogni riga di stdout come
+notifica mentre il ciclo continua; in un altro runtime con un processo in background di cui leggi
+l'output. **Mai eseguire il ciclo come un normale comando di shell in primo piano**: non ritorna
+mai, viene troncato al timeout e le righe non arrivano mentre vengono emesse. Il `sleep 60` del
+ciclo gira solo dentro quel processo in background; l'orchestratore non aspetta con `sleep` in
+primo piano, e tra un evento e l'altro il controllo torna all'utente. Lo stato `last` vive per
+tutta la durata del processo, quindi ogni PR esce solo quando cambia. Agisci su ogni riga: `ready:true` va al Passo 5; thread, finding non letti,
 CI rossa o `CONFLICTING` vanno al `/process-pr` dell'agente proprietario; solo uno stato in
 corso aspetta.
 
@@ -171,10 +178,15 @@ while true; do
   prs=$(printf '%s\n' "$all" | grep -E "/(${ISSUES})-|^(${EXTRA_PRS:-none}) " || true)
   while read -r n sha _; do
     [ -n "$n" ] || continue
-    s=$(bash scripts/gh-automation.sh pr-status-json "$n" 2>/dev/null | jq -c '{ready:.ready_to_merge,
+    s=$(bash scripts/gh-automation.sh pr-status-json "$n" 2>/dev/null | jq -ce '
+      ["ready_to_merge","ci_pending","ci_failing","required_check_state","unresolved_threads",
+       "deepseek_unread_findings","deepseek_review_complete","deepseek_rounds_exhausted",
+       "mergeable"] as $need
+      | if ($need - keys | length) == 0 then {ready:.ready_to_merge,
       pending:.ci_pending, failing:.ci_failing, gate:.required_check_state,
       threads:.unresolved_threads, unread:.deepseek_unread_findings,
-      ds_done:(.deepseek_review_complete or .deepseek_rounds_exhausted), mergeable:.mergeable}' 2>/dev/null) || s=""
+      ds_done:(.deepseek_review_complete or .deepseek_rounds_exhausted), mergeable:.mergeable}
+        else empty end' 2>/dev/null) || s=""
     [ -n "$s" ] || s="status-unreadable"
     if [ "${last[$n]:-}" != "$sha $s" ]; then last[$n]="$sha $s"; echo "PR #$n @$sha $s"; fi
   done <<<"$prs"
@@ -183,7 +195,10 @@ done
 ```
 
 Emette ogni PR corrispondente una volta al primo passaggio e di nuovo quando cambiano la testa o
-lo stato; uno stato che non si legge esce come `status-unreadable`, mai come silenzio. Ogni
+lo stato; uno stato che non si legge esce come `status-unreadable`, mai come silenzio. Lo stesso
+vale per un campo di `pr-status-json` rinominato o sparito: `jq -e` senza risultato fallisce, e
+la riga esce come `status-unreadable` invece che come `null` muto
+(`scripts/test/agent-skills-sync.test.sh` lega i nomi all'helper). Ogni
 lettura che può fallire è protetta (`|| continue`, `|| true`, `|| s=""`, `${last[$n]:-}`), così
 il ciclo mantiene questa promessa anche sotto `set -euo pipefail`: un'assegnazione fallita non
 protetta chiuderebbe il ciclo senza una riga, che è proprio il silenzio che questa sorveglianza
@@ -192,8 +207,9 @@ deve evitare. Il filtro sui branch si àncora a `/<issue>-` e non dice niente su
 sorveglianza che non ha stampato niente per una PR che esiste è rotta, non tranquilla; finché non
 ha stampato, leggi `pr-status-json` a mano dopo ogni ondata.
 
-Quando una PR aggregata nasce dopo l'avvio, ferma la sorveglianza (`TaskStop`) e riavviala con
-il suo numero in `EXTRA_PRS`. A consegna finita fermala: un ciclo persistente non si chiude da
+Quando una PR aggregata nasce dopo l'avvio, ferma la sorveglianza (in Claude Code con
+`TaskStop`, altrove fermando il processo in background) e riavviala con il suo numero in
+`EXTRA_PRS`. A consegna finita fermala: un ciclo persistente non si chiude da
 solo.
 
 **Mai costruire la sorveglianza su `gh pr checks --json`.** Il `gh` minimo del repository
@@ -230,9 +246,11 @@ Sono candidate solo le PR foglia le cui dipendenze sono già unite. Subito prima
    il `gh` minimo non espone `baseRefOid` in `gh pr view --json`. Tieni i due SHA come
    `OBSERVED_HEAD` e `OBSERVED_BASE_HEAD`.
 2. Verifica che sia ancora aperta e che la base non sia vuota e non sia `main`.
-3. Verifica che la testa contenga la punta attuale della base
-   (`git merge-base --is-ancestor <punta-base> <testa>` dopo un `git fetch`). Se non la contiene,
-   la PR non è candidata: vedi "Dopo un merge" qui sotto.
+3. Verifica che la testa osservata contenga la base osservata, sugli stessi due SHA che il passo 6
+   passa a `pr-merge`, senza dipendere dai ref del clone locale:
+   `gh api "repos/$REPO/compare/$OBSERVED_BASE_HEAD...$OBSERVED_HEAD" --jq '.status'`. Solo
+   `ahead` o `identical` vanno avanti; `behind`, `diverged`, un errore o un output vuoto vogliono
+   dire che la PR non è candidata: vedi "Dopo un merge" qui sotto.
 4. Rispetta ogni vincolo d'ordine scritto nella sua issue e nel corpo della PR.
 5. Esegui `bash scripts/gh-automation.sh is-ready-to-merge <pr>` sulla testa attuale.
 6. Se riesce, esegui
