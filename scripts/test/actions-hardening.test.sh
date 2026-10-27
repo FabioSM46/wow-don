@@ -97,8 +97,9 @@ assert re.search(
     r"^permissions:\s*$\n(?:^[ \t].*\n)*?^  contents:\s*read\s*$", ci, re.MULTILINE
 ), "ci.yml must default GITHUB_TOKEN to contents: read"
 
-invocation = "bash scripts/test/actions-hardening.test.sh"
-assert ci.count(invocation) == 1, "CI must run the Actions hardening test exactly once"
+# The automation job runs every scripts/test/*.test.sh by glob, this file included.
+invocation = "for t in scripts/test/*.test.sh; do"
+assert ci.count(invocation) == 1, "CI must run every scripts/test/*.test.sh exactly once"
 
 print(
     f"actions hardening — {remote_uses} remote uses pinned, "
