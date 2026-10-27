@@ -20,6 +20,7 @@ Riferimento rapido — le skill della pipeline:
 
 - `/dev-issue <numero>` — implementa una issue GitHub dall'inizio alla fine (worktree → gate → PR)
 - `/process-pr [numero]` — ciclo forzato su una PR aperta (feedback DeepSeek + correzioni CI)
+- `/develop-iteration [iterazione]` — consegna le issue di una milestone (agenti paralleli → PR → merge)
 - `/scrum-master feature-spec | backlog-refine | iteration-plan` — cerimonie scrum
 
 Regole che prevalgono su tutto il resto: lavora solo in git worktree, parti da `develop`, mai push
