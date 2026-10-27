@@ -15,6 +15,8 @@ type Props = {
   /** La tab Options è aperta: le impostazioni si rileggono quando lo diventa. */
   active: boolean;
   installations: Installation[];
+  /** La modalità salvata, a ogni lettura e salvataggio (la riga di stato di Installed, #203). */
+  onModeChange?: (mode: AutoUpdateMode) => void;
 };
 
 type Schedule = { mode: AutoUpdateMode; intervalHours: number };
@@ -28,7 +30,7 @@ type Schedule = { mode: AutoUpdateMode; intervalHours: number };
  * Ogni controllo mostra il valore salvato; durante un salvataggio quello scelto. Un salvataggio
  * fallito mostra l'errore e il controllo torna al valore salvato.
  */
-export function AutoUpdateOptions({ active, installations }: Props) {
+export function AutoUpdateOptions({ active, installations, onModeChange }: Props) {
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [pending, setPending] = useState<Schedule | undefined>(undefined);
   // Id dell'installazione → partecipa all'aggiornamento automatico.
@@ -47,6 +49,10 @@ export function AutoUpdateOptions({ active, installations }: Props) {
   // resterebbe senza valore e con la casella disattivata. Ogni salvataggio finito fa quindi
   // ripartire la lettura cambiando `retry`.
   const [retry, setRetry] = useState(0);
+  const modeChanged = useRef(onModeChange);
+  useEffect(() => {
+    modeChanged.current = onModeChange;
+  });
   const ids = installations.map((installation) => installation.id).join("\n");
 
   useEffect(() => {
@@ -67,6 +73,7 @@ export function AutoUpdateOptions({ active, installations }: Props) {
           mode: settings.value.autoUpdate,
           intervalHours: settings.value.autoUpdateIntervalHours,
         });
+        modeChanged.current?.(settings.value.autoUpdate);
       } else {
         failures.push(errorMessage(settings.reason));
       }
@@ -94,6 +101,7 @@ export function AutoUpdateOptions({ active, installations }: Props) {
     try {
       const saved = await api.setAutoUpdate(next.mode, next.intervalHours);
       setSchedule({ mode: saved.autoUpdate, intervalHours: saved.autoUpdateIntervalHours });
+      modeChanged.current?.(saved.autoUpdate);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
