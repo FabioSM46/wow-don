@@ -81,6 +81,7 @@ esac
 EOF
 cat >"$TMP/bin/pnpm" <<EOF
 #!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$TMP/pnpm-args"
 cat "$TMP/pnpm.json"
 EOF
 chmod +x "$TMP/bin/cargo" "$TMP/bin/pnpm"
@@ -115,6 +116,8 @@ z=$(grep -n -- "--- zeta" "$OUT" | cut -d: -f1)
 grep -qF "$TMP" "$OUT" && bad "the output names a build path" || ok "no build path in the output"
 grep -qF -- "--locked" "$TMP/cargo-args" && grep -qF -- "--filter-platform linux-target" "$TMP/cargo-args" \
   && ok "cargo metadata is locked and filtered by target" || bad "cargo args: $(cat "$TMP/cargo-args")"
+grep -qF -- "licenses list" "$TMP/pnpm-args" && grep -qF -- "--prod" "$TMP/pnpm-args" \
+  && ok "pnpm licenses list is run with --prod" || bad "pnpm args: $(cat "$TMP/pnpm-args")"
 
 echo "== determinism"
 run "$TMP/out/again.txt" linux-target 2>/dev/null

@@ -198,7 +198,7 @@ in bozza. La release si pubblica a mano dopo averla controllata.
 Ogni pacchetto contiene `THIRD-PARTY-LICENSES`, con le licenze delle crate e dei pacchetti npm
 compilati nell'app. Lo scrive `scripts/third-party-licenses.py` prima di ogni build, e la
 configurazione `src-tauri/tauri.release*.conf.json` lo mette nel pacchetto: su Linux in
-`/usr/share/doc/wow-don/` accanto a `copyright`, su Windows e macOS tra le risorse dell'app.
+`/usr/share/doc/wow-don/` accanto a `copyright`, su Windows e macOS tra le risorse dell'app, insieme a `LICENSE`.
 
 ### Installare su macOS
 
