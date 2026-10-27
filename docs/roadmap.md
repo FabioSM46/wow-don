@@ -65,9 +65,8 @@ Fonti senza accordi pubblicitari né chiavi (D31), dietro l'interfaccia comune (
 - Installazione di uno zip scaricato a mano, trascinandolo nella finestra o con "Install from
   zip…" (D32): così si installano anche gli addon con `allowModDistribution = false`.
 - `installed-addons.json` v2 con i record per fonte e l'ordine di abbinamento tra le fonti (D33).
-- Tukui (ElvUI, Tukui) e GitHub Releases, con l'installazione da link nella tab Search e la
-  fonte di ogni addon nella tab Installed. WoWInterface era arrivata con #107 e si toglie
-  (D38, #188 e #189).
+- Tukui (ElvUI, Tukui), WoWInterface e GitHub Releases, con l'installazione da link nella tab
+  Search e la fonte di ogni addon nella tab Installed.
 
 Iteration 3: #102, #103, #104, #105, #106, #111, #117. Iteration 5: #107, #108, #109, #110.
 
@@ -99,6 +98,7 @@ Iteration 6:
 ## M5 — Chiave per applicazioni di terzi e primo rilascio
 
 - Inviare a CurseForge/Overwolf il form per la chiave da applicazione.
+- Chiedere a Wago un accesso in lettura all'API (D39), in parallelo.
 - Decidere come la chiave arriva nell'app installata: oggi il backend la legge solo da
   `CURSEFORGE_API_KEY` o dalla `.env` del checkout, quindi un pacchetto installato parte senza
   chiave.
@@ -108,5 +108,7 @@ Iteration 6:
 ## Dopo
 
 - Token GitHub personale facoltativo, per superare il limite di 60 richieste l'ora.
+- Ricerca nel catalogo WoWInterface.
 
-Fuori dal progetto (D38): Wago Addons e WoWInterface, anche come idee per il futuro.
+- Wago Addons (D39): richiesta di accesso all'API inviata dall'utente; la fonte si specifica
+  solo se Wago concede una chiave da usare in WoW-don.
