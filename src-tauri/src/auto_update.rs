@@ -343,6 +343,9 @@ impl Source for Watched<'_> {
     }
 
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome {
+        // Confine tra progetti (issue #201): quello che un progetto precedente ha tenuto senza
+        // arrivare al suo record non finisce nello slot di questo.
+        crate::install::take_kept();
         self.inner.update(target, record)
     }
 
@@ -996,6 +999,8 @@ mod tests {
         kind: SourceKind,
         claims: Vec<&'static str>,
         broken: Vec<&'static str>,
+        /// Progetti che sostituiscono le cartelle e poi falliscono senza scrivere il record.
+        unrecorded: Vec<&'static str>,
         fails: bool,
         asked: RefCell<Vec<String>>,
     }
@@ -1006,6 +1011,7 @@ mod tests {
                 kind,
                 claims: claims.to_vec(),
                 broken: Vec::new(),
+                unrecorded: Vec::new(),
                 fails: false,
                 asked: RefCell::new(Vec::new()),
             }
@@ -1054,6 +1060,14 @@ mod tests {
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join(format!("{}.lua", target.key)), "new").unwrap();
             crate::install::replace(target.addons_dir, staging.path(), &[]).unwrap();
+            if self.unrecorded.contains(&target.key) {
+                return UpdateOutcome::error(
+                    self.kind,
+                    target.key,
+                    target.key,
+                    "Could not save the record.".to_owned(),
+                );
+            }
             record(
                 self.kind,
                 target.key,
@@ -1224,6 +1238,35 @@ mod tests {
         assert_eq!(undoable[0].addons, 1);
         assert_eq!(undoable[0].round_at, "2026-10-27T10:00:00Z");
         assert_eq!(manifest.read().unwrap()["test"].projects[0].name, "Alpha");
+    }
+
+    #[test]
+    fn what_a_project_kept_without_its_record_does_not_go_to_the_next_one() {
+        let tmp = TempDir::new();
+        let installation = installation_with(&tmp, &["Alpha", "Beta"]);
+        let mut source = FakeSource::new(SourceKind::Tukui, &["Alpha", "Beta"]);
+        source.unrecorded = vec!["Alpha"];
+        let manifest = PreviousManifest::new(tmp.path().join("config").join("previous.json"));
+        let mut next = NextGeneration::new(&installation);
+        let (report, _) = run_installation(
+            &installation,
+            AutoUpdateMode::Install,
+            &InstallationAutoUpdate::default(),
+            None,
+            &[&source],
+            &SourceRecords::new(),
+            &mut |_, _, _| Ok(()),
+            Some(&mut next),
+            "t".to_owned(),
+        );
+        assert_eq!(report.updated.len(), 1);
+        next.commit(&manifest, &installation.id, "t", &report.updated)
+            .unwrap();
+        let rounds = manifest.read().unwrap();
+        let projects = &rounds["test"].projects;
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].key, "Beta");
+        assert_eq!(projects[0].saved, ["Beta"]);
     }
 
     #[test]

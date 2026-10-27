@@ -185,6 +185,9 @@ pub struct NextGeneration {
     dir: Option<WorkDir>,
     error: Option<String>,
     projects: Vec<PreviousProject>,
+    /// I progetti aggiornati la cui versione precedente non è stata tenuta per intero (o non è
+    /// arrivata a questo thread): non si possono annullare, e [`commit`](Self::commit) lo dice.
+    not_kept: Vec<(SourceKind, String)>,
 }
 
 impl NextGeneration {
@@ -195,6 +198,7 @@ impl NextGeneration {
             dir: None,
             error: None,
             projects: Vec::new(),
+            not_kept: Vec::new(),
         }
     }
 
@@ -221,14 +225,15 @@ impl NextGeneration {
             return run(record);
         };
         let projects = &mut self.projects;
+        let not_kept = &mut self.not_kept;
         install::keeping_replaced(dir.path(), || {
             let mut keeping =
                 |source: SourceKind, key: &str, new: SourceRecord| -> Result<(), String> {
                     let kept = install::take_kept();
                     let previous = before.get(&source).and_then(|p| p.get(key)).cloned();
                     record(source, key, new.clone())?;
-                    if let Some(kept) = kept.filter(|kept| kept.complete) {
-                        projects.push(PreviousProject {
+                    match kept.filter(|kept| kept.complete) {
+                        Some(kept) => projects.push(PreviousProject {
                             source,
                             key: key.to_owned(),
                             name: String::new(),
@@ -236,7 +241,8 @@ impl NextGeneration {
                             current: new,
                             slot: kept.slot,
                             saved: kept.folders,
-                        });
+                        }),
+                        None => not_kept.push((source, key.to_owned())),
                     }
                     Ok(())
                 };
@@ -254,11 +260,29 @@ impl NextGeneration {
         round_at: &str,
         updated: &[UpdateOutcome],
     ) -> Result<(), String> {
+        let name_of = |source: SourceKind, key: &str| {
+            updated
+                .iter()
+                .find(|o| o.source == source && o.key == key)
+                .map_or_else(|| key.to_owned(), |o| o.name.clone())
+        };
+        // Un progetto aggiornato senza la versione precedente non si perde in silenzio.
+        let not_kept = (!self.not_kept.is_empty()).then(|| {
+            let names: Vec<String> = self
+                .not_kept
+                .iter()
+                .map(|(source, key)| name_of(*source, key))
+                .collect();
+            format!(
+                "Could not keep the previous version of {}: undo will not restore it.",
+                names.join(", ")
+            )
+        });
         let Some(dir) = self.dir else {
             return self.error.map_or(Ok(()), Err);
         };
         if self.projects.is_empty() {
-            return Ok(());
+            return not_kept.map_or(Ok(()), Err);
         }
         let projects = self
             .projects
@@ -299,7 +323,7 @@ impl NextGeneration {
             let _ = fs::remove_dir_all(&self.generation);
             return Err(error);
         }
-        Ok(())
+        not_kept.map_or(Ok(()), Err)
     }
 }
 
@@ -312,8 +336,9 @@ pub enum UndoStatus {
     Restored,
     /// Il progetto è cambiato dopo il giro: niente è stato toccato.
     Skipped,
-    /// Le cartelle non si sono potute rimettere; se la versione precedente è ancora sul disco
-    /// l'Undo si può riprovare.
+    /// Le cartelle non si sono potute rimettere (se la versione precedente è ancora sul disco
+    /// l'Undo si può riprovare), oppure sono tornate ma il record no: allora cartelle e record
+    /// non combaciano e il messaggio lo dice.
     Error,
 }
 
@@ -426,12 +451,17 @@ pub(crate) fn undo_with(
             ),
             None => store.forget_project(&installation.id, project.source, &project.key),
         });
-        let message = restored.err().map(|error| {
-            format!(
-                "Restored the previous version, but the app could not update its records: {error}"
-            )
+        // Le cartelle sono tornate ma il record no: non è un Undo riuscito, e non si può
+        // ripetere (lo slot è vuoto). Lo dice lo stato, non solo il messaggio.
+        outcomes.push(match restored {
+            Ok(()) => outcome(UndoStatus::Restored, None),
+            Err(error) => outcome(
+                UndoStatus::Error,
+                Some(format!(
+                    "Restored the previous folders, but the app could not update its records: {error}"
+                )),
+            ),
         });
-        outcomes.push(outcome(UndoStatus::Restored, message));
     }
     outcomes.reverse();
     left.reverse();
@@ -940,6 +970,37 @@ mod tests {
         let outcomes = fx.undo().unwrap();
         assert_eq!(statuses(&outcomes), [("owner/new", UndoStatus::Restored)]);
         assert_eq!(fx.listing(), ["Other"]);
+    }
+
+    #[test]
+    fn an_update_whose_previous_version_was_not_kept_is_reported() {
+        let fx = two_addons();
+        let before = fx.records();
+        let mut next = NextGeneration::new(&fx.installation);
+        let mut writer = |_, _: &str, _| Ok(());
+        // Un record senza un `replace` tenuto prima (per esempio su un altro thread).
+        next.run(&before, &mut writer, |record| {
+            record(GH, "owner/bigwigs", record_of("v2", &["BigWigs"])).unwrap();
+        });
+        let updated = [UpdateOutcome::updated(
+            GH,
+            "owner/bigwigs",
+            "BigWigs",
+            crate::updates::FileSummary {
+                id: 0,
+                name: "v2".to_owned(),
+                date: String::new(),
+            },
+            None,
+        )];
+        let error = next
+            .commit(&fx.manifest, "test", "t", &updated)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "Could not keep the previous version of BigWigs: undo will not restore it."
+        );
+        assert!(fx.manifest.read().unwrap().is_empty());
     }
 
     #[test]
