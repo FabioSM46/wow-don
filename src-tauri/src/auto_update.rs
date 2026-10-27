@@ -28,8 +28,8 @@ use crate::commands::{self, InstallLock, LiveSources};
 use crate::installations::Installation;
 use crate::sources::{ProjectKey, RecordWriter, Source, SourceKind, UpdateTarget};
 use crate::store::{
-    AddonSettingsStore, AppSettingsStore, AutoUpdateMode, InstallationAutoUpdate,
-    InstallationStore, InstalledAddonsStore, ProjectRecords, SourceRecords,
+    AUTO_UPDATE_INTERVALS_HOURS, AddonSettingsStore, AppSettingsStore, AutoUpdateMode,
+    InstallationAutoUpdate, InstallationStore, InstalledAddonsStore, ProjectRecords, SourceRecords,
 };
 use crate::updates::{self, AddonUpdate, FileSummary, OutcomeStatus, UpdateOutcome, UpdateStatus};
 
@@ -49,6 +49,10 @@ pub const BACKOFF: [Duration; 3] = [
     Duration::from_secs(15 * 60),
     Duration::from_secs(60 * 60),
 ];
+
+/// Gli estremi dell'intervallo tra due giri, in ore: quelli di [`AUTO_UPDATE_INTERVALS_HOURS`].
+const MIN_INTERVAL_HOURS: u32 = AUTO_UPDATE_INTERVALS_HOURS[0];
+const MAX_INTERVAL_HOURS: u32 = AUTO_UPDATE_INTERVALS_HOURS[AUTO_UPDATE_INTERVALS_HOURS.len() - 1];
 
 /// Il messaggio di un progetto con un aggiornamento che l'utente ha escluso (issue #199).
 const EXCLUDED: &str = "Excluded from automatic updates.";
@@ -174,12 +178,15 @@ pub struct Schedule {
 impl Schedule {
     /// Il prossimo giro, `None` con la modalità `off` (il thread aspetta di essere svegliato).
     /// L'intervallo si rilegge a ogni chiamata: un cambio vale subito, anche all'indietro (un
-    /// giro già in ritardo parte subito).
+    /// giro già in ritardo parte subito). Si limita agli intervalli ammessi (da 1 a 24 ore): lo
+    /// store rimette già il default su un valore sconosciuto, ma uno zero qui farebbe girare il
+    /// thread senza pause e un valore enorme farebbe traboccare l'`Instant` del prossimo giro.
     pub fn next_due(&self, mode: AutoUpdateMode, interval_hours: u32) -> Option<Duration> {
         if mode == AutoUpdateMode::Off {
             return None;
         }
-        let interval = Duration::from_secs(u64::from(interval_hours) * 60 * 60);
+        let hours = interval_hours.clamp(MIN_INTERVAL_HOURS, MAX_INTERVAL_HOURS);
+        let interval = Duration::from_secs(u64::from(hours) * 60 * 60);
         let Some(last) = self.last_attempt else {
             return Some(STARTUP_DELAY);
         };
@@ -223,7 +230,9 @@ pub struct Plan {
     pub available: Vec<AvailableUpdate>,
     /// I progetti con un aggiornamento esclusi dall'utente.
     pub excluded: Vec<UpdateOutcome>,
-    /// Le cartelle che nessuna fonte ha potuto controllare.
+    /// I progetti riconosciuti il cui controllo è fallito (per esempio la release GitHub di un
+    /// progetto registrato che non si legge) e le cartelle che nessuna fonte ha potuto
+    /// controllare.
     pub errors: Vec<AutoUpdateError>,
 }
 
@@ -251,12 +260,24 @@ pub fn plan(updates: &[AddonUpdate], auto: &InstallationAutoUpdate) -> Plan {
             }
             (None, _) => continue,
         };
-        let UpdateStatus::UpdateAvailable { latest } = status else {
-            continue;
-        };
         let key = ProjectKey {
             source: project.source,
             key: project.key.clone(),
+        };
+        let latest = match status {
+            UpdateStatus::UpdateAvailable { latest } => latest,
+            UpdateStatus::Error { message } => {
+                if seen.insert(key.clone()) {
+                    plan.errors.push(AutoUpdateError {
+                        source: Some(key.source),
+                        key: Some(key.key),
+                        name: project.name.clone(),
+                        message: message.clone(),
+                    });
+                }
+                continue;
+            }
+            _ => continue,
         };
         if !seen.insert(key.clone()) {
             continue;
@@ -659,6 +680,22 @@ mod tests {
     }
 
     #[test]
+    fn an_interval_outside_the_allowed_ones_is_clamped() {
+        let schedule = finished(&[RoundResult::Done]);
+        assert_eq!(schedule.next_due(AutoUpdateMode::Notify, 0), Some(HOUR * 2));
+        assert_eq!(
+            schedule.next_due(AutoUpdateMode::Notify, u32::MAX),
+            Some(HOUR * 25)
+        );
+        // Anche il backoff resta sopra zero con un intervallo nullo.
+        let schedule = finished(&[RoundResult::Failed]);
+        assert_eq!(
+            schedule.next_due(AutoUpdateMode::Notify, 0),
+            Some(HOUR + MIN * 5)
+        );
+    }
+
+    #[test]
     fn with_the_mode_off_nothing_is_planned() {
         assert_eq!(Schedule::default().next_due(AutoUpdateMode::Off, 6), None);
         let schedule = finished(&[RoundResult::Failed]);
@@ -775,6 +812,13 @@ mod tests {
                 },
             ),
             row("Unknown", None, UpdateStatus::NotMatched),
+            row(
+                "Recorded",
+                Some((GH, "other/repo")),
+                UpdateStatus::Error {
+                    message: "GitHub did not respond in time.".to_owned(),
+                },
+            ),
         ];
         let auto = InstallationAutoUpdate {
             disabled: false,
@@ -793,14 +837,23 @@ mod tests {
         assert_eq!(plan.excluded[0].key, "100");
         assert_eq!(plan.excluded[0].status, OutcomeStatus::Skipped);
         assert_eq!(plan.excluded[0].message.as_deref(), Some(EXCLUDED));
+        // Gli errori delle cartelle senza fonte e quelli dei progetti riconosciuti.
         assert_eq!(
             plan.errors,
-            [AutoUpdateError {
-                source: None,
-                key: None,
-                name: "Lonely".to_owned(),
-                message: "CurseForge check failed: offline".to_owned(),
-            }]
+            [
+                AutoUpdateError {
+                    source: None,
+                    key: None,
+                    name: "Lonely".to_owned(),
+                    message: "CurseForge check failed: offline".to_owned(),
+                },
+                AutoUpdateError {
+                    source: Some(GH),
+                    key: Some("other/repo".to_owned()),
+                    name: "other/repo name".to_owned(),
+                    message: "GitHub did not respond in time.".to_owned(),
+                },
+            ]
         );
 
         // Senza aggiornamenti non c'è niente da fare.
