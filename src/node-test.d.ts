@@ -13,8 +13,3 @@ declare module "node:assert/strict" {
   };
   export default assert;
 }
-
-// Solo per i test che confrontano un contratto con una costante del backend.
-declare module "node:fs" {
-  export function readFileSync(path: URL, encoding: "utf8"): string;
-}

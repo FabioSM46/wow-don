@@ -74,7 +74,9 @@ export type InstallationReport = {
   available: AvailableUpdate[];
   /** Solo in `install`. */
   updated: UpdateOutcome[];
-  /** Con il motivo; comprende gli esclusi ("Excluded from automatic updates."). */
+  /** I progetti esclusi dall'utente: una scelta, non un problema. */
+  excluded: UpdateOutcome[];
+  /** Solo in `install`: i progetti che la fonte salta, con il motivo. */
   skipped: UpdateOutcome[];
   errors: AutoUpdateError[];
   /** Il controllo dell'installazione è fallito per intero. */

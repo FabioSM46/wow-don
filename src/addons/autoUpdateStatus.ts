@@ -13,22 +13,6 @@ import type {
 /** Il nome dell'evento Tauri, come `auto_update::EVENT` nel backend. */
 export const AUTO_UPDATE_EVENT = "auto-update";
 
-/**
- * Il motivo dei progetti esclusi dall'utente: una scelta, non un problema. È un contratto con il
- * backend, che non manda un campo apposta: deve restare uguale a `EXCLUDED` in
- * `src-tauri/src/auto_update.rs`, e `autoUpdateStatus.test.ts` confronta le due copie.
- */
-export const EXCLUDED_MESSAGE = "Excluded from automatic updates.";
-
-/**
- * Il progetto saltato è stato escluso dall'utente. Il confronto ignora maiuscole, spazi e il
- * punto finale, così un ritocco di forma nel backend non fa comparire gli esclusi tra i problemi.
- */
-export function isExcluded(message: string | undefined): boolean {
-  const normalize = (text: string) => text.trim().replace(/\.$/, "").toLowerCase();
-  return message !== undefined && normalize(message).startsWith(normalize(EXCLUDED_MESSAGE));
-}
-
 /** Un progetto (o una cartella) da mostrare nel dettaglio, con il motivo. */
 export type StatusProblem = {
   name: string;
@@ -76,7 +60,10 @@ function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-/** I problemi di un'installazione nel giro: gli errori, poi i saltati (esclusi a parte). */
+/**
+ * I problemi di un'installazione nel giro: gli errori, poi i saltati. Gli esclusi dall'utente
+ * stanno in `report.excluded` e non sono problemi.
+ */
 export function reportProblems(report: InstallationReport): StatusProblem[] {
   const problems: StatusProblem[] = [];
   if (report.checkError !== null) {
@@ -91,7 +78,6 @@ export function reportProblems(report: InstallationReport): StatusProblem[] {
     });
   }
   for (const skipped of report.skipped) {
-    if (isExcluded(skipped.message)) continue;
     problems.push({
       name: skipped.name || skipped.key,
       message: skipped.message ?? "Skipped.",
