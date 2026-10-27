@@ -25,6 +25,24 @@ export type AppSettings = {
    * l'app gira (per esempio un'estensione di GNOME attivata o disattivata).
    */
   trayAvailable: boolean;
+  /** L'aggiornamento automatico degli addon (D41, issue #199): niente, solo avviso o installa. */
+  autoUpdate: AutoUpdateMode;
+  /** Le ore tra due giri dell'aggiornamento automatico: una di 1, 3, 6, 12 e 24. */
+  autoUpdateIntervalHours: number;
+};
+
+/** Cosa fa l'aggiornamento automatico (`AutoUpdateMode` del backend, in minuscolo). */
+export type AutoUpdateMode = "off" | "notify" | "install";
+
+/**
+ * L'aggiornamento automatico di un'installazione (`get_auto_update`, issue #199). Un escluso è
+ * `{ source, key }`: si abbina a una riga con `project.source` e `project.key` del suo
+ * `AddonUpdate`, mai con `project.id`, che vale `0` fuori da CurseForge.
+ */
+export type InstallationAutoUpdate = {
+  /** L'installazione non partecipa per intero. */
+  disabled: boolean;
+  excluded: { source: SourceKind; key: string }[];
 };
 
 export type Installation = {
@@ -455,6 +473,24 @@ export const api = {
   getAutostart: () => invoke<boolean>("get_autostart"),
   /** Restituisce lo stato riletto dal sistema operativo dopo la modifica. */
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
+  /** Un valore sconosciuto (modalità o intervallo) è rifiutato dal backend. */
+  setAutoUpdate: (mode: AutoUpdateMode, intervalHours: number) =>
+    invoke<AppSettings>("set_auto_update", { mode, intervalHours }),
+  getAutoUpdate: (installationId: string) =>
+    invoke<InstallationAutoUpdate>("get_auto_update", { installationId }),
+  /** Esclude il progetto (`excluded`) o lo riammette; restituisce lo stato salvato. */
+  setAutoUpdateExcluded: (
+    installationId: string,
+    project: { source: SourceKind; key: string },
+    excluded: boolean,
+  ) =>
+    invoke<InstallationAutoUpdate>("set_auto_update_excluded", {
+      installationId,
+      project,
+      excluded,
+    }),
+  setInstallationAutoUpdate: (installationId: string, enabled: boolean) =>
+    invoke<InstallationAutoUpdate>("set_installation_auto_update", { installationId, enabled }),
   exportAddons: (installationId: string) =>
     invoke<ExportResult>("export_addons", { installationId }),
   previewImport: (installationId: string, text: string) =>

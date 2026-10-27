@@ -244,22 +244,51 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-/* Options: le sezioni (Found on this computer, Installations, Appearance, Updates, System) una
-   sotto l'altra. */
+/* Options: le sezioni (Found on this computer, Installations, Appearance, Updates, Automatic
+   updates, System) una sotto l'altra. */
 
 .discovered + .installations,
 .appearance,
 .updates-option,
+.auto-update-option,
 .system-option {
   margin-top: 32px;
 }
 
 .updates-option .hint,
+.auto-update-option .hint,
 .system-option .hint {
   margin-top: 4px;
 }
 
-.system-option .option-row + .option-row {
+.system-option .option-row + .option-row,
+.auto-update-option .hint + .option-row {
+  margin-top: 12px;
+}
+
+/* Automatic updates (issue #204): modalità e intervallo su una riga, poi un interruttore per
+   installazione. Nessun colore nuovo: testo attenuato come le altre opzioni. */
+.inline-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.installation-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auto-update-option .empty {
   margin-top: 12px;
 }
 
@@ -652,6 +681,15 @@ button:focus-visible {
   display: block;
   font-size: 0.8rem;
   color: var(--danger);
+}
+
+/* Un addon escluso dall'aggiornamento automatico (issue #204): un segno discreto, testo
+   attenuato senza colore di stato, che segue il tema come `--muted`. */
+.auto-update-off {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .has-error .addon-title {

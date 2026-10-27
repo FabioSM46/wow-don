@@ -37,6 +37,13 @@ import { SOURCE_LABELS, projectId, sourcesIn, updateRequest, type ProjectRef } f
 import { ProgressBar, useInstallProgress } from "./ProgressBar";
 import { refreshCheck } from "./refresh";
 import { ContextMenu } from "./ContextMenu";
+import {
+  EXCLUDED_TITLE,
+  excludedIds,
+  exclusionChoice,
+  exclusionProjects,
+  isExcluded,
+} from "./exclusion";
 import { blockedHint, isUpdatable } from "./mirror";
 import {
   confirmText,
@@ -299,6 +306,54 @@ export function AddonTable({
       mounted.current = false;
     };
   }, []);
+
+  // Gli addon esclusi dall'aggiornamento automatico (issue #204), per `projectId`: si leggono
+  // con `get_auto_update` per installazione e si abbinano alle righe su `project.source` e
+  // `project.key`. `undefined` finché la lettura non è riuscita.
+  const [excluded, setExcluded] = useState<ReadonlySet<string> | undefined>();
+  const [excludedError, setExcludedError] = useState<string | null>(null);
+  const [savingExclusion, setSavingExclusion] = useState(false);
+  const [exclusionError, setExclusionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    setExcluded(undefined);
+    setExcludedError(null);
+    setSavingExclusion(false);
+    setExclusionError(null);
+    api
+      .getAutoUpdate(installation.id)
+      .then((state) => current && setExcluded(excludedIds(state)))
+      .catch((err) => current && setExcludedError(errorMessage(err)));
+    return () => {
+      current = false;
+    };
+  }, [installation.id]);
+
+  /**
+   * Esclude o riammette i progetti, uno alla volta: ogni risposta è lo stato salvato e lo
+   * sostituisce. Al primo errore si ferma: le righe mostrano quello che il backend ha salvato.
+   */
+  async function saveExclusion(projects: ProjectRef[], exclude: boolean) {
+    const id = installation.id;
+    if (projects.length === 0 || savingExclusion) return;
+    setSavingExclusion(true);
+    setExclusionError(null);
+    try {
+      for (const project of projects) {
+        const saved = await api.setAutoUpdateExcluded(id, project, exclude);
+        if (!mounted.current || currentId.current !== id) return;
+        setExcluded(excludedIds(saved));
+        setExcludedError(null);
+      }
+    } catch (err) {
+      if (mounted.current && currentId.current === id) {
+        setExclusionError(`Could not save the automatic update choice: ${errorMessage(err)}`);
+      }
+    } finally {
+      if (mounted.current && currentId.current === id) setSavingExclusion(false);
+    }
+  }
 
   // `reinstall` (issue #149): riscarica anche i progetti già aggiornati, con la stessa barra e
   // lo stesso riepilogo di un aggiornamento.
@@ -580,6 +635,12 @@ export function AddonTable({
         closeMenu(true);
         updateProjects(reinstallProjects(targets, updates), true);
         break;
+      case "autoUpdate": {
+        const projects = exclusionProjects(targets, updates);
+        closeMenu(true);
+        void saveExclusion(projects, exclusionChoice(projects, excluded));
+        break;
+      }
       case "remove":
         // Il focus va alla barra di conferma, non alla riga.
         closeMenu(false);
@@ -593,7 +654,7 @@ export function AddonTable({
     returnFocus.current?.focus();
   }
 
-  const menuState = { updates, busy, checking };
+  const menuState = { updates, busy, checking, excluded, excludedError, savingExclusion };
   // Una riga che i filtri hanno nascosto non può restare l'unica raggiungibile con Tab.
   const tabStop =
     focusRow !== null && visible.some((g) => g.main.folder === focusRow)
@@ -689,6 +750,14 @@ export function AddonTable({
       {rescanError && (
         <p className="message error" role="alert">
           {rescanError}
+        </p>
+      )}
+      {exclusionError && (
+        <p className="message error" role="alert">
+          {exclusionError}{" "}
+          <button className="link subtle" onClick={() => setExclusionError(null)}>
+            Dismiss
+          </button>
         </p>
       )}
       {confirming && (
@@ -893,6 +962,11 @@ export function AddonTable({
                             {/* `aria-selected` su una riga di tabella non è letto da tutti gli
                                 screen reader: lo stato è anche nel testo della riga. */}
                             {isSelected && <span className="visually-hidden"> (selected)</span>}
+                            {isExcluded(update, excluded) && (
+                              <span className="auto-update-off" title={EXCLUDED_TITLE}>
+                                No auto-update
+                              </span>
+                            )}
                             {error && <span className="addon-error">{error}</span>}
                           </td>
                           <td className="mono">
