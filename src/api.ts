@@ -45,6 +45,84 @@ export type InstallationAutoUpdate = {
   excluded: { source: SourceKind; key: string }[];
 };
 
+/** Un progetto con un aggiornamento trovato da un giro automatico (`AvailableUpdate`). */
+export type AvailableUpdate = {
+  source: SourceKind;
+  key: string;
+  name: string;
+  latest: FileSummary;
+};
+
+/**
+ * Un errore di un giro automatico. Con `source` e `key` nulli `name` è una cartella che nessuna
+ * fonte ha riconosciuto; con `name` vuoto è la versione precedente che non si è potuta tenere
+ * per l'Undo (gli aggiornamenti restano installati).
+ */
+export type AutoUpdateError = {
+  source: SourceKind | null;
+  key: string | null;
+  name: string;
+  message: string;
+};
+
+/** L'esito di un giro automatico su un'installazione (`InstallationReport`, issue #200). */
+export type InstallationReport = {
+  installationId: string;
+  installationName: string;
+  /** ISO 8601 UTC. */
+  checkedAt: string;
+  available: AvailableUpdate[];
+  /** Solo in `install`. */
+  updated: UpdateOutcome[];
+  /** Con il motivo; comprende gli esclusi ("Excluded from automatic updates."). */
+  skipped: UpdateOutcome[];
+  errors: AutoUpdateError[];
+  /** Il controllo dell'installazione è fallito per intero. */
+  checkError: string | null;
+};
+
+/** Un giro automatico finito (`RoundReport`): `mode` è `notify` o `install`. */
+export type RoundReport = {
+  mode: Exclude<AutoUpdateMode, "off">;
+  startedAt: string;
+  finishedAt: string;
+  /** Un controllo è fallito per la rete: il prossimo giro è anticipato. */
+  retrying: boolean;
+  /** Solo le installazioni che partecipano. */
+  installations: InstallationReport[];
+};
+
+/** Un giro annullabile con `undo_last_auto_update` (issue #201). */
+export type UndoableRound = {
+  installationId: string;
+  /** ISO 8601 UTC. */
+  roundAt: string;
+  /** Quanti addon l'Undo rimetterebbe. */
+  addons: number;
+};
+
+/**
+ * Lo stato dell'aggiornamento automatico: la risposta di `get_auto_update_status` e il payload
+ * dell'evento `auto-update` (emesso alla fine di ogni giro e dopo un Undo).
+ */
+export type AutoUpdateStatus = {
+  running: boolean;
+  /** ISO 8601 UTC, o `null` (modalità `off`, giro in corso, primo giro non ancora pianificato). */
+  nextRoundAt: string | null;
+  /** `null` prima del primo giro. */
+  lastRound: RoundReport | null;
+  undoable: UndoableRound[];
+};
+
+/** L'esito dell'Undo di un progetto; `message` spiega `skipped` ed `error`. */
+export type UndoOutcome = {
+  source: SourceKind;
+  key: string;
+  name: string;
+  status: "restored" | "skipped" | "error";
+  message?: string;
+};
+
 export type Installation = {
   id: string;
   path: string;
@@ -491,6 +569,11 @@ export const api = {
     }),
   setInstallationAutoUpdate: (installationId: string, enabled: boolean) =>
     invoke<InstallationAutoUpdate>("set_installation_auto_update", { installationId, enabled }),
+  /** Memoria del backend e il manifesto della versione precedente, nessuna rete. */
+  getAutoUpdateStatus: () => invoke<AutoUpdateStatus>("get_auto_update_status"),
+  /** Rifiuta se non c'è niente da annullare; emette `auto-update` con lo stato nuovo. */
+  undoLastAutoUpdate: (installationId: string) =>
+    invoke<UndoOutcome[]>("undo_last_auto_update", { installationId }),
   exportAddons: (installationId: string) =>
     invoke<ExportResult>("export_addons", { installationId }),
   previewImport: (installationId: string, text: string) =>
