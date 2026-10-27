@@ -220,3 +220,8 @@ Basta farlo una volta: dagli avvii successivi l'app si apre normalmente.
 
 World of Warcraft è un marchio di Blizzard Entertainment. WoW-don è un progetto
 indipendente, non affiliato né approvato da Blizzard, CurseForge o Overwolf.
+
+## Licenza
+
+WoW-don è software libero, distribuito con la [GNU General Public License v3.0 o
+successiva](LICENSE) (`GPL-3.0-or-later`).

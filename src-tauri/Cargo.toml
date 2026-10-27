@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "World of Warcraft addon manager for Linux and Windows"
 authors = ["FabioSM46 <124870035+FabioSM46@users.noreply.github.com>"]
 edition = "2024"
+license = "GPL-3.0-or-later"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
