@@ -21,6 +21,12 @@ use crate::installations::{Installation, strip_verbatim_prefix};
 /// Le cartelle salvate, con il nome che hanno nel gioco.
 const BACKUP_FOLDERS: [&str; 2] = ["WTF", "Interface"];
 
+/// Il prefisso delle cartelle di lavoro dell'app dentro `Interface`: la versione precedente
+/// degli addon (`previous::GENERATION_DIR`) e le cartelle d'appoggio di `install::WorkDir`.
+/// Sono dati dell'app, non dell'utente: al primo livello di `Interface` restano fuori dal
+/// backup (D41, issue #213).
+const APP_WORK_DIR_PREFIX: &str = ".wow-don-";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
@@ -166,7 +172,8 @@ fn write_zip(target: &Path, roots: &[(String, PathBuf)]) -> Result<(), String> {
         .map_err(|error| format!("Could not create the backup file ({}).", error.kind()))?;
     let mut writer = ZipWriter::new(BufWriter::new(file));
     for (name, path) in roots {
-        add_dir(&mut writer, path, name)?;
+        let skip_app_dirs = name.eq_ignore_ascii_case("Interface");
+        add_dir(&mut writer, path, name, skip_app_dirs)?;
     }
     let inner = writer
         .finish()
@@ -179,11 +186,13 @@ fn write_zip(target: &Path, roots: &[(String, PathBuf)]) -> Result<(), String> {
 }
 
 /// Aggiunge `dir` come `entry_name/` e tutto il suo contenuto, ricorsivamente. Le voci usano
-/// `/` come separatore, come richiede il formato zip.
+/// `/` come separatore, come richiede il formato zip. Con `skip_app_dirs` le sottocartelle
+/// dirette di `dir` che sono cartelle di lavoro dell'app non entrano; più in basso sì.
 fn add_dir<W: Write + io::Seek>(
     writer: &mut ZipWriter<W>,
     dir: &Path,
     entry_name: &str,
+    skip_app_dirs: bool,
 ) -> Result<(), String> {
     let read_error = |error: io::Error| format!("Could not read {entry_name} ({}).", error.kind());
     let mut children: Vec<_> = fs::read_dir(dir)
@@ -211,12 +220,22 @@ fn add_dir<W: Write + io::Seek>(
             .map_err(|error| format!("Could not read {child_entry} ({}).", error.kind()))?;
         let path = child.path();
         if kind.is_dir() {
-            add_dir(writer, &path, &child_entry)?;
+            if skip_app_dirs && is_app_work_dir(&name) {
+                continue;
+            }
+            add_dir(writer, &path, &child_entry, false)?;
         } else if kind.is_file() {
             add_file(writer, &path, &child_entry)?;
         }
     }
     Ok(())
+}
+
+/// Una cartella di lavoro dell'app (`.wow-don-*`), senza distinguere maiuscole e minuscole
+/// come fa il file system di Windows e di macOS.
+fn is_app_work_dir(name: &str) -> bool {
+    name.get(..APP_WORK_DIR_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(APP_WORK_DIR_PREFIX))
 }
 
 fn add_file<W: Write + io::Seek>(
@@ -459,6 +478,93 @@ mod tests {
         assert_eq!(info.size, fs::metadata(&info.path).unwrap().len());
         assert_eq!(info.path.parent().unwrap(), backups);
         assert!(info.name.starts_with("classic_era-") && info.name.ends_with(".zip"));
+    }
+
+    #[test]
+    fn app_work_folders_at_the_top_of_interface_are_left_out() {
+        let tmp = TempDir::new();
+        let inst = installation(&tmp);
+        write(&inst.path.join("Interface/AddOns/A/A.toc"), b"x");
+        write(
+            &inst
+                .path
+                .join("Interface")
+                .join(crate::previous::GENERATION_DIR)
+                .join("x"),
+            b"old",
+        );
+        write(&inst.path.join("Interface/.wow-don-backup-1/y"), b"y");
+        write(&inst.path.join("Interface/.WOW-DON-staging-2/z"), b"z");
+        let info = create_backup(&inst, &tmp.path().join("backups")).unwrap();
+        assert_eq!(
+            names(&read_zip(&info.path)),
+            [
+                "Interface/",
+                "Interface/AddOns/",
+                "Interface/AddOns/A/",
+                "Interface/AddOns/A/A.toc"
+            ]
+        );
+    }
+
+    /// Le cartelle vere di `install::WorkDir` (staging e quelle di `previous`) nascono accanto ad
+    /// `AddOns`, cioè al primo livello di `Interface`, con il prefisso che il backup salta: se
+    /// `install.rs` le spostasse altrove o cambiasse nome, questo test fallirebbe.
+    #[test]
+    fn real_install_work_folders_are_left_out() {
+        let tmp = TempDir::new();
+        let inst = installation(&tmp);
+        let interface = inst.path.join("Interface");
+        let addons = interface.join("AddOns");
+        write(&addons.join("A/A.toc"), b"x");
+        let staging = crate::install::WorkDir::staging(&addons).unwrap();
+        let next = crate::install::WorkDir::create(&addons, "next").unwrap();
+        for work in [&staging, &next] {
+            assert_eq!(work.path().parent(), Some(interface.as_path()));
+            write(&work.path().join("B/B.toc"), b"y");
+        }
+        let info = create_backup(&inst, &tmp.path().join("backups")).unwrap();
+        assert_eq!(
+            names(&read_zip(&info.path)),
+            [
+                "Interface/",
+                "Interface/AddOns/",
+                "Interface/AddOns/A/",
+                "Interface/AddOns/A/A.toc"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_prefix_is_skipped_only_for_folders_at_the_top_of_interface() {
+        let tmp = TempDir::new();
+        let inst = installation(&tmp);
+        write(&inst.path.join("WTF/.wow-don-previous/w"), b"w");
+        write(&inst.path.join("Interface/.wow-don-note"), b"file");
+        write(
+            &inst.path.join("Interface/AddOns/.wow-don-backup-1/a"),
+            b"a",
+        );
+        write(&inst.path.join("Interface/.wow-don/b"), b"b");
+        write(&inst.path.join("Interface/wow-don-previous/c"), b"c");
+        let info = create_backup(&inst, &tmp.path().join("backups")).unwrap();
+        assert_eq!(
+            names(&read_zip(&info.path)),
+            [
+                "WTF/",
+                "WTF/.wow-don-previous/",
+                "WTF/.wow-don-previous/w",
+                "Interface/",
+                "Interface/.wow-don/",
+                "Interface/.wow-don/b",
+                "Interface/.wow-don-note",
+                "Interface/AddOns/",
+                "Interface/AddOns/.wow-don-backup-1/",
+                "Interface/AddOns/.wow-don-backup-1/a",
+                "Interface/wow-don-previous/",
+                "Interface/wow-don-previous/c",
+            ]
+        );
     }
 
     #[test]
