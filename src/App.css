@@ -761,6 +761,32 @@ button:focus-visible {
   margin-left: 8px;
 }
 
+/* La riga dell'aggiornamento automatico sopra la tabella di Installed (issue #203): una riga
+   sobria, il colore solo per gli errori. */
+.auto-update-line {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.auto-update-line p,
+.auto-update-line ul {
+  margin: 0;
+}
+
+.auto-update-line ul {
+  padding-left: 18px;
+}
+
+.auto-update-line .link.error {
+  color: var(--danger);
+}
+
+.auto-update-undo {
+  margin-top: 4px;
+  color: var(--text);
+}
+
 .update-summary p,
 .update-summary ul,
 .install-summary p,

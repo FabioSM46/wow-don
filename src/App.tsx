@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, errorMessage, type AppStatus, type Installation, type Theme } from "./api";
+import {
+  api,
+  errorMessage,
+  type AppStatus,
+  type AutoUpdateMode,
+  type AutoUpdateStatus,
+  type Installation,
+  type Theme,
+} from "./api";
 import { AddonTable } from "./addons/AddonTable";
+import { AutoUpdateLine } from "./addons/AutoUpdateLine";
+import { AUTO_UPDATE_EVENT, changedInstallations } from "./addons/autoUpdateStatus";
 import { ZipDrop } from "./addons/ZipDrop";
 import { ProgressBar, useInstallProgress } from "./addons/ProgressBar";
 import { progressLabel, type InstallProgress } from "./addons/progress";
@@ -58,6 +69,14 @@ function App() {
   // L'opzione della Beta (issue #141); `null` finché le impostazioni non sono lette.
   const [betaWhenNoRelease, setBetaWhenNoRelease] = useState<boolean | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  // L'aggiornamento automatico (D41, issue #203): la modalità salvata (`null` finché non è letta)
+  // e lo stato dell'ultimo giro, da `get_auto_update_status` e dall'evento `auto-update`.
+  const [autoUpdateMode, setAutoUpdateMode] = useState<AutoUpdateMode | null>(null);
+  const [autoUpdateStatus, setAutoUpdateStatus] = useState<AutoUpdateStatus | null>(null);
+  const lastAutoUpdate = useRef<AutoUpdateStatus | null>(null);
+  // Id dell'installazione → `finishedAt` del giro che l'utente ha annullato: il suo esito non
+  // descrive più il disco e la riga non lo mostra.
+  const [undoneRounds, setUndoneRounds] = useState<ReadonlyMap<string, string>>(() => new Map());
   // Installazione di uno zip trascinato o scelto (D32): una alla volta, con il suo esito.
   const [zipBusy, setZipBusy] = useState(false);
   // La fase dell'installazione da zip (issue #128). Il ref è aggiornato subito: il primo evento
@@ -90,6 +109,7 @@ function App() {
       .then((settings) => {
         setTheme(settings.theme);
         setBetaWhenNoRelease(settings.betaWhenNoRelease);
+        setAutoUpdateMode(settings.autoUpdate);
       })
       .catch((err) => setSettingsError(errorMessage(err)));
     api
@@ -106,6 +126,46 @@ function App() {
       })
       .catch((err) => setError(errorMessage(err)));
   }, []);
+
+  // Lo stato dell'aggiornamento automatico: letto all'apertura, poi a ogni evento. Un giro
+  // `install` nuovo cambia gli addon sul disco: Installed e Search si rileggono, come dopo
+  // un'installazione dalla Search.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    const receive = (next: AutoUpdateStatus, fromEvent: boolean) => {
+      if (disposed) return;
+      const previous = lastAutoUpdate.current;
+      lastAutoUpdate.current = next;
+      setAutoUpdateStatus(next);
+      // Solo la lettura all'apertura è la linea di base: la lista appena aperta è già quella del
+      // disco. Un evento arrivato per primo può essere di un giro finito dopo la lettura della
+      // lista, e quindi conta.
+      if (previous === null && !fromEvent) return;
+      const changed = changedInstallations(previous, next);
+      if (changed.length === 0) return;
+      setInstalledStale(true);
+      changed.forEach(markSearchStale);
+    };
+    listen<AutoUpdateStatus>(AUTO_UPDATE_EVENT, ({ payload }) => receive(payload, true))
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      // Fuori da Tauri non arriva niente: la riga resta nascosta.
+      .catch(() => {});
+    api
+      .getAutoUpdateStatus()
+      .then((first) => {
+        // Un evento arrivato prima della risposta è più recente: la lettura non lo sostituisce.
+        if (lastAutoUpdate.current === null) receive(first, false);
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [markSearchStale]);
 
   // Anche un'installazione che finisce mentre la tab Installed è già aperta la fa rileggere.
   useEffect(() => {
@@ -287,6 +347,22 @@ function App() {
           hidden={tab !== "installed"}
         >
           {active && (
+            <AutoUpdateLine
+              key={active.id}
+              status={autoUpdateStatus}
+              installationId={active.id}
+              mode={autoUpdateMode}
+              undoneRound={undoneRounds.get(active.id) ?? null}
+              onUndone={(installationId, round) => {
+                if (round !== null) {
+                  setUndoneRounds((previous) => new Map(previous).set(installationId, round));
+                }
+                setInstalledStale(true);
+                markSearchStale(installationId);
+              }}
+            />
+          )}
+          {active && (
             <AddonTable
               installation={active}
               reload={reload}
@@ -365,7 +441,11 @@ function App() {
             }}
           />
           {installations !== null && (
-            <AutoUpdateOptions active={tab === "options"} installations={installations} />
+            <AutoUpdateOptions
+              active={tab === "options"}
+              installations={installations}
+              onModeChange={setAutoUpdateMode}
+            />
           )}
           <SystemOptions active={tab === "options"} />
           {installations !== null && (
