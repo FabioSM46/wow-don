@@ -113,10 +113,21 @@ function reportText(
   return n > 0 ? `Auto-updated ${plural(n, "addon", "addons")} · ${at}` : null;
 }
 
+/** "Auto-updated 3 addons · 14:05": il giro annullabile, senza l'esito in memoria. */
+function undoText(undo: UndoableRound, clock: Clock): string {
+  return `Auto-updated ${plural(undo.addons, "addon", "addons")} · ${clock(undo.roundAt)}`;
+}
+
+/** La riga fatta solo del giro annullabile, senza problemi. */
+function undoLine(undo: UndoableRound, clock: Clock): StatusLine {
+  return { text: undoText(undo, clock), problemText: null, problems: [], undo, failed: false };
+}
+
 /**
  * La riga di stato per l'installazione `installationId`, o `null` quando non c'è niente da
- * mostrare: aggiornamento automatico spento (o modalità non ancora letta), nessun giro per
- * l'installazione, oppure un giro che non ha trovato niente e niente da annullare.
+ * mostrare: modalità non ancora letta, nessun giro per l'installazione, oppure un giro che non
+ * ha trovato niente e niente da annullare. Con `off` la riga c'è solo per un giro annullabile, e
+ * dice soltanto quello.
  *
  * `undoneRound` è il `finishedAt` di un giro che l'utente ha annullato per l'installazione: il
  * suo esito si ignora.
@@ -132,8 +143,11 @@ export function statusLine(
   clock: Clock = (iso) => clockTime(iso),
   undoneRound: string | null = null,
 ): StatusLine | null {
-  if (status === null || mode === null || mode === "off") return null;
+  if (status === null || mode === null) return null;
   const undo = status.undoable.find((round) => round.installationId === installationId) ?? null;
+  // Spento non controlla più niente, ma un giro di prima resta annullabile (issue #215): la riga
+  // dice solo quello, senza aggiornamenti disponibili né problemi dell'ultimo giro.
+  if (mode === "off") return undo === null ? null : undoLine(undo, clock);
   const round = status.lastRound;
   // Dopo un Undo il backend tiene `lastRound` com'era: l'esito di quel giro non descrive più il
   // disco e non si mostra (`undoneRound` è il suo `finishedAt`).
@@ -143,9 +157,7 @@ export function statusLine(
       : undefined;
   const problems = report ? reportProblems(report) : [];
   let text = round && report ? reportText(round.mode, report, clock) : null;
-  if (text === null && undo !== null) {
-    text = `Auto-updated ${plural(undo.addons, "addon", "addons")} · ${clock(undo.roundAt)}`;
-  }
+  if (text === null && undo !== null) text = undoText(undo, clock);
   if (text === null && problems.length > 0 && round && report) {
     text = `Checked ${clock(report.checkedAt)}`;
   }
