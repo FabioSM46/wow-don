@@ -233,29 +233,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Automation helper tests
+        # Every scripts/test/*.test.sh, by glob: a hand-written list fell behind the folder
+        # (case-collisions and third-party-licenses never ran here). The flag keeps going
+        # after a failure so the log shows every red test, then fails the step.
         run: |
-          bash scripts/test/agent-skills-sync.test.sh
-          bash scripts/test/commit-privacy.test.sh
-          bash scripts/test/publication-privacy.test.sh
-          bash scripts/test/body-privacy.test.sh
-          bash scripts/test/gh-automation-deepseek-rounds.test.sh
-          bash scripts/test/iteration-lifecycle.test.sh
-          bash scripts/test/pr-labeler-step.test.sh
-          bash scripts/test/pr-label-writes.test.sh
-          bash scripts/test/pr-edit-writes.test.sh
-          bash scripts/test/pr-status-frozen-rule.test.sh
-          bash scripts/test/pr-merge-guard.test.sh
-          bash scripts/test/pr-mergeable-retry.test.sh
-          bash scripts/test/changed-areas.test.sh
-          bash scripts/test/ci-gate.test.sh
-          bash scripts/test/deepseek-budget.test.sh
-          bash scripts/test/deepseek-force-review-dispatch.test.sh
-          bash scripts/test/diff-measure-parity.test.sh
-          bash scripts/test/apt-install-fallback.test.sh
-          bash scripts/test/actions-hardening.test.sh
+          failed=0
+          for t in scripts/test/*.test.sh; do
+            echo "== $t"
+            bash "$t" || { echo "::error::$t failed"; failed=1; }
+          done
           # The reviewer script's own tests. They stub `github`/`openai`, so there
           # is no network call and no API key involved.
-          python3 .github/scripts/test_deepseek_review.py
+          python3 .github/scripts/test_deepseek_review.py || failed=1
+          [ "$failed" -eq 0 ]
 
   # The one stable check consumed by READY TO MERGE and branch protection. It is
   # always created after the whole matrix reaches a terminal state.
