@@ -34,6 +34,17 @@ pub struct InstalledAddon {
     pub error: Option<String>,
 }
 
+impl InstalledAddon {
+    /// Se la cartella non si è potuta elencare. Un fingerprint mancante da solo non lo dice: una
+    /// cartella leggibile può non avere nessun file che il calcolo di CurseForge conta (per
+    /// esempio solo un `.toc` `_Camelot`, issue #212).
+    pub fn is_unreadable(&self) -> bool {
+        self.error
+            .as_deref()
+            .is_some_and(|error| error.starts_with(UNREADABLE_FOLDER))
+    }
+}
+
 /// Legge gli addon di `<installazione>/Interface/AddOns`. Se manca `Interface/AddOns` non ci
 /// sono addon; se manca la cartella dell'installazione è un errore, perché "zero addon"
 /// nasconderebbe un gioco spostato o un disco non montato. Una voce che non si legge resta in
@@ -174,6 +185,14 @@ const MAX_SCAN_THREADS: usize = 8;
 /// Una cartella da leggere: percorso, nome e data di modifica in millisecondi.
 type Folder = (PathBuf, String, Option<u64>);
 
+/// L'inizio dell'errore di una cartella che non si è potuta elencare: l'unico caso in cui la
+/// cartella è davvero illeggibile (vedi [`InstalledAddon::is_unreadable`]).
+const UNREADABLE_FOLDER: &str = "Unreadable folder (";
+
+pub(crate) fn unreadable_folder(error: &std::io::Error) -> String {
+    format!("{UNREADABLE_FOLDER}{}).", error.kind())
+}
+
 fn unreadable_entry(folder: String, error: &std::io::Error) -> InstalledAddon {
     InstalledAddon {
         folder,
@@ -181,7 +200,7 @@ fn unreadable_entry(folder: String, error: &std::io::Error) -> InstalledAddon {
         toc: TocInfo::default(),
         modified_ms: None,
         fingerprint: None,
-        error: Some(format!("Unreadable folder ({}).", error.kind())),
+        error: Some(unreadable_folder(error)),
     }
 }
 
@@ -206,7 +225,7 @@ fn read_addon(
             .filter_map(|entry| entry.file_name().into_string().ok())
             .collect(),
         Err(error) => {
-            addon.error = Some(format!("Unreadable folder ({}).", error.kind()));
+            addon.error = Some(unreadable_folder(&error));
             return addon;
         }
     };

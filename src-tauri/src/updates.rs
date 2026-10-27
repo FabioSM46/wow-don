@@ -192,6 +192,69 @@ pub struct AddonUpdate {
     pub mirror: MirrorStatus,
 }
 
+/// Dove [`MatchIndex::locate`] trova una cartella.
+enum Located<'a> {
+    /// Il match del progetto che contiene la cartella.
+    Found(&'a FingerprintMatch),
+    /// Nessun file abbinato la contiene: CurseForge non la conosce.
+    NotMatched,
+    /// La cartella non si è potuta elencare (vedi [`InstalledAddon::is_unreadable`]).
+    Unreadable,
+}
+
+/// I match della risposta dei fingerprint, cercabili per cartella. Prima i match parziali (il
+/// primo file che contiene la cartella), poi gli esatti, che li sostituiscono: un match esatto
+/// vince sempre su uno parziale.
+struct MatchIndex<'a> {
+    /// Fingerprint di una cartella → il match del file che la contiene.
+    by_fingerprint: HashMap<u64, &'a FingerprintMatch>,
+    /// Nome di una cartella (`modules[].name`, in minuscolo) → il match del file che la elenca.
+    by_folder: HashMap<String, &'a FingerprintMatch>,
+}
+
+impl<'a> MatchIndex<'a> {
+    fn new(matches: &'a FingerprintMatches) -> Self {
+        let mut index = Self {
+            by_fingerprint: HashMap::new(),
+            by_folder: HashMap::new(),
+        };
+        for found in &matches.partial_matches {
+            for module in &found.file.modules {
+                index
+                    .by_fingerprint
+                    .entry(module.fingerprint)
+                    .or_insert(found);
+                index
+                    .by_folder
+                    .entry(module.name.to_lowercase())
+                    .or_insert(found);
+            }
+        }
+        for found in &matches.exact_matches {
+            for module in &found.file.modules {
+                index.by_fingerprint.insert(module.fingerprint, found);
+                index.by_folder.insert(module.name.to_lowercase(), found);
+            }
+        }
+        index
+    }
+
+    /// Il progetto di una cartella. Con un fingerprint decide solo quello. Senza, la cartella può
+    /// essere leggibile ma senza nessun file che il calcolo di CurseForge conta (un `.toc` con
+    /// un suffisso che il calcolo non conosce, come `_Camelot`, issue #212): allora appartiene al
+    /// file abbinato che la elenca tra i suoi `modules`, con il nome confrontato senza
+    /// distinguere maiuscole e minuscole come fa il gioco, e se nessun file la elenca non è
+    /// riconosciuta. Solo una cartella che non si è potuta elencare è un errore.
+    fn locate(&self, addon: &InstalledAddon) -> Located<'a> {
+        let found = match addon.fingerprint {
+            Some(fingerprint) => self.by_fingerprint.get(&u64::from(fingerprint)),
+            None if addon.is_unreadable() => return Located::Unreadable,
+            None => self.by_folder.get(&addon.folder.to_lowercase()),
+        };
+        found.map_or(Located::NotMatched, |&found| Located::Found(found))
+    }
+}
+
 /// Abbina e valuta. `version_type` è il `gameVersionTypeId` dell'installazione; `overrides`
 /// lo sostituisce per i progetti che hanno una versione forzata. Senza Beta (vedi
 /// [`evaluate_with`]).
@@ -216,20 +279,7 @@ pub fn evaluate_with(
     overrides: &VersionOverrides,
     allow_beta: bool,
 ) -> Vec<AddonUpdate> {
-    // Ogni fingerprint di cartella → il match del progetto che la contiene. Prima i match
-    // parziali (il primo file che contiene il fingerprint), poi gli esatti, che li
-    // sostituiscono: un match esatto vince sempre su uno parziale.
-    let mut by_fingerprint: HashMap<u64, &FingerprintMatch> = HashMap::new();
-    for found in &matches.partial_matches {
-        for module in &found.file.modules {
-            by_fingerprint.entry(module.fingerprint).or_insert(found);
-        }
-    }
-    for found in &matches.exact_matches {
-        for module in &found.file.modules {
-            by_fingerprint.insert(module.fingerprint, found);
-        }
-    }
+    let index = MatchIndex::new(matches);
     let mods_by_id: HashMap<u32, &Mod> = mods.iter().map(|m| (m.id, m)).collect();
 
     addons
@@ -247,15 +297,16 @@ pub fn evaluate_with(
                 reinstall_file: None,
                 mirror: MirrorStatus::default(),
             };
-            let Some(fingerprint) = addon.fingerprint else {
-                update.source = Some(SourceKind::Curseforge);
-                update.status = UpdateStatus::Error {
-                    message: "Unreadable folder: it cannot be recognized.".to_owned(),
-                };
-                return update;
-            };
-            let Some(found) = by_fingerprint.get(&u64::from(fingerprint)) else {
-                return update;
+            let found = match index.locate(addon) {
+                Located::Found(found) => found,
+                Located::NotMatched => return update,
+                Located::Unreadable => {
+                    update.source = Some(SourceKind::Curseforge);
+                    update.status = UpdateStatus::Error {
+                        message: "Unreadable folder: it cannot be recognized.".to_owned(),
+                    };
+                    return update;
+                }
             };
             let project = mods_by_id.get(&found.id);
             update.source = Some(SourceKind::Curseforge);
@@ -1274,10 +1325,19 @@ mod tests {
         }
     }
 
+    /// Una cartella che la scansione non ha potuto elencare, con l'errore vero della scansione.
+    fn unreadable(folder: &str) -> InstalledAddon {
+        let mut addon = addon(folder, None);
+        addon.error = Some(scan::unreadable_folder(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )));
+        addon
+    }
+
     #[test]
     fn unmatched_and_unreadable_folders() {
         let result = evaluate(
-            &[addon("Nope", Some(1)), addon("Broken", None)],
+            &[addon("Nope", Some(1)), unreadable("Broken")],
             &matches(Vec::new()),
             &[],
             RETAIL,
@@ -1286,6 +1346,154 @@ mod tests {
         assert_eq!(result[0].status, UpdateStatus::NotMatched);
         assert!(result[0].project.is_none());
         assert!(matches!(result[1].status, UpdateStatus::Error { .. }));
+    }
+
+    /// Il file di EllesmereUI con la cartella `_Camelot` che il calcolo non conta (issue #212):
+    /// l'installato è il 20, il 21 è più recente.
+    fn ellesmere(found_partially: bool) -> (FingerprintMatches, Vec<Mod>) {
+        let mut published = file(20, "2026-09-01T00:00:00Z", 1, FOREVER, &[1, 2]);
+        published.modules[0].name = "EllesmereUI".to_owned();
+        // Il nome nel file e quello della cartella differiscono solo per le maiuscole: il gioco
+        // non le distingue.
+        published.modules[1].name = "ELLESMEREUIFOREVERESSENTIALS".to_owned();
+        let found = FingerprintMatch {
+            id: 1477613,
+            file: published,
+            latest_files: vec![file(21, "2026-10-01T00:00:00Z", 1, FOREVER, &[])],
+        };
+        let matches = if found_partially {
+            FingerprintMatches {
+                partial_matches: vec![found],
+                ..FingerprintMatches::default()
+            }
+        } else {
+            matches(vec![found])
+        };
+        (matches, vec![project(1477613, Some(true))])
+    }
+
+    #[test]
+    fn a_folder_without_fingerprint_joins_the_project_of_the_file_that_lists_it() {
+        for found_partially in [false, true] {
+            let (matches, mods) = ellesmere(found_partially);
+            let result = evaluate(
+                &[
+                    addon("EllesmereUI", Some(1)),
+                    addon("EllesmereUIForeverEssentials", None),
+                ],
+                &matches,
+                &mods,
+                FOREVER,
+                &VersionOverrides::new(),
+            );
+            let (main, essentials) = (&result[0], &result[1]);
+            assert!(matches!(main.status, UpdateStatus::UpdateAvailable { .. }));
+            // Lo stesso stato, progetto e file delle altre cartelle del progetto.
+            assert_eq!(essentials.status, main.status, "partial: {found_partially}");
+            assert_eq!(essentials.source, Some(SourceKind::Curseforge));
+            assert_eq!(essentials.project, main.project);
+            assert_eq!(essentials.installed_file, main.installed_file);
+            assert_eq!(essentials.project_folders, main.project_folders);
+            assert_eq!(essentials.reinstall_file, main.reinstall_file);
+        }
+    }
+
+    #[test]
+    fn a_folder_without_fingerprint_that_no_file_lists_is_not_matched() {
+        let (matches, mods) = ellesmere(false);
+        let result = evaluate(
+            &[
+                addon("SomethingElse_Forever", None),
+                unreadable("EllesmereUI"),
+            ],
+            &matches,
+            &mods,
+            FOREVER,
+            &VersionOverrides::new(),
+        );
+        assert_eq!(result[0].status, UpdateStatus::NotMatched);
+        assert_eq!(result[0].source, None);
+        assert!(result[0].project.is_none());
+        // Illeggibile davvero: resta un errore anche se un file abbinato elenca la cartella.
+        assert!(matches!(result[1].status, UpdateStatus::Error { .. }));
+        assert!(result[1].project.is_none());
+    }
+
+    #[test]
+    fn a_readable_folder_with_only_a_toc_of_its_flavor_is_never_an_error() {
+        use crate::addons::toc;
+        use crate::test_support::TempDir;
+
+        // Ogni flavor che l'app abbina a un tipo di versione; ogni tipo noto ne ha almeno uno,
+        // così un tipo nuovo senza flavor qui fa fallire il test invece di restare scoperto.
+        const FLAVORS: [&str; 6] = [
+            "_retail_",
+            "_classic_era_",
+            "_classic_",
+            "_anniversary_",
+            "_forever_",
+            "_classic_beta_",
+        ];
+        for (id, name) in VERSION_TYPES {
+            assert!(
+                FLAVORS.iter().any(|f| version_type_for(f) == Some(id)),
+                "no flavor tested for {name}"
+            );
+        }
+        let mut uncounted = 0;
+        for flavor in FLAVORS {
+            let version_type = version_type_for(flavor).unwrap();
+            for suffix in toc::toc_suffixes(flavor) {
+                let tmp = TempDir::new();
+                let folder = format!("Guard{suffix}");
+                let dir = tmp.path().join("Interface").join("AddOns").join(&folder);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(
+                    dir.join(format!("{folder}_{suffix}.toc")),
+                    "## Interface: 11508\ncore.lua\n",
+                )
+                .unwrap();
+                std::fs::write(dir.join("core.lua"), "-- guard\n").unwrap();
+                let scanned = scan::scan_addons(tmp.path(), flavor).unwrap();
+                assert!(!scanned[0].is_unreadable(), "{flavor} {suffix}");
+
+                let mut published = file(20, "2026-10-01T00:00:00Z", 1, version_type, &[1, 2]);
+                published.modules[0].name = "GuardCore".to_owned();
+                published.modules[1].name = folder.clone();
+                let listed = matches(vec![FingerprintMatch {
+                    id: 9,
+                    file: published,
+                    latest_files: Vec::new(),
+                }]);
+                for found in [&matches(Vec::new()), &listed] {
+                    let result = evaluate(
+                        &scanned,
+                        found,
+                        &[project(9, Some(true))],
+                        version_type,
+                        &VersionOverrides::new(),
+                    );
+                    assert!(
+                        !matches!(result[0].status, UpdateStatus::Error { .. }),
+                        "{flavor} {suffix}: {:?}",
+                        result[0].status
+                    );
+                }
+                if scanned[0].fingerprint.is_none() {
+                    uncounted += 1;
+                    let result = evaluate(
+                        &scanned,
+                        &listed,
+                        &[project(9, Some(true))],
+                        version_type,
+                        &VersionOverrides::new(),
+                    );
+                    assert_eq!(result[0].project.as_ref().map(|p| p.id), Some(9));
+                }
+            }
+        }
+        // Il caso della issue #212 c'è davvero: `_Camelot` non entra nel fingerprint.
+        assert!(uncounted > 0);
     }
 
     #[test]
@@ -1455,7 +1663,7 @@ mod tests {
             &[
                 addon("Details", Some(1)),
                 addon("Details_Streamer", Some(99)),
-                addon("Broken", None),
+                unreadable("Broken"),
             ],
             &matches(vec![found]),
             &[project(61284, Some(true))],
