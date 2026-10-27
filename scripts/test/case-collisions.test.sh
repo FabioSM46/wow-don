@@ -23,28 +23,32 @@ fail=0
 ok() { echo "  ok   — $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL — $1"; fail=$((fail + 1)); }
 
-# collisions: reads one path per line, prints every group of paths that clash. Python's
-# casefold() folds non-ASCII names the way the file systems do, whatever awk or locale is set.
+# collisions: reads one path per line, prints every group of paths that clash, and fails if it
+# cannot read them. Python's lower() maps one letter to one letter, like the case tables of NTFS
+# and APFS, whatever awk or locale is set; casefold() would also merge names those file systems
+# keep apart (ß and ss). Bytes that are not UTF-8 are kept, not decoded away.
 collisions() {
   python3 -I -c '
 import sys
 from collections import defaultdict
-paths = [p for p in sys.stdin.read().split("\n") if p]
+raw = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
+paths = [p for p in raw.split("\n") if p]
+fold = str.lower
 groups = defaultdict(lambda: defaultdict(set))
 for p in paths:
     parts = p.split("/")
-    groups["same path"][p.casefold()].add(p)
+    groups["same path"][fold(p)].add(p)
     stem = parts[-1].rsplit(".", 1)[0] if "." in parts[-1][1:] else parts[-1]
-    groups["same name"]["/".join(parts[:-1] + [stem]).casefold()].add("/".join(parts[:-1] + [stem]))
+    groups["same name"][fold("/".join(parts[:-1] + [stem]))].add("/".join(parts[:-1] + [stem]))
     for i in range(1, len(parts)):
         d = "/".join(parts[:i])
-        groups["same folder"][d.casefold()].add(d)
+        groups["same folder"][fold(d)].add(d)
 out = []
 for kind, keys in groups.items():
     for spellings in keys.values():
         if len(spellings) > 1:
             out.append(kind + ": " + " ".join(sorted(spellings)))
-print("\n".join(sorted(out)))
+sys.stdout.buffer.write("".join(line + "\n" for line in sorted(out)).encode("utf-8", "surrogateescape"))
 '
 }
 
@@ -61,18 +65,29 @@ out=$(printf '%s\n' src/Utils/a.ts src/utils/b.ts | collisions)
 [ -n "$out" ] && ok "flags folders that differ only in case" || bad "missed a folder clash"
 out=$(printf '%s\n' src/Ürgh.ts src/ürgh.tsx | collisions)
 [ -n "$out" ] && ok "folds non-ASCII names" || bad "missed a non-ASCII clash"
+out=$(printf '%s\n' src/Straße/a.ts src/Strasse/b.ts | collisions)
+[ -z "$out" ] && ok "keeps ß and ss apart, as the file systems do" || bad "false clash: $out"
+if out=$(printf 'src/\377a.ts\nsrc/\377A.ts\n' | collisions) && [ -n "$out" ]; then
+  ok "reads names that are not UTF-8"
+else
+  bad "failed on names that are not UTF-8"
+fi
+if PATH=/nonexistent collisions </dev/null >/dev/null 2>&1; then
+  bad "a checker that cannot run must fail"
+else
+  ok "a checker that cannot run fails"
+fi
 
 echo "== the repository"
 if ! files=$(git -C "$ROOT" -c core.quotePath=false ls-files); then
   bad "git ls-files failed"
+elif ! out=$(printf '%s\n' "$files" | collisions); then
+  bad "the collision checker failed"
+elif [ -n "$out" ]; then
+  bad "files that differ only in case:"
+  printf '         %s\n' "$out"
 else
-  out=$(printf '%s\n' "$files" | collisions)
-  if [ -z "$out" ]; then
-    ok "no tracked files differ only in case"
-  else
-    bad "files that differ only in case:"
-    printf '         %s\n' "$out"
-  fi
+  ok "no tracked files differ only in case"
 fi
 
 echo
