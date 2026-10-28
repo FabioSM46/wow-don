@@ -347,28 +347,28 @@ function App() {
           hidden={tab !== "installed"}
         >
           {active && (
-            <AutoUpdateLine
-              key={active.id}
-              status={autoUpdateStatus}
-              installationId={active.id}
-              mode={autoUpdateMode}
-              undoneRound={undoneRounds.get(active.id) ?? null}
-              onUndone={(installationId, round) => {
-                if (round !== null) {
-                  setUndoneRounds((previous) => new Map(previous).set(installationId, round));
-                }
-                setInstalledStale(true);
-                markSearchStale(installationId);
-              }}
-            />
-          )}
-          {active && (
             <AddonTable
               installation={active}
               reload={reload}
               onInstallZip={() => void chooseZip()}
               zipBusy={zipBusy}
               onChanged={markSearchStale}
+              autoUpdateLine={
+                <AutoUpdateLine
+                  key={active.id}
+                  status={autoUpdateStatus}
+                  installationId={active.id}
+                  mode={autoUpdateMode}
+                  undoneRound={undoneRounds.get(active.id) ?? null}
+                  onUndone={(installationId, round) => {
+                    if (round !== null) {
+                      setUndoneRounds((previous) => new Map(previous).set(installationId, round));
+                    }
+                    setInstalledStale(true);
+                    markSearchStale(installationId);
+                  }}
+                />
+              }
             />
           )}
           {installations !== null && installations.length === 0 && (

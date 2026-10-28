@@ -7,6 +7,7 @@ import {
   useState,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -46,6 +47,7 @@ import {
   isExcluded,
 } from "./exclusion";
 import { blockedHint, isUpdatable } from "./mirror";
+import { interfaceSummary } from "./interfaceColumn";
 import {
   confirmText,
   foldersOf,
@@ -80,6 +82,9 @@ type Props = {
   /** Rimozione, aggiornamento o reinstallazione hanno (forse) cambiato gli addon sul disco
    * dell'installazione `installationId`: la tab Search rilegge i suoi risultati. */
   onChanged?: (installationId: string) => void;
+  /** La riga dell'aggiornamento automatico (`AutoUpdateLine`): una barra propria tra il titolo
+   * e i filtri. */
+  autoUpdateLine?: ReactNode;
 };
 
 /**
@@ -152,6 +157,7 @@ export function AddonTable({
   onInstallZip,
   zipBusy = false,
   onChanged,
+  autoUpdateLine,
 }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
@@ -700,8 +706,18 @@ export function AddonTable({
 
   return (
     <section ref={sectionRef} className="addons" aria-labelledby="addons-title">
-      <header className="section-header">
-        <h2 id="addons-title">Addons · {installation.name}</h2>
+      <header className="section-header addons-header">
+        <h2 id="addons-title" className="addons-title">
+          Addons
+          {load.state === "ready" && (
+            <span className="addons-count">
+              {visible.length === groups.length
+                ? groups.length
+                : `${visible.length} of ${groups.length}`}
+              {updateCount > 0 && ` · ${updateCount} to update`}
+            </span>
+          )}
+        </h2>
         <div className="section-actions">
           {selection !== null && (
             <span className="selection-status">
@@ -709,12 +725,6 @@ export function AddonTable({
               <button className="link" onClick={() => setSelection(null)}>
                 Clear selection
               </button>
-            </span>
-          )}
-          {load.state === "ready" && (
-            <span className="muted count">
-              {visible.length} of {groups.length} {groups.length === 1 ? "addon" : "addons"}
-              {updateCount > 0 && ` · ${updateCount} to update`}
             </span>
           )}
           {onInstallZip && (
@@ -735,16 +745,11 @@ export function AddonTable({
           >
             {rescanning ? "Reloading…" : "Reload addons"}
           </button>
-          <button
-            className="button secondary"
-            onClick={() => void runCheck()}
-            disabled={checking || busy}
-          >
-            {checking ? "Checking…" : "Check for updates"}
-          </button>
+          {/* Un solo pulsante principale (D20, D42): "Update all" è tenue come gli Update
+              delle righe. */}
           {(running || updatableIds.length > 0) && (
             <button
-              className="button"
+              className="button soft"
               onClick={() => updateProjects(updatableIds)}
               disabled={busy || checking || versionSaving !== null}
             >
@@ -757,8 +762,13 @@ export function AddonTable({
                 : `Update all (${updatableIds.length})`}
             </button>
           )}
+          <button className="button" onClick={() => void runCheck()} disabled={checking || busy}>
+            {checking ? "Checking…" : "Check for updates"}
+          </button>
         </div>
       </header>
+
+      {autoUpdateLine}
 
       {checkError && (
         <p className="message error" role="alert">
@@ -986,7 +996,7 @@ export function AddonTable({
                                 screen reader: lo stato è anche nel testo della riga. */}
                             {isSelected && <span className="visually-hidden"> (selected)</span>}
                             {isExcluded(update, shownExcluded) && (
-                              <span className="auto-update-off" title={EXCLUDED_TITLE}>
+                              <span className="pill addon-pill" title={EXCLUDED_TITLE}>
                                 No auto-update
                               </span>
                             )}
@@ -1009,9 +1019,7 @@ export function AddonTable({
                               {addon.author ?? "—"}
                             </span>
                           </td>
-                          <td className="mono interface">
-                            {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
-                          </td>
+                          <InterfaceCell versions={addon.interface} flavor={installation.flavor} />
                           <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
                           <ProjectCell
                             update={update}
@@ -1066,9 +1074,10 @@ export function AddonTable({
                                   {other.author ?? "—"}
                                 </span>
                               </td>
-                              <td className="mono interface">
-                                {other.interface.length > 0 ? other.interface.join(", ") : "—"}
-                              </td>
+                              <InterfaceCell
+                                versions={other.interface}
+                                flavor={installation.flavor}
+                              />
                               <td className="nowrap">{formatModified(other.modifiedMs)}</td>
                               <td />
                               <td />
@@ -1302,11 +1311,10 @@ function UpdateCell({
   switch (update.status) {
     case "updateAvailable":
       return (
-        <td title={installedTitle(update, update.latest.date)}>
-          <span className="update-available">{update.latest.name}</span>
-          {isUpdatable(update) && (
+        <td className="nowrap" title={installedTitle(update, update.latest.date)}>
+          {isUpdatable(update) ? (
             <button
-              className="button secondary small row-action"
+              className="button soft small row-update"
               disabled={disabled}
               onClick={(event) => {
                 // Il pulsante non apre e chiude la riga del gruppo.
@@ -1314,31 +1322,56 @@ function UpdateCell({
                 onUpdate([update.project!]);
               }}
             >
-              Update
+              Update to {update.latest.name}
             </button>
+          ) : (
+            <span className="pill accent addon-pill">{update.latest.name}</span>
           )}
         </td>
       );
     case "upToDate":
       return (
-        <td className="muted" title={installedTitle(update)}>
-          Up to date
+        <td className="nowrap" title={installedTitle(update)}>
+          <span className="pill ok addon-pill">Up to date</span>
         </td>
       );
     case "betaOnly":
       return (
         <td
-          className="muted"
+          className="nowrap"
           title={`${installedTitle(update) ?? ""}\nOnly a beta is newer: ${update.latest.name}. Turn on "Use beta files when there is no release" in Options to update to it.`.trim()}
         >
-          Only beta files
+          <span className="pill addon-pill">Only beta files</span>
         </td>
       );
     case "error":
-      return <td className="error">{update.message}</td>;
+      return (
+        <td className="nowrap">
+          {/* Il messaggio intero nel suggerimento; per chi usa uno screen reader anche nel testo. */}
+          <span className="pill danger addon-pill" title={update.message}>
+            Error<span className="visually-hidden">: {update.message}</span>
+          </span>
+        </td>
+      );
     case "notMatched":
       return <td />;
   }
+}
+
+/** Una sola versione dell'interfaccia e il resto come `+N`; l'elenco intero nel suggerimento. */
+function InterfaceCell({ versions, flavor }: { versions: number[]; flavor: string }) {
+  const summary = interfaceSummary(versions, flavor);
+  if (!summary) return <td className="mono">—</td>;
+  return (
+    <td className="mono" title={summary.title}>
+      {summary.shown}
+      {summary.more > 0 && (
+        <span className="more-folders" aria-label={`and ${summary.more} more: ${summary.title}`}>
+          +{summary.more}
+        </span>
+      )}
+    </td>
+  );
 }
 
 /** Lo stato riguarda il progetto: il suggerimento dice quale file del progetto è installato. */
