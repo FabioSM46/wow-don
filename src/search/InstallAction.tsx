@@ -2,6 +2,7 @@ import type { CatalogAddon } from "../api";
 import { installLabel, type InstallSummary } from "./install";
 import { blockedHint, isBlocked, mirrorStep, unavailableText, type MirrorCheck } from "./mirror";
 import { ProgressBar } from "../addons/ProgressBar";
+import { ExternalLinkIcon } from "./icons";
 
 /**
  * Un'installazione avviata dalla tab Search: in corso, finita con gli esiti o rifiutata. Per un
@@ -28,23 +29,14 @@ type ActionProps = {
 };
 
 /**
- * L'azione di installazione di un addon: Install, la barra di avanzamento, Installed o il link
- * al sito.
- * Nella riga compare al passaggio del mouse o del focus, e resta in vista durante
- * l'installazione e dopo un errore.
+ * L'azione di installazione di un addon: Install, la barra di avanzamento, Checking… o il link
+ * al sito. Nella riga sta in un'ultima colonna sempre visibile (issue #229); per un addon già
+ * installato la riga non ha azioni: lo dice la pastiglia "Installed" sotto il nome.
  */
 export function InstallAction(props: ActionProps) {
   if (props.variant === "detail") return <ActionContent {...props} />;
-  const status = props.run?.status;
-  const pinned =
-    !props.addon.installed &&
-    (status === "running" ||
-      status === "unavailable" ||
-      // Solo il controllo chiesto da Install: quello automatico si vede già nell'etichetta.
-      (props.mirror?.status === "checking" && props.mirror.forInstall === true) ||
-      isFailed(props.run));
   return (
-    <span className={pinned ? "row-actions pinned" : "row-actions"}>
+    <span className="row-actions">
       <ActionContent {...props} />
     </span>
   );
@@ -63,11 +55,9 @@ function ActionContent({
   onInstall,
   onOpenPage,
 }: ActionProps) {
-  const small = variant === "row" ? " small" : "";
-  if (addon.installed) {
-    // Nel dettaglio il segno "Installed" è già accanto al nome.
-    return variant === "row" ? <span className="installed-mark">Installed</span> : null;
-  }
+  const row = variant === "row";
+  // Il segno "Installed" è già sotto il nome (riga) o accanto al nome (dettaglio).
+  if (addon.installed) return null;
   const running = run?.status === "running";
   if (running) {
     return (
@@ -80,14 +70,15 @@ function ActionContent({
   }
   // Un progetto bloccato si installa dal mirror GitHub: prima il controllo, poi Install; senza
   // un mirror utilizzabile (o senza repository GitHub) resta il link al sito (issue #165, #223).
+  // Nel dettaglio il link a CurseForge è uno solo, nell'intestazione: qui non si ripete.
   const blocked = isBlocked(addon);
   const step = blocked ? mirrorStep(mirror) : null;
   if (step?.kind === "website") {
-    if (!addon.url) return null;
+    if (!row || !addon.url) return null;
     const url = addon.url;
     return (
       <button
-        className={`button secondary${small}`}
+        className="button ghost small"
         title={unavailableText(step.reason)}
         onClick={(event) => {
           // L'azione non sceglie la riga.
@@ -95,31 +86,28 @@ function ActionContent({
           onOpenPage(url);
         }}
       >
+        <ExternalLinkIcon />
         Open on CurseForge
       </button>
     );
   }
   if (step?.kind === "wait") {
     return (
-      <button
-        className={variant === "row" ? "button secondary small" : "button"}
-        disabled
-        aria-busy="true"
-      >
-        Checking GitHub…
+      <button className={row ? "button secondary small" : "button"} disabled aria-busy="true">
+        {row ? "Checking…" : "Checking GitHub…"}
       </button>
     );
   }
   const failed = isFailed(run);
   return (
     <>
-      {variant === "row" && failed && (
-        <span className="error install-failed" title={failureText(run)}>
+      {row && failed && (
+        <span className="pill danger" title={failureText(run)}>
           Failed
         </span>
       )}
       <button
-        className={variant === "row" ? "button secondary small" : "button"}
+        className={row ? "button soft small" : "button"}
         title={blocked ? blockedHint(mirror).title : undefined}
         onClick={(event) => {
           event.stopPropagation();
