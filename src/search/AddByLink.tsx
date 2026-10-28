@@ -1,13 +1,20 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorMessage, type LinkPreview } from "../api";
 import { ProgressBar, useInstallProgress } from "../addons/ProgressBar";
 import { progressKey, progressLabel, progressPercent, type InstallProgress } from "../addons/progress";
 import { SOURCE_LABELS, projectId } from "../addons/sources";
 import { RequestTracker } from "./catalog";
+import { ExternalLinkIcon } from "./icons";
 import { checkLink, linkOutcome, previewNote, type LinkResult } from "./link";
 
 type Props = {
+  /** L'id del riquadro, per `aria-controls` del pulsante che lo apre. */
+  id?: string;
+  /** Il campo del link è aperto. Chiuso si nasconde solo il campo (con l'errore del link
+   *  scritto): l'anteprima, un'installazione in corso e il suo esito restano in vista finché
+   *  non si chiudono con ×, così chiudere il campo non nasconde mai un avanzamento o un errore. */
+  open: boolean;
   installationId: string;
   /** Un'installazione ha messo il progetto nell'installazione (la tab Installed). */
   onInstalled?: () => void;
@@ -20,12 +27,13 @@ type Run =
   | { status: "failed"; message: string };
 
 /**
- * "Add by link" (issue #110): una riga con il campo e il pulsante sotto i filtri della ricerca.
+ * "Add by link" (issue #110): il campo e il pulsante sotto la barra della ricerca, aperti dal
+ * pulsante "Add by link" della barra (issue #229).
  * L'invio chiama `resolve_link` e mostra l'anteprima come una riga di tabella, con Install e
  * Open page; un progetto che l'app non può scaricare ha solo Open page e la spiegazione.
  * Lo stato vale per l'installazione: chi lo usa lo rimonta con `key` quando cambia.
  */
-export function AddByLink({ installationId, onInstalled }: Props) {
+export function AddByLink({ id, open, installationId, onInstalled }: Props) {
   const [text, setText] = useState("");
   const [resolving, setResolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +41,13 @@ export function AddByLink({ installationId, onInstalled }: Props) {
   const [run, setRun] = useState<Run | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const tracker = useRef(new RequestTracker());
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Il focus va sul campo quando il riquadro si apre, non quando compare già aperto.
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    if (open && !wasOpen.current) inputRef.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
   // La chiave degli eventi di avanzamento dell'installazione in corso, letta dal listener.
   const runKey = useRef<string | null>(null);
 
@@ -115,25 +130,28 @@ export function AddByLink({ installationId, onInstalled }: Props) {
   const note = preview ? previewNote(preview) : null;
 
   return (
-    <div className="add-by-link">
-      <form className="link-bar" onSubmit={submit}>
-        <input
-          className="search link-input"
-          type="text"
-          inputMode="url"
-          spellCheck={false}
-          autoComplete="off"
-          placeholder="Paste a GitHub, WoWInterface or Tukui link…"
-          aria-label="Add by link"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-        />
-        <button className="button secondary" type="submit" disabled={resolving || installing}>
-          {resolving ? "Looking up…" : "Add by link"}
-        </button>
-      </form>
+    <div id={id} className="add-by-link">
+      {open && (
+        <form className="link-bar" onSubmit={submit}>
+          <input
+            ref={inputRef}
+            className="search link-input"
+            type="text"
+            inputMode="url"
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="Paste a GitHub, WoWInterface or Tukui link…"
+            aria-label="Add by link"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
+          <button className="button secondary" type="submit" disabled={resolving || installing}>
+            {resolving ? "Looking up…" : "Look up"}
+          </button>
+        </form>
+      )}
 
-      {error && (
+      {open && error && (
         <p className="message error" role="alert">
           {error}
         </p>
@@ -154,7 +172,11 @@ export function AddByLink({ installationId, onInstalled }: Props) {
               <tr>
                 <td>
                   <span className="addon-title">{preview.name || preview.id}</span>
-                  {preview.installed && <span className="tag">Installed</span>}
+                  {preview.installed && (
+                    <span className="link-states">
+                      <span className="pill ok">Installed</span>
+                    </span>
+                  )}
                   {note && <span className="hint">{note}</span>}
                 </td>
                 <td className="nowrap">{SOURCE_LABELS[preview.source] ?? preview.source}</td>
@@ -167,7 +189,8 @@ export function AddByLink({ installationId, onInstalled }: Props) {
                       disabled={resolving}
                       onInstall={install}
                     />
-                    <button className="button secondary small" onClick={() => openPage(preview.url)}>
+                    <button className="button ghost small" onClick={() => openPage(preview.url)}>
+                      <ExternalLinkIcon />
                       Open page
                     </button>
                     {!installing && (
@@ -231,7 +254,7 @@ function PreviewInstall({
   }
   if (preview.installed || !preview.downloadable) return null;
   return (
-    <button className="button small" disabled={disabled} onClick={() => onInstall(preview)}>
+    <button className="button soft small" disabled={disabled} onClick={() => onInstall(preview)}>
       Install
     </button>
   );

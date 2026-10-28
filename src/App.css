@@ -1295,6 +1295,34 @@ input[type="radio"]:checked:disabled {
 
 /* Ricerca nel catalogo */
 
+/* La barra della Search su una riga (issue #229): ricerca con la lente, categoria, versione,
+   ordinamento e "Add by link". Va a capo solo in una finestra troppo stretta. */
+.search-toolbar {
+  gap: var(--space-2);
+}
+
+.search-field {
+  position: relative;
+  display: flex;
+  flex: 1 1 14rem;
+  min-width: 12rem;
+}
+
+.search-field .search {
+  flex: 1;
+  min-width: 0;
+  padding-left: 30px;
+}
+
+.search-field .icon {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
+  color: var(--faint);
+  pointer-events: none;
+}
+
 .sort-control {
   display: flex;
   align-items: center;
@@ -1347,6 +1375,40 @@ input[type="radio"]:checked:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* Righe di altezza uniforme (issue #229): ogni cella è centrata in verticale e la riga è alta
+   quanto una con il nome, le pastiglie sotto e il sommario su due righe. L'altezza di una
+   cella di tabella è un minimo. */
+.catalog-table td {
+  height: 62px;
+  box-sizing: border-box;
+  vertical-align: middle;
+}
+
+/* Il nome su una riga sola, accorciato con "…": il nome intero è nel suggerimento. */
+.catalog-name {
+  display: block;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Le pastiglie di stato sotto il nome: Installed, via GitHub, website only, checking GitHub… */
+.catalog-states,
+.link-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: 2px;
+}
+
+/* La colonna delle azioni, sempre visibile e allineata a destra. */
+.catalog-table .actions-cell {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* Il sommario occupa al massimo due righe; il testo intero è nel suggerimento. */
 .summary {
   display: -webkit-box;
@@ -1356,14 +1418,6 @@ input[type="radio"]:checked:disabled {
   overflow: hidden;
   max-width: 36rem;
   color: var(--muted);
-}
-
-.tag {
-  margin-left: var(--space-2);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-strong);
-  color: var(--accent);
-  white-space: nowrap;
 }
 
 .catalog-table tr.selectable {
@@ -1379,36 +1433,13 @@ input[type="radio"]:checked:disabled {
   background: var(--hover);
 }
 
-/* Le azioni di una riga compaiono al passaggio del mouse o del focus; restano in vista durante
-   un'installazione e dopo un errore. Nascoste con `visibility`, la colonna non cambia larghezza. */
+/* Le azioni di una riga (Install, Open on CurseForge, Checking…, la barra), sempre in vista
+   (issue #229). */
 .catalog-table .row-actions {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-2);
-  visibility: hidden;
-}
-
-.catalog-table tr:hover .row-actions,
-.catalog-table tr:focus-within .row-actions,
-.catalog-table .row-actions.pinned {
-  visibility: visible;
-}
-
-/* Senza un puntatore che passa sopra (schermi touch) le azioni restano sempre in vista. */
-@media (hover: none) {
-  .catalog-table .row-actions {
-    visibility: visible;
-  }
-}
-
-.installed-mark,
-.install-failed {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-strong);
-}
-
-.installed-mark {
-  color: var(--muted);
 }
 
 .load-more {
@@ -1466,6 +1497,10 @@ input[type="radio"]:checked:disabled {
   overflow-wrap: anywhere;
 }
 
+.detail-name .pill {
+  margin-left: var(--space-2);
+}
+
 .detail-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1475,9 +1510,29 @@ input[type="radio"]:checked:disabled {
   color: var(--muted);
 }
 
-/* Un errore nell'intestazione (link non aperto, controllo del mirror GitHub fallito). */
+/* Un errore nell'intestazione (link non aperto). */
 .detail-meta.error {
   color: var(--danger);
+}
+
+/* Perché un addon bloccato non si installa, o da dove si installa (issue #229): un riquadro a
+   corpo pieno sotto l'intestazione, non una nota minuta. Con un errore (controllo del mirror
+   GitHub fallito) il fondo è quello del pericolo. */
+.detail-notice {
+  max-width: 48rem;
+  margin: 0 0 var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-base);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.detail-notice.error {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: transparent;
 }
 
 .detail-actions {
