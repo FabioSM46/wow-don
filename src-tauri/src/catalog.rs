@@ -21,6 +21,7 @@ use crate::installations::Installation;
 use crate::sources::curseforge::{
     CatalogMod, Category, CurseForgeClient, ModSearch, SortOrder, Transport, pick_file,
 };
+use crate::sources::github_mirror;
 use crate::store::InstalledRecords;
 use crate::updates::{is_known_version_type, version_type_for};
 
@@ -99,6 +100,14 @@ pub struct CatalogAddon {
     pub url: Option<String>,
     /// Se CurseForge permette di scaricare i file da un'app di terzi. Sconosciuto vale `false`.
     pub allow_mod_distribution: bool,
+    /// Il repository GitHub `owner/repo` del progetto, ricavato da `links.sourceUrl` con la
+    /// regola del mirror ([`github_mirror::github_repo`]); `null` se `sourceUrl` manca o non è
+    /// un repository GitHub. Nessuna richiesta di rete: viene dai dati della ricerca o del
+    /// dettaglio. C'è per ogni progetto, ma conta solo con `allowModDistribution = false`:
+    /// senza, il mirror GitHub (D34) è impossibile a priori e la Search può mandare subito al
+    /// sito; con, il frontend può chiedere `github_mirror` da solo (issue #222, #223). Il
+    /// repository dice solo che il mirror è possibile, non che c'è la stessa versione.
+    pub github_repo: Option<String>,
     pub latest_file: Option<CatalogFile>,
     /// Il progetto è già nell'installazione (vedi [`installed_projects`]).
     pub installed: bool,
@@ -134,6 +143,7 @@ impl CatalogAddon {
                 .filter(|url| !url.is_empty()),
             url: project.links.website_url.clone(),
             allow_mod_distribution: project.allow_mod_distribution.unwrap_or(false),
+            github_repo: github_mirror::github_repo(project.links.source_url.as_deref()),
             latest_file: latest_file(found, version_type, allow_beta),
             installed: installed.contains(&project.id),
         }
@@ -740,6 +750,7 @@ mod tests {
                 thumbnail_url: None,
                 url: None,
                 allow_mod_distribution: false,
+                github_repo: Some("owner/repo".to_owned()),
                 latest_file: Some(CatalogFile {
                     id: 2,
                     name: "a.zip".to_owned(),
@@ -767,10 +778,46 @@ mod tests {
             "dateModified",
             "thumbnailUrl",
             "allowModDistribution",
+            "githubRepo",
             "latestFile",
         ] {
             assert!(addon.get(key).is_some(), "{key}");
         }
         assert_eq!(addon["latestFile"]["gameVersion"], "12.1.5");
+        assert_eq!(addon["githubRepo"], "owner/repo");
+        assert!(addon.get("github_repo").is_none());
+    }
+
+    /// Un progetto della ricerca con il `sourceUrl` indicato (`None`: senza `links.sourceUrl`).
+    fn with_source(source_url: Option<&str>) -> CatalogAddon {
+        let links = match source_url {
+            Some(url) => serde_json::json!({ "sourceUrl": url }),
+            None => serde_json::json!({ "websiteUrl": "https://www.curseforge.com/wow/addons/a" }),
+        };
+        let found: CatalogMod = serde_json::from_value(serde_json::json!({
+            "id": 7, "name": "A", "allowModDistribution": false, "links": links
+        }))
+        .unwrap();
+        CatalogAddon::new(&found, 517, false, &HashSet::new())
+    }
+
+    #[test]
+    fn the_github_repo_comes_from_the_source_url() {
+        assert_eq!(
+            with_source(Some("https://github.com/Owner/Repo.git")).github_repo,
+            Some("Owner/Repo".to_owned())
+        );
+        assert_eq!(
+            with_source(Some("https://www.github.com/owner/repo/tree/main")).github_repo,
+            Some("owner/repo".to_owned())
+        );
+        assert_eq!(
+            with_source(Some("https://gitlab.com/owner/repo")).github_repo,
+            None
+        );
+        assert_eq!(with_source(Some("")).github_repo, None);
+        assert_eq!(with_source(None).github_repo, None);
+        let json = serde_json::to_value(with_source(None)).unwrap();
+        assert_eq!(json["githubRepo"], serde_json::Value::Null);
     }
 }
