@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, errorMessage } from "../api";
+import { SettingsSection, SwitchRow } from "./Setting";
 
 type Props = {
   /** L'opzione salvata; `null` finché `get_settings` non ha risposto o se non si legge. */
@@ -30,28 +31,21 @@ export function BetaOption({ enabled, onChange }: Props) {
   }
 
   return (
-    <section className="updates-option" aria-labelledby="updates-title">
-      <header className="section-header">
-        <h2 id="updates-title">Updates</h2>
-      </header>
-      <label className="toggle">
-        <input
-          type="checkbox"
+    <SettingsSection id="updates-title" title="Updates" className="updates-option">
+      <div className="settings-card">
+        <SwitchRow
+          label="Use beta files when there is no release"
+          description="Some addons publish only betas for a game version (for example WoW Forever). A release always wins when there is one."
           checked={enabled ?? false}
           disabled={enabled === null || busy}
-          onChange={(event) => void toggle(event.target.checked)}
+          onChange={(next) => void toggle(next)}
         />
-        Use beta files when there is no release
-      </label>
-      <span className="hint">
-        Some addons publish only betas for a game version (for example WoW Forever). A release
-        always wins when there is one.
-      </span>
+      </div>
       {error && (
         <p className="message error" role="alert">
           {error}
         </p>
       )}
-    </section>
+    </SettingsSection>
   );
 }

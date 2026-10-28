@@ -17,7 +17,6 @@ import { ZipDrop } from "./addons/ZipDrop";
 import { ProgressBar, useInstallProgress } from "./addons/ProgressBar";
 import { progressLabel, type InstallProgress } from "./addons/progress";
 import { describeZipInstall, fileName, pickZip } from "./addons/zip";
-import { Discovered } from "./installations/Discovered";
 import { Installations } from "./installations/Installations";
 import { Appearance } from "./options/Appearance";
 import { AutoUpdateOptions } from "./options/AutoUpdateOptions";
@@ -415,17 +414,12 @@ function App() {
           role="tabpanel"
           aria-labelledby="tab-options"
           hidden={tab !== "options"}
+          className="options-page"
         >
-          {installations !== null && (
-            <Discovered
-              active={tab === "options"}
-              installations={installations}
-              onAdded={setActiveId}
-              onChange={changeInstallations}
-            />
-          )}
+          <h2 className="options-title">Options</h2>
           {installations !== null && (
             <Installations
+              active={tab === "options"}
               installations={installations}
               onAdded={setActiveId}
               onChange={changeInstallations}

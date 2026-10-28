@@ -18,8 +18,9 @@ type Scan =
   | { status: "error"; message: string };
 
 /**
- * La sezione "Found on this computer" di Options: le installazioni che `discover_installations`
- * trova nei percorsi standard, ognuna con il suo "Add". Non aggiunge mai niente da sola.
+ * "Found on this computer", nella scheda Installations di Options: le installazioni che
+ * `discover_installations` trova nei percorsi standard, ognuna con il suo "Add". Non aggiunge
+ * mai niente da sola.
  */
 export function Discovered({ active, installations, onAdded, onChange }: Props) {
   const [scan, setScan] = useState<Scan>({ status: "idle" });
@@ -79,58 +80,60 @@ export function Discovered({ active, installations, onAdded, onChange }: Props) 
 
   return (
     <section className="discovered" aria-labelledby="discovered-title" aria-busy={busy}>
-      <header className="section-header">
-        <h2 id="discovered-title">Found on this computer</h2>
+      <div className="discovered-header">
+        <h4 id="discovered-title" className="setting-label">
+          Found on this computer
+        </h4>
         {scan.status !== "idle" && (
-          <button className="link" onClick={() => void runScan()} disabled={busy}>
+          <button className="button ghost small" onClick={() => void runScan()} disabled={busy}>
             Scan again
           </button>
         )}
-      </header>
+      </div>
 
       {scan.status === "loading" && (
-        <p className="muted" role="status">
+        <p className="discovered-note" role="status">
           Looking for World of Warcraft…
         </p>
       )}
 
       {scan.status === "error" && (
-        <p className="message error" role="alert">
+        <p className="discovered-note error" role="alert">
           {scan.message}
         </p>
       )}
 
       {addError && (
-        <p className="message error" role="alert">
+        <p className="discovered-note error" role="alert">
           {addError}
         </p>
       )}
 
       {scan.status === "done" && pending.length === 0 && (
-        <p className="empty">
+        <p className="discovered-note">
           No new World of Warcraft installations found. Choose the folder yourself with “Add
-          installation” below.
+          installation”.
         </p>
       )}
 
       {pending.length > 0 && (
-        <ul className="installation-list">
+        <ul className="installation-list" aria-label="Installations found on this computer">
           {pending.map((item) => (
             <li key={item.path} className="installation">
-              <div className="installation-row">
-                <div className="installation-main">
-                  <span>
-                    <span className="installation-name">{item.name}</span>
-                    <span className="discovered-meta">
-                      <code>{flavorFolder(item.flavor)}</code> · {item.origin}
-                    </span>
+              <div className="installation-main">
+                <span>
+                  <span className="installation-name">{item.name}</span>
+                  <span className="discovered-meta">
+                    <code>{flavorFolder(item.flavor)}</code> · {item.origin}
                   </span>
-                  <span className="installation-path" title={item.path}>
-                    {item.path}
-                  </span>
-                </div>
+                </span>
+                <span className="installation-path" title={item.path}>
+                  {item.path}
+                </span>
+              </div>
+              <span className="installation-actions">
                 <button
-                  className="button small"
+                  className="button soft small"
                   onClick={() => void add(item)}
                   disabled={busy}
                   aria-busy={addingPath === item.path}
@@ -138,7 +141,7 @@ export function Discovered({ active, installations, onAdded, onChange }: Props) 
                 >
                   {addingPath === item.path ? "Adding…" : "Add"}
                 </button>
-              </div>
+              </span>
             </li>
           ))}
         </ul>

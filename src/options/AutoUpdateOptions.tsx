@@ -6,10 +6,10 @@ import {
   installationHint,
   intervalDisabled,
   intervalLabel,
-  isAutoUpdateMode,
   modeHint,
   shownValue,
 } from "./autoUpdate";
+import { Segmented, SettingRow, SettingsSection, SwitchRow } from "./Setting";
 
 type Props = {
   /** La tab Options è aperta: le impostazioni si rileggono quando lo diventa. */
@@ -133,33 +133,28 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
   const shownError = error ?? loadError;
 
   return (
-    <section className="auto-update-option" aria-labelledby="auto-update-title">
-      <header className="section-header">
-        <h2 id="auto-update-title">Automatic updates</h2>
-      </header>
-      <div className="option-row inline-fields">
-        <label className="inline-field">
-          Mode
-          <select
-            className="select"
-            value={shown?.mode ?? "notify"}
+    <SettingsSection id="auto-update-title" title="Automatic updates" className="auto-update-option">
+      <div className="settings-card">
+        <SettingRow
+          label="Mode"
+          labelId="auto-update-mode-label"
+          description={modeHint(shown?.mode ?? null)}
+          descriptionId="auto-update-mode-hint"
+        >
+          <Segmented
+            labelledBy="auto-update-mode-label"
+            describedBy="auto-update-mode-hint"
+            options={AUTO_UPDATE_MODES}
+            value={shown?.mode ?? null}
             disabled={schedule === null || saving}
-            aria-describedby="auto-update-mode-hint"
-            onChange={(event) => {
-              const mode = event.target.value;
-              if (schedule && isAutoUpdateMode(mode)) void saveSchedule({ ...schedule, mode });
+            onChange={(mode) => {
+              if (schedule) void saveSchedule({ ...schedule, mode });
             }}
-          >
-            {AUTO_UPDATE_MODES.map((mode) => (
-              <option key={mode.id} value={mode.id}>
-                {mode.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="inline-field">
-          Check
+          />
+        </SettingRow>
+        <SettingRow label="Check" htmlFor="auto-update-interval">
           <select
+            id="auto-update-interval"
             className="select"
             value={shown?.intervalHours ?? 6}
             disabled={schedule === null || saving || intervalDisabled(shown?.mode ?? null)}
@@ -174,16 +169,13 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
               </option>
             ))}
           </select>
-        </label>
+        </SettingRow>
       </div>
-      <span className="hint" id="auto-update-mode-hint">
-        {modeHint(shown?.mode ?? null)}
-      </span>
 
       {installations.length === 0 ? (
         <p className="empty">Add an installation to choose which ones update automatically.</p>
       ) : (
-        <div className="option-row installation-toggles">
+        <div className="settings-card">
           {installations.map((installation) => {
             const saved = enabled.get(installation.id);
             const value =
@@ -191,21 +183,19 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
                 ? pendingInstallation.enabled
                 : saved;
             return (
-              <label key={installation.id} className="toggle">
-                <input
-                  type="checkbox"
-                  checked={value ?? false}
-                  disabled={saved === undefined || saving}
-                  aria-describedby="auto-update-installations-hint"
-                  onChange={(event) => void saveInstallation(installation.id, event.target.checked)}
-                />
-                {installation.name}
-              </label>
+              <SwitchRow
+                key={installation.id}
+                label={installation.name}
+                describedBy="auto-update-installations-hint"
+                checked={value ?? false}
+                disabled={saved === undefined || saving}
+                onChange={(next) => void saveInstallation(installation.id, next)}
+              />
             );
           })}
-          <span className="hint" id="auto-update-installations-hint">
+          <p className="setting-note" id="auto-update-installations-hint">
             {installationHint(shown?.mode ?? null)}
-          </span>
+          </p>
         </div>
       )}
 
@@ -214,6 +204,6 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
           {shownError}
         </p>
       )}
-    </section>
+    </SettingsSection>
   );
 }
