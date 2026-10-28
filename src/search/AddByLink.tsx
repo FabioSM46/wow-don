@@ -11,8 +11,9 @@ import { checkLink, linkOutcome, previewNote, type LinkResult } from "./link";
 type Props = {
   /** L'id del riquadro, per `aria-controls` del pulsante che lo apre. */
   id?: string;
-  /** Il riquadro è aperto. Chiuso resta montato (nascosto): l'anteprima, un'installazione in
-   *  corso e il suo esito restano per quando si riapre. */
+  /** Il campo del link è aperto. Chiuso si nasconde solo il campo (con l'errore del link
+   *  scritto): l'anteprima, un'installazione in corso e il suo esito restano in vista finché
+   *  non si chiudono con ×, così chiudere il campo non nasconde mai un avanzamento o un errore. */
   open: boolean;
   installationId: string;
   /** Un'installazione ha messo il progetto nell'installazione (la tab Installed). */
@@ -129,26 +130,28 @@ export function AddByLink({ id, open, installationId, onInstalled }: Props) {
   const note = preview ? previewNote(preview) : null;
 
   return (
-    <div id={id} className="add-by-link" hidden={!open}>
-      <form className="link-bar" onSubmit={submit}>
-        <input
-          ref={inputRef}
-          className="search link-input"
-          type="text"
-          inputMode="url"
-          spellCheck={false}
-          autoComplete="off"
-          placeholder="Paste a GitHub, WoWInterface or Tukui link…"
-          aria-label="Add by link"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-        />
-        <button className="button secondary" type="submit" disabled={resolving || installing}>
-          {resolving ? "Looking up…" : "Look up"}
-        </button>
-      </form>
+    <div id={id} className="add-by-link">
+      {open && (
+        <form className="link-bar" onSubmit={submit}>
+          <input
+            ref={inputRef}
+            className="search link-input"
+            type="text"
+            inputMode="url"
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="Paste a GitHub, WoWInterface or Tukui link…"
+            aria-label="Add by link"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
+          <button className="button secondary" type="submit" disabled={resolving || installing}>
+            {resolving ? "Looking up…" : "Look up"}
+          </button>
+        </form>
+      )}
 
-      {error && (
+      {open && error && (
         <p className="message error" role="alert">
           {error}
         </p>

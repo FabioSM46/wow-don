@@ -549,9 +549,10 @@ export function Search({
   }
 
   // "Add by link" non usa CurseForge: resta anche senza la chiave, e allora è sempre aperto.
-  // Con la chiave si apre dal pulsante della barra (issue #229); chiuso resta montato e
-  // nascosto, così un'installazione in corso e il suo esito non si perdono. Il suo stato vale
-  // per l'installazione, quindi si rimonta quando cambia.
+  // Con la chiave si apre dal pulsante della barra (issue #229), che esiste solo in quel
+  // ramo: senza chiave il ritorno anticipato qui sotto non disegna la barra. Chiuso nasconde
+  // solo il campo: anteprima, avanzamento ed esito restano in vista, e restano montati. Il suo
+  // stato vale per l'installazione, quindi si rimonta quando cambia.
   const addByLink = (
     <AddByLink
       key={installation.id}
