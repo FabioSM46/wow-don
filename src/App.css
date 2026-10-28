@@ -11,17 +11,20 @@
    - Raggi: --radius 8px (controlli), --radius-lg 10px (schede e riquadri).
    - Spaziature: --space-1 … --space-6 = 4, 8, 12, 16, 24, 32px.
    - Colori: --bg (pagina), --surface (schede, campi), --surface-2 (fondo attenuato, controlli
-     disabilitati), --border (bordi), --border-strong (bordi dei controlli: checkbox, switch),
-     --text, --muted (testo secondario), --faint (placeholder, testo disabilitato), --accent
-     (l'unico colore d'accento), --accent-soft e --accent-soft-text (fondo e testo tenui
-     d'accento), --on-accent (testo sui fondi pieni d'accento o di pericolo), --hover,
-     --danger e --danger-soft, --ok-soft e --ok-text, --knob (la manopola dello switch).
+     disabilitati), --border (divisori, righe di tabella, schede: non i controlli),
+     --border-strong (il bordo di ogni controllo: campi, menu, textarea, checkbox, radio, switch
+     spento, pulsanti con bordo; almeno 3:1 su --surface e --bg), --text, --muted (testo
+     secondario), --faint (placeholder, testo disabilitato, bordo dei controlli al passaggio del
+     mouse), --accent (l'unico colore d'accento), --accent-hover (il fondo pieno d'accento al
+     passaggio del mouse), --accent-soft e --accent-soft-text (fondo e testo tenui d'accento),
+     --on-accent (testo sui fondi pieni d'accento o di pericolo), --hover, --danger e
+     --danger-soft, --ok-soft e --ok-text, --knob (la manopola dello switch).
 
    Classi dei controlli
    - .button (primario, pieno d'accento) con le varianti .secondary (bordo), .soft (fondo
      --accent-soft), .ghost (senza fondo), .danger e .small (alto --control-height-sm).
-   - .search e .select (campi e menu), .import-text (textarea): bordo --border, placeholder
-     --faint, focus visibile; disabilitati in --faint su --surface-2.
+   - .search e .select (campi e menu), .import-text (textarea): bordo --border-strong,
+     placeholder --faint, focus visibile; disabilitati in --faint su --surface-2.
    - Checkbox e radio a 16px con bordo --border-strong e `accent-color`.
    - .switch: interruttore 36×20px su `<input type="checkbox" role="switch" class="switch">`.
    - .segmented: gruppo di `<button>`; quello attivo (`aria-pressed`, `aria-checked` o
@@ -57,11 +60,12 @@
   --surface: #ffffff;
   --surface-2: #fafafa;
   --border: #d4d4d8;
-  --border-strong: #a1a1aa;
+  --border-strong: #8c8c95;
   --text: #18181b;
   --muted: #52525b;
   --faint: #71717a;
   --accent: #2f5fe0;
+  --accent-hover: #264fbf;
   --accent-soft: rgb(47 95 224 / 10%);
   --accent-soft-text: #2148b8;
   --on-accent: #ffffff;
@@ -86,11 +90,12 @@
   --dark-surface: #18181b;
   --dark-surface-2: #1d1d21;
   --dark-border: #33333a;
-  --dark-border-strong: #5c5c66;
+  --dark-border-strong: #64646e;
   --dark-text: #ececef;
   --dark-muted: #a1a1aa;
   --dark-faint: #8b8b94;
   --dark-accent: #7b9cff;
+  --dark-accent-hover: #8fadff;
   --dark-accent-soft: rgb(123 156 255 / 14%);
   --dark-accent-soft-text: #a9bdff;
   --dark-on-accent: #111113;
@@ -132,6 +137,7 @@
     --muted: var(--dark-muted);
     --faint: var(--dark-faint);
     --accent: var(--dark-accent);
+    --accent-hover: var(--dark-accent-hover);
     --accent-soft: var(--dark-accent-soft);
     --accent-soft-text: var(--dark-accent-soft-text);
     --on-accent: var(--dark-on-accent);
@@ -161,6 +167,7 @@
   --muted: var(--dark-muted);
   --faint: var(--dark-faint);
   --accent: var(--dark-accent);
+  --accent-hover: var(--dark-accent-hover);
   --accent-soft: var(--dark-accent-soft);
   --accent-soft-text: var(--dark-accent-soft-text);
   --on-accent: var(--dark-on-accent);
@@ -329,18 +336,18 @@ h2 {
 }
 
 .button:hover:not(:disabled) {
-  background: var(--accent-soft-text);
+  background: var(--accent-hover);
 }
 
 .button.secondary {
   background: var(--surface);
   color: var(--text);
-  box-shadow: inset 0 0 0 1px var(--border);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 .button.secondary:hover:not(:disabled) {
   background: var(--hover);
-  box-shadow: inset 0 0 0 1px var(--border-strong);
+  box-shadow: inset 0 0 0 1px var(--faint);
 }
 
 .button.soft {
@@ -515,7 +522,7 @@ input[type="radio"]:checked:disabled {
   gap: 2px;
   height: var(--control-height);
   padding: 2px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--hover);
 }
@@ -663,7 +670,7 @@ input[type="radio"]:checked:disabled {
   font-size: var(--text-xs);
   color: inherit;
   background-color: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   resize: vertical;
   word-break: break-all;
@@ -906,8 +913,8 @@ input[type="radio"]:checked:disabled {
   margin-bottom: var(--space-3);
 }
 
-/* Campi e menu (D42): alti --control-height, bordo --border che si rinforza al passaggio del
-   mouse, focus con l'anello d'accento, placeholder --faint. */
+/* Campi e menu (D42): alti --control-height, bordo --border-strong che si rinforza al
+   passaggio del mouse, focus con l'anello d'accento, placeholder --faint. */
 .search,
 .select {
   box-sizing: border-box;
@@ -915,7 +922,7 @@ input[type="radio"]:checked:disabled {
   font: inherit;
   color: inherit;
   background-color: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   padding: 0 10px;
 }
@@ -946,7 +953,7 @@ input[type="radio"]:checked:disabled {
 
 .search:hover:not(:disabled),
 .select:hover:not(:disabled) {
-  border-color: var(--border-strong);
+  border-color: var(--faint);
 }
 
 .search:focus,
@@ -1276,7 +1283,7 @@ input[type="radio"]:checked:disabled {
   font: inherit;
   color: var(--text);
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   cursor: pointer;
 }
