@@ -32,6 +32,7 @@ function addon(id: number, fields: Partial<CatalogAddon> = {}): CatalogAddon {
     thumbnailUrl: null,
     url: null,
     allowModDistribution: true,
+    githubRepo: null,
     latestFile: null,
     installed: false,
     ...fields,

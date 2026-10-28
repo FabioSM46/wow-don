@@ -2,7 +2,7 @@ import type { KeyboardEvent, ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CatalogAddon } from "../api";
 import { formatAuthors, formatCount, formatDate, formatDownloads } from "./catalog";
-import { blockedHint, type BlockedHint } from "./mirror";
+import { blockedHint, mirrorCheckFor, type BlockedHint } from "./mirror";
 
 type Props = {
   addons: CatalogAddon[];
@@ -22,7 +22,7 @@ export function CatalogTable({
   onSelect,
   selectedId = null,
   renderActions,
-  hintFor = () => blockedHint(undefined),
+  hintFor = (addon) => blockedHint(mirrorCheckFor(addon, undefined)),
 }: Props) {
   function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, addon: CatalogAddon) {
     if (event.target !== event.currentTarget) return;
