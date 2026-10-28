@@ -1435,9 +1435,12 @@ pub async fn install_addon(
 
 /// Il mirror GitHub del progetto CurseForge `mod_id` per l'installazione (D34, issue #164):
 /// `{ available, repo, tag, reason }`, per il file `file_id` se indicato (come `install_addon`),
-/// altrimenti per l'ultimo della versione del gioco. Si chiama su richiesta (dettaglio o Install), mai dalla
-/// ricerca; un progetto che CurseForge lascia scaricare risponde `available: false` con
-/// `reason: null` senza richieste a GitHub. Rete fuori dal thread principale.
+/// altrimenti per l'ultimo della versione del gioco. Si chiama su richiesta: dal dettaglio,
+/// da Install e dalla Search, che lo chiama da sola per i progetti bloccati con un
+/// `githubRepo` nel [`CatalogAddon`](crate::catalog::CatalogAddon) (issue #222, #223); un
+/// progetto senza `githubRepo` non ha un mirror possibile e non serve chiederlo. Un progetto
+/// che CurseForge lascia scaricare risponde `available: false` con `reason: null` senza
+/// richieste a GitHub. Rete fuori dal thread principale.
 #[tauri::command]
 pub async fn github_mirror(
     installation_id: String,
