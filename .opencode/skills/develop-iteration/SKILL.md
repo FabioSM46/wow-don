@@ -94,7 +94,7 @@ Quando più PR figlie hanno bisogno di una nuova base aggregata, creala senza ap
    branch, poi rimuovi il worktree.
 3. Passa quella base agli agenti delle issue figlie.
 4. Quando ogni PR figlia prevista è unita, crea la PR aggregata dal branch di feature verso
-   `develop`. Controlla il corpo completo con `scripts/check-body-privacy.sh` prima di
+   `develop`. Controlla il corpo completo con `bash scripts/check-body-privacy.sh` prima di
    pubblicarlo, metti `Closes #N` per ogni issue contenuta, poi verifica base e corpo su GitHub.
 
 Usa una base aggregata solo quando la PR finale combinata resta plausibilmente sotto il limite di
@@ -171,6 +171,9 @@ PR aggregata `feature/<slug>`, vuoto se non ce ne sono):
 cd <repo-root>
 ISSUES='<issue>|<issue>|<issue>'
 EXTRA_PRS='<pr>|<pr>'
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+  echo "watch: bash 4 or newer required (associative arrays); found ${BASH_VERSION:-unknown}"; exit 1
+fi
 declare -A last
 while true; do
   if ! all=$(gh pr list --state open --limit 100 --json number,headRefName,headRefOid \
@@ -204,7 +207,10 @@ la riga esce come `status-unreadable` invece che come `null` muto
 lettura che può fallire è protetta (`|| continue`, `|| true`, `|| s=""`, `${last[$n]:-}`), così
 il ciclo mantiene questa promessa anche sotto `set -euo pipefail`: un'assegnazione fallita non
 protetta chiuderebbe il ciclo senza una riga, che è proprio il silenzio che questa sorveglianza
-deve evitare. Il filtro sui branch si àncora a `/<issue>-` e non dice niente sul prefisso
+deve evitare. Per la stessa ragione il ciclo controlla prima la versione di bash: `declare -A`
+richiede bash 4, e il `/bin/bash` di serie su macOS è il 3.2, dove fallirebbe senza una riga;
+così esce subito con un messaggio (su macOS: `brew install bash`, poi lancia il ciclo con quel
+bash). Il filtro sui branch si àncora a `/<issue>-` e non dice niente sul prefisso
 (`feature/`, `fix/`, `refactor/`). **Guarda il primo passaggio prima di fidarti:** una
 sorveglianza che non ha stampato niente per una PR che esiste è rotta, non tranquilla; finché non
 ha stampato, leggi `pr-status-json` a mano dopo ogni ondata.
@@ -233,7 +239,7 @@ per i limiti di frequenza di GraphQL.
 Salva il conteggio delle correzioni in commenti pubblici sulla PR, così una ripartenza non
 azzera il limite di sicurezza. Prima di ogni ciclo forzato conta i commenti con il marcatore
 `<!-- develop-iteration:remediation:pr-N:attempt-K -->`, rifiuta il tentativo quattro, controlla
-il nuovo commento con `scripts/check-body-privacy.sh` e pubblicalo prima di mandare l'agente.
+il nuovo commento con `bash scripts/check-body-privacy.sh` e pubblicalo prima di mandare l'agente.
 Rileggi lo stato dopo ogni push. Ferma prima quella PR quando `/process-pr` riporta un guasto
 dell'infrastruttura, un finding poco chiaro senza una decisione basata su prove, un rebase non
 sicuro o un'altra condizione che richiede il giudizio dell'utente. Mai forzare un round DeepSeek
@@ -241,7 +247,9 @@ in più solo per far muovere il ciclo: il limite è **un** round automatico per 
 
 ## 5. Unire le foglie pronte in ordine di dipendenza
 
-Sono candidate solo le PR foglia le cui dipendenze sono già unite. Subito prima di ogni merge:
+Sono candidate solo le PR foglia le cui dipendenze sono già unite. I comandi qui sotto usano
+`REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)`: definiscilo prima, anche quando
+riprendi da questo passo. Subito prima di ogni merge:
 
 1. Rileggi stato della PR, `headRefOid`, branch base e **corpo completo**. Leggi lo SHA della
    base dalla forma REST della PR (`gh api "repos/$REPO/pulls/<pr>" --jq '.base.sha'`), perché
@@ -290,7 +298,7 @@ Una PR figlia unita solo in un branch di feature non chiude in modo affidabile l
 suo `Closes #N` non passa alla PR padre. Tieni quelle issue in sospeso finché il branch di
 feature non arriva su `develop`, e assicurati che il corpo della PR padre porti `Closes #N` per
 ogni issue di cui contiene i commit. Per una PR padre già aperta, scrivi il corpo completo
-corretto in un file temporaneo, controllalo con `scripts/check-body-privacy.sh`, usa
+corretto in un file temporaneo, controllalo con `bash scripts/check-body-privacy.sh`, usa
 `bash scripts/gh-automation.sh pr-edit <pr> --body-file <path>` (mai `gh pr edit`, che fallisce
 con il `gh` 2.45), poi rileggi il corpo completo e tutti i vincoli d'ordine. Chiudi una issue a
 mano solo dopo aver verificato che `develop` contiene i suoi commit.
