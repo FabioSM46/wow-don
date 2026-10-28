@@ -169,11 +169,14 @@ export function Search({
   // `checking` evita due richieste per lo stesso progetto; `mirrorGen` scarta le risposte
   // arrivate dopo che gli esiti sono stati dimenticati. `autoRunning` conta i controlli
   // automatici ancora senza risposta, anche di una generazione vecchia; `autoSettled` cambia a
-  // ogni risposta e fa partire i successivi.
+  // ogni risposta e fa partire i successivi. `autoPaused`: un controllo automatico è fallito
+  // (CurseForge o la rete non rispondono), quindi gli altri non partono più da soli fino alla
+  // ricerca o alla generazione successiva; Install e il dettaglio continuano a chiedere.
   const [mirrors, setMirrors] = useState<Map<string, MirrorCheck>>(new Map());
   const checking = useRef(new Set<string>());
   const mirrorGen = useRef(0);
   const autoRunning = useRef(0);
+  const autoPaused = useRef(false);
   const [autoSettled, setAutoSettled] = useState(0);
   /** L'esito che vale per `addon` in questa installazione (un bloccato senza repository è già
    *  "website only"). */
@@ -185,6 +188,7 @@ export function Search({
   // si scarta (`mirrorGen`), così un nuovo clic su Install fa subito una richiesta nuova.
   useEffect(() => {
     mirrorGen.current += 1;
+    autoPaused.current = false;
     checking.current.clear();
     setMirrors((previous) => (previous.size === 0 ? previous : new Map()));
     setRuns((previous) => {
@@ -253,6 +257,7 @@ export function Search({
         },
         (err) => {
           if (!current()) return;
+          if (auto) autoPaused.current = true;
           const message = errorMessage(err);
           setCheck({ status: "failed", message });
           if (installAfter) {
@@ -450,6 +455,9 @@ export function Search({
       .then((page) => {
         if (!tracker.current.isLatest(id)) return;
         resultsOf.current = installation.id;
+        // Una ricerca nuova riprova i controlli automatici dei progetti nuovi; quelli falliti
+        // restano falliti (riprova Install).
+        autoPaused.current = false;
         setLoad({ results: firstPage(page), loading: false, error: null });
       })
       .catch((err) => {
@@ -465,6 +473,7 @@ export function Search({
   // vista, e gli esiti già arrivati restano per la sessione.
   useEffect(() => {
     if (load.loading || !load.results || resultsOf.current !== installation.id) return;
+    if (autoPaused.current) return;
     const slots = MIRROR_CHECKS_AT_ONCE - autoRunning.current;
     if (slots <= 0) return;
     const id = installation.id;
