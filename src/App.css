@@ -595,61 +595,117 @@ input[type="radio"]:checked:disabled {
   color: var(--danger);
 }
 
-/* Options: le sezioni (Found on this computer, Installations, Appearance, Updates, Automatic
-   updates, System) una sotto l'altra. */
+/* Options (issue #231): una colonna centrata di sezioni, larga al massimo 720px. Ogni sezione è
+   un titolo e una o più schede; ogni riga di una scheda ha etichetta e descrizione a sinistra e
+   il controllo subito a destra, così lo sguardo non attraversa tutta la finestra. Il pannello
+   non cambia `display`: l'attributo `hidden` delle tab deve continuare a nasconderlo. */
+.options-page {
+  max-width: 720px;
+  margin: 0 auto;
+}
 
-.discovered + .installations,
-.appearance,
-.updates-option,
-.auto-update-option,
-.system-option {
+.options-title {
+  font-size: var(--text-xl);
+  text-transform: none;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.settings-section {
   margin-top: var(--space-6);
 }
 
-.updates-option .hint,
-.auto-update-option .hint,
-.system-option .hint {
-  margin-top: var(--space-1);
+.settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: var(--control-height);
+  margin-bottom: var(--space-3);
 }
 
-.system-option .option-row + .option-row,
-.auto-update-option .hint + .option-row {
+.settings-section h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-strong);
+}
+
+.settings-section > .message {
+  margin: var(--space-3) 0;
+}
+
+.settings-section > .empty {
+  margin: 0;
+}
+
+.settings-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.settings-card + .settings-card,
+.settings-card + .empty {
   margin-top: var(--space-3);
 }
 
-/* Automatic updates (issue #204): modalità e intervallo su una riga, poi un interruttore per
-   installazione. Nessun colore nuovo: testo attenuato come le altre opzioni. */
-.inline-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
+.settings-card > * + * {
+  border-top: 1px solid var(--border);
 }
 
-.inline-field {
+.setting {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+}
+
+.setting-text {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.setting-label {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  color: var(--text);
+}
+
+label.setting-label {
+  cursor: pointer;
+}
+
+.setting-description,
+.setting-note {
   font-size: var(--text-base);
   color: var(--muted);
 }
 
-.installation-toggles {
+.setting-note {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.setting-control {
+  flex: none;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: var(--space-2);
 }
 
-.auto-update-option .empty {
-  margin-top: var(--space-3);
+/* Import and export (issue #135): due blocchi nella stessa scheda, ognuno aperto dalla sua
+   riga; il colore solo per errore e conferma. */
+.import-export-block {
+  padding: 0 var(--space-4) var(--space-3);
 }
 
-/* Import / export (issue #135): due blocchi compatti, il colore solo per errore e conferma. */
-.import-export {
-  margin-top: var(--space-6);
-}
-
-.import-export-block + .import-export-block {
-  margin-top: 20px;
+.import-export-block > .setting {
+  margin: 0 calc(-1 * var(--space-4));
 }
 
 .import-export-actions {
@@ -754,51 +810,23 @@ input[type="radio"]:checked:disabled {
   white-space: nowrap;
 }
 
-/* Installazioni trovate: cartella del gioco e provenienza accanto al nome, in tono neutro. */
-.discovered-meta {
-  margin-left: var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.discovered .empty,
-.discovered .muted {
-  margin: 0;
-}
-
-/* "Scan again" mentre una ricerca o un'aggiunta è in corso. */
-.discovered .link:disabled {
-  color: var(--faint);
-  cursor: default;
-}
-
-/* Installazioni */
-
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-3);
-}
-
+/* La scheda Installations di Options (issue #231): le installazioni aggiunte, poi quelle trovate
+   sul computer. "Back up" resta in vista; la rimozione sta nel menu "⋯". */
 .installation-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
 }
 
-.installation-row {
+.installation {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding-right: var(--space-3);
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
 }
 
-.installation + .installation {
+.installation + .installation,
+.discovered .installation {
   border-top: 1px solid var(--border);
 }
 
@@ -809,7 +837,6 @@ input[type="radio"]:checked:disabled {
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 10px 14px;
 }
 
 .installation-name {
@@ -821,39 +848,120 @@ input[type="radio"]:checked:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
   font-size: var(--text-xs);
   color: var(--muted);
 }
 
-/* L'azione secondaria compare al passaggio del mouse o con il focus. */
-.installation .link.subtle {
-  opacity: 0;
-}
-
-.installation:hover .link.subtle,
-.installation .link.subtle:focus-visible {
-  opacity: 1;
-}
-
-.confirm,
 .installation-actions {
+  flex: none;
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  font-size: var(--text-base);
+  gap: var(--space-2);
   white-space: nowrap;
 }
 
-/* Un backup in corso resta visibile anche senza passaggio del mouse. */
-.installation .link.subtle.busy {
-  opacity: 1;
+.installation-actions.confirm {
+  color: var(--muted);
+}
+
+/* Il menu "⋯" di una riga: si apre sotto il pulsante, allineato a destra. La scheda non taglia
+   il contenuto (niente `overflow: hidden`), così il menu dell'ultima riga resta intero. */
+.row-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.row-menu-trigger {
+  width: var(--control-height-sm);
+  padding: 0;
+}
+
+.row-menu-list {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  min-width: 10rem;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--menu-shadow);
+}
+
+.row-menu-item {
+  font: inherit;
+  padding: 6px 10px;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-menu-item:hover,
+.row-menu-item:focus {
+  outline: none;
+  background: var(--hover);
+}
+
+.row-menu-item.danger {
+  color: var(--danger);
+}
+
+.row-menu-item[aria-disabled="true"] {
+  color: var(--faint);
   cursor: default;
 }
 
-/* Backup: elenco compatto sotto la riga, allineato al nome dell'installazione. */
+/* Installazioni trovate: un sottotitolo con "Scan again", poi le righe con il loro "Add";
+   cartella del gioco e provenienza accanto al nome, in tono neutro. */
+.discovered-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+}
+
+.discovered-header .setting-label {
+  font-weight: var(--weight-strong);
+  color: var(--muted);
+}
+
+.discovered-note {
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-3);
+  color: var(--muted);
+}
+
+.discovered-note.error {
+  color: var(--danger);
+}
+
+.discovered-meta {
+  margin-left: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* L'intestazione della tabella di Installed. */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+/* Backup: lo stato sotto il percorso dell'installazione. "Open folder" compare al passaggio
+   del mouse o con il focus, sempre sugli schermi senza mouse. */
 
 .backups {
-  padding: 0 var(--space-3) 10px 14px;
+  margin-top: var(--space-1);
   font-size: var(--text-xs);
   color: var(--muted);
 }
@@ -897,6 +1005,21 @@ input[type="radio"]:checked:disabled {
 
 .backup .link {
   font-size: inherit;
+}
+
+.backup .link.subtle {
+  opacity: 0;
+}
+
+.backup:hover .link.subtle,
+.backup .link.subtle:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .backup .link.subtle {
+    opacity: 1;
+  }
 }
 
 /* Addon */
