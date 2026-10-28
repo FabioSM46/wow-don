@@ -19,8 +19,9 @@ type Props = {
 
 /**
  * Il menu "⋯" di una riga di Options (issue #231): le azioni rare di un'installazione, fuori
- * dalla vista finché non servono. Si apre sotto il pulsante e si chiude con Esc, Tab, un clic
- * fuori o la finestra che perde il focus; le voci si scelgono con le frecce e Invio (pattern
+ * dalla vista finché non servono. Si apre sotto il pulsante e si chiude con Esc, Tab (che
+ * prosegue verso il controllo seguente o precedente), un clic fuori o la finestra che perde il
+ * focus; le voci si scelgono con le frecce e Invio (pattern
  * WAI-ARIA "menu button").
  */
 export function RowMenu({ label, items, triggerRef }: Props) {
@@ -78,7 +79,8 @@ export function RowMenu({ label, items, triggerRef }: Props) {
         closeAndFocus();
         return;
       case "Tab":
-        event.preventDefault();
+        // Senza `preventDefault`: il focus passa al pulsante "⋯" e il browser continua la
+        // sequenza da lì, in avanti con Tab e indietro con Maiusc+Tab (pattern WAI-ARIA).
         closeAndFocus();
         return;
       default:
