@@ -11,6 +11,7 @@ import {
   versionName,
 } from "./detail";
 import { Gallery } from "./Gallery";
+import { ExternalLinkIcon } from "./icons";
 import { galleryLabel, tabIndexForKey } from "./screenshots";
 
 type Props = {
@@ -29,8 +30,8 @@ type Props = {
   renderActions?: (addon: CatalogAddon) => ReactNode;
   /** Messaggi sull'addon (per esempio l'esito di un'installazione), sotto l'intestazione. */
   children?: ReactNode;
-  /** Per un addon che CurseForge non lascia scaricare: la frase sotto il nome, con l'esito del
-   *  mirror GitHub (issue #165). Senza, resta la frase sul download dal sito. */
+  /** Per un addon che CurseForge non lascia scaricare: il riquadro sotto l'intestazione, con
+   *  l'esito del mirror GitHub (issue #165). Senza, resta la frase sul download dal sito. */
   blockedNote?: (addon: CatalogAddon) => ReactNode;
 };
 
@@ -115,7 +116,7 @@ export function AddonDetailView({
         <div className="detail-heading">
           <h2 className="detail-name">
             {name}
-            {shown.installed && <span className="tag">Installed</span>}
+            {shown.installed && <span className="pill ok">Installed</span>}
           </h2>
           <p className="detail-meta">
             <span>{formatAuthors(shown.authors)}</span>
@@ -125,36 +126,45 @@ export function AddonDetailView({
             <span>Updated {formatDate(shown.dateModified)}</span>
           </p>
           <p className="detail-meta">{formatCategories(shown.categories)}</p>
-          {!shown.allowModDistribution &&
-            (blockedNote ? (
-              blockedNote(shown)
-            ) : (
-              <p className="hint">
-                The author does not allow downloads from other apps: get it from the CurseForge
-                website.
-              </p>
-            ))}
-          {shown.url && (
-            <button
-              className="link inline"
-              onClick={() => {
-                setLinkError(null);
-                openUrl(shown.url!).catch((err) =>
-                  setLinkError(`The page could not be opened: ${errorMessage(err)}`),
-                );
-              }}
-            >
-              View on CurseForge
-            </button>
-          )}
           {linkError && (
             <p className="detail-meta error" role="alert">
               {linkError}
             </p>
           )}
         </div>
-        {renderActions && <div className="detail-actions">{renderActions(shown)}</div>}
+        {(shown.url || renderActions) && (
+          <div className="detail-actions">
+            {/* L'unico collegamento a CurseForge del dettaglio (issue #229). */}
+            {shown.url && (
+              <button
+                className="button ghost"
+                onClick={() => {
+                  setLinkError(null);
+                  openUrl(shown.url!).catch((err) =>
+                    setLinkError(`The page could not be opened: ${errorMessage(err)}`),
+                  );
+                }}
+              >
+                <ExternalLinkIcon />
+                Open on CurseForge
+              </button>
+            )}
+            {renderActions?.(shown)}
+          </div>
+        )}
       </header>
+
+      {/* Perché un addon bloccato non si installa (o come si installa): un riquadro sotto
+          l'intestazione, non una nota minuta (issue #229). */}
+      {!shown.allowModDistribution &&
+        (blockedNote ? (
+          blockedNote(shown)
+        ) : (
+          <p className="detail-notice">
+            The author does not allow downloads from other apps: get it from the CurseForge
+            website.
+          </p>
+        ))}
 
       {children}
 

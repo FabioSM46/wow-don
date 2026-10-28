@@ -13,6 +13,8 @@ import {
 import { AddByLink } from "./AddByLink";
 import { AddonDetailView } from "./AddonDetail";
 import { CatalogTable } from "./CatalogTable";
+import { SearchIcon } from "./icons";
+import { blockedPill } from "./pills";
 import { InstallAction, InstallResult, type InstallRun } from "./InstallAction";
 import { useInstallProgress } from "../addons/ProgressBar";
 import {
@@ -28,7 +30,6 @@ import { installedIds, summarizeInstall, withInstalled } from "./install";
 import { forgetFinishedRuns, forgetInstalled, installKey } from "./stale";
 import {
   MIRROR_CHECKS_AT_ONCE,
-  blockedHint,
   detailNote,
   isBlocked,
   mirrorCheckFor,
@@ -97,6 +98,8 @@ export function Search({
 
   // Il testo della casella diventa ricerca dopo una pausa di scrittura o con Invio.
   const [text, setText] = useState("");
+  // "Add by link" aperto dal pulsante della barra (issue #229).
+  const [linkOpen, setLinkOpen] = useState(false);
   const [search, setSearch] = useState<Omit<CatalogSearch, "versionType">>(defaultSearch);
   const [versionChoice, setVersionChoice] = useState<VersionChoice | null>(null);
   const versionType =
@@ -350,7 +353,7 @@ export function Search({
   function renderBlockedNote(addon: CatalogAddon) {
     if (addon.installed) {
       return (
-        <p className="hint">
+        <p className="detail-notice">
           The author does not allow downloads from other apps: updates use GitHub when it has
           the same release.
         </p>
@@ -359,7 +362,7 @@ export function Search({
     const check = mirrorOf(addon);
     if (check?.status === "failed") {
       return (
-        <p className="detail-meta error" role="alert">
+        <p className="detail-notice error" role="alert">
           {detailNote(check)}{" "}
           <button className="link inline" onClick={() => checkMirror(addon, false)}>
             Try again
@@ -368,7 +371,7 @@ export function Search({
       );
     }
     return (
-      <p className="hint" role="status">
+      <p className="detail-notice" role="status">
         {detailNote(check)}
       </p>
     );
@@ -545,11 +548,15 @@ export function Search({
     setSearch((previous) => ({ ...previous, query: "", categoryId: null }));
   }
 
-  // "Add by link" non usa CurseForge: resta anche senza la chiave. Il suo stato vale per
-  // l'installazione, quindi si rimonta quando cambia.
+  // "Add by link" non usa CurseForge: resta anche senza la chiave, e allora è sempre aperto.
+  // Con la chiave si apre dal pulsante della barra (issue #229); chiuso resta montato e
+  // nascosto, così un'installazione in corso e il suo esito non si perdono. Il suo stato vale
+  // per l'installazione, quindi si rimonta quando cambia.
   const addByLink = (
     <AddByLink
       key={installation.id}
+      id="add-by-link"
+      open={missingKey || linkOpen}
       installationId={installation.id}
       onInstalled={() => {
         onInstalled?.();
@@ -604,18 +611,21 @@ export function Search({
       )}
 
       <div ref={resultsRef} hidden={selected !== null}>
-        <div className="toolbar">
-          <input
-            className="search"
-            type="search"
-            placeholder="Search CurseForge add-ons…"
-            aria-label="Search CurseForge add-ons"
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") submitNow();
-            }}
-          />
+        <div className="toolbar search-toolbar">
+          <span className="search-field">
+            <SearchIcon />
+            <input
+              className="search"
+              type="search"
+              placeholder="Search CurseForge add-ons…"
+              aria-label="Search CurseForge add-ons"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") submitNow();
+              }}
+            />
+          </span>
           <select
             className="select"
             aria-label="Category"
@@ -682,6 +692,14 @@ export function Search({
               {ascending ? "↑" : "↓"}
             </button>
           </div>
+          <button
+            className="button secondary"
+            aria-expanded={linkOpen}
+            aria-controls="add-by-link"
+            onClick={() => setLinkOpen((open) => !open)}
+          >
+            Add by link
+          </button>
         </div>
 
         {addByLink}
@@ -737,7 +755,7 @@ export function Search({
                 onSelect={openDetail}
                 selectedId={lastSelectedId}
                 renderActions={renderInstall("row")}
-                hintFor={(addon) => blockedHint(mirrorOf(addon))}
+                pillFor={(addon) => blockedPill(mirrorOf(addon))}
               />
             )}
             {hasMore(results) && (
