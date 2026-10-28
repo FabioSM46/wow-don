@@ -1,5 +1,7 @@
 // Il mirror GitHub dei progetti CurseForge bloccati nella tab Search (D34, issue #165): lo stato
 // del controllo (`github_mirror`), quello che Install fa e i testi della riga e del dettaglio.
+// Dalla issue #223 il controllo parte da solo per i bloccati visibili con un repository GitHub,
+// e un bloccato senza repository va al sito senza nessuna richiesta.
 // Funzioni pure, senza React né I/O.
 
 import type { CatalogAddon, MirrorAvailability } from "../api";
@@ -9,13 +11,54 @@ import type { CatalogAddon, MirrorAvailability } from "../api";
  * sessione (un secondo clic non rifà la richiesta); un errore no: il clic successivo riprova.
  */
 export type MirrorCheck =
-  | { status: "checking" }
+  // `forInstall`: chiesto da Install, che aspetta l'esito; senza, è il controllo automatico.
+  | { status: "checking"; forInstall?: boolean }
   | { status: "done"; result: MirrorAvailability }
   | { status: "failed"; message: string };
 
 /** CurseForge non lascia scaricare il progetto: Install passa dal controllo del mirror. */
 export function isBlocked(addon: Pick<CatalogAddon, "allowModDistribution">): boolean {
   return !addon.allowModDistribution;
+}
+
+/** Il motivo, uguale a quello di `github_mirror`, di un bloccato senza repository GitHub. */
+export const NO_REPOSITORY = "The CurseForge project does not link a GitHub repository.";
+
+/**
+ * L'esito che vale per `addon`: un progetto bloccato senza `githubRepo` non ha un mirror
+ * possibile, quindi è già "website only" senza chiedere niente; per gli altri il controllo
+ * della sessione (o `undefined`).
+ */
+export function mirrorCheckFor(
+  addon: Pick<CatalogAddon, "allowModDistribution" | "githubRepo">,
+  check: MirrorCheck | undefined,
+): MirrorCheck | undefined {
+  if (!isBlocked(addon) || addon.githubRepo !== null) return check;
+  return {
+    status: "done",
+    result: { available: false, repo: null, tag: null, reason: NO_REPOSITORY },
+  };
+}
+
+/** Quanti controlli automatici del mirror alla volta: ognuno legge anche il progetto da
+ *  CurseForge. */
+export const MIRROR_CHECKS_AT_ONCE = 4;
+
+/**
+ * I progetti visibili da controllare da soli, nell'ordine della lista: bloccati, con un
+ * repository GitHub, non installati e senza un esito o un controllo già in corso (`known`). Un
+ * controllo fallito resta noto: riprova solo il clic su Install.
+ */
+export function mirrorsToCheck<
+  T extends Pick<CatalogAddon, "allowModDistribution" | "githubRepo" | "installed">,
+>(addons: readonly T[], known: (addon: T) => boolean, limit: number): T[] {
+  const pending: T[] = [];
+  for (const addon of addons) {
+    if (pending.length >= limit) break;
+    if (!isBlocked(addon) || addon.githubRepo === null || addon.installed) continue;
+    if (!known(addon)) pending.push(addon);
+  }
+  return pending;
 }
 
 /**
@@ -54,7 +97,8 @@ const BLOCKED = "The author does not allow downloads from other apps";
 
 /**
  * L'etichetta della riga e del dettaglio: "via GitHub" con il mirror, "website only" con il
- * motivo, e prima del controllo un'etichetta che dice che Install guarderà su GitHub.
+ * motivo, "checking GitHub…" durante il controllo, e prima del controllo (o dopo un errore)
+ * un'etichetta che dice che Install guarderà su GitHub.
  */
 export function blockedHint(check: MirrorCheck | undefined): BlockedHint {
   const name = mirrorName(check);
@@ -67,6 +111,12 @@ export function blockedHint(check: MirrorCheck | undefined): BlockedHint {
   const step = mirrorStep(check);
   if (step.kind === "website") {
     return { label: "website only", title: unavailableText(step.reason) };
+  }
+  if (step.kind === "wait") {
+    return {
+      label: "checking GitHub…",
+      title: `${BLOCKED}: checking GitHub for the same release…`,
+    };
   }
   return {
     label: "blocked on CurseForge",

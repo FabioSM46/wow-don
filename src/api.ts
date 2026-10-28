@@ -322,6 +322,13 @@ export type CatalogAddon = {
   url: string | null;
   /** Falso: CurseForge non permette di scaricarlo da un'app di terzi. */
   allowModDistribution: boolean;
+  /**
+   * Il repository GitHub `owner/repo` ricavato da `links.sourceUrl`, senza richieste in più.
+   * Conta solo con `allowModDistribution = false`: `null` vuol dire che il mirror GitHub è
+   * impossibile (si va subito al sito); un valore che è possibile, ma serve `github_mirror` per
+   * sapere se c'è la stessa versione (issue #222, #223).
+   */
+  githubRepo: string | null;
   latestFile: CatalogFile | null;
   /** Il progetto è già nell'installazione. */
   installed: boolean;

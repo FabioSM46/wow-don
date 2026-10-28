@@ -40,7 +40,8 @@ export function InstallAction(props: ActionProps) {
     !props.addon.installed &&
     (status === "running" ||
       status === "unavailable" ||
-      props.mirror?.status === "checking" ||
+      // Solo il controllo chiesto da Install: quello automatico si vede già nell'etichetta.
+      (props.mirror?.status === "checking" && props.mirror.forInstall === true) ||
       isFailed(props.run));
   return (
     <span className={pinned ? "row-actions pinned" : "row-actions"}>
@@ -78,7 +79,7 @@ function ActionContent({
     );
   }
   // Un progetto bloccato si installa dal mirror GitHub: prima il controllo, poi Install; senza
-  // un mirror utilizzabile resta il link al sito (issue #165).
+  // un mirror utilizzabile (o senza repository GitHub) resta il link al sito (issue #165, #223).
   const blocked = isBlocked(addon);
   const step = blocked ? mirrorStep(mirror) : null;
   if (step?.kind === "website") {
@@ -94,7 +95,7 @@ function ActionContent({
           onOpenPage(url);
         }}
       >
-        Install from CurseForge
+        Open on CurseForge
       </button>
     );
   }
