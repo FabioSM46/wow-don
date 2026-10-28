@@ -709,14 +709,13 @@ export function AddonTable({
       <header className="section-header addons-header">
         <h2 id="addons-title" className="addons-title">
           Addons
-          {load.state === "ready" && (
-            <span className="addons-count">
-              {visible.length === groups.length
-                ? groups.length
-                : `${visible.length} of ${groups.length}`}
-              {updateCount > 0 && ` · ${updateCount} to update`}
-            </span>
-          )}
+          {/* L'installazione resta nel titolo: la sezione è etichettata da questo testo. */}
+          <span className="addons-count">
+            {installation.name}
+            {load.state === "ready" &&
+              ` · ${visible.length === groups.length ? groups.length : `${visible.length} of ${groups.length}`} ${groups.length === 1 ? "addon" : "addons"}`}
+            {load.state === "ready" && updateCount > 0 && ` · ${updateCount} to update`}
+          </span>
         </h2>
         <div className="section-actions">
           {selection !== null && (
@@ -1315,6 +1314,8 @@ function UpdateCell({
           {isUpdatable(update) ? (
             <button
               className="button soft small row-update"
+              // Il testo si accorcia con "…": la versione intera resta nel suggerimento.
+              title={`Update to ${update.latest.name}`}
               disabled={disabled}
               onClick={(event) => {
                 // Il pulsante non apre e chiude la riga del gruppo.
@@ -1366,8 +1367,13 @@ function InterfaceCell({ versions, flavor }: { versions: number[]; flavor: strin
     <td className="mono" title={summary.title}>
       {summary.shown}
       {summary.more > 0 && (
-        <span className="more-folders" aria-label={`and ${summary.more} more: ${summary.title}`}>
-          +{summary.more}
+        <span className="more-folders">
+          <span aria-hidden="true">+{summary.more}</span>
+          {/* Testo nascosto e non `aria-label`: uno span senza ruolo non viene sempre letto. */}
+          <span className="visually-hidden">
+            {" "}
+            and {summary.more} more: {summary.title}
+          </span>
         </span>
       )}
     </td>
