@@ -34,6 +34,17 @@ pub struct InstalledAddon {
     pub error: Option<String>,
 }
 
+impl InstalledAddon {
+    /// Se la cartella non si è potuta elencare. Un fingerprint mancante da solo non lo dice: una
+    /// cartella leggibile può non avere nessun file che il calcolo di CurseForge conta (per
+    /// esempio solo un `.toc` `_Camelot`, issue #212).
+    pub fn is_unreadable(&self) -> bool {
+        self.error
+            .as_deref()
+            .is_some_and(|error| error.starts_with(UNREADABLE_FOLDER))
+    }
+}
+
 /// Legge gli addon di `<installazione>/Interface/AddOns`. Se manca `Interface/AddOns` non ci
 /// sono addon; se manca la cartella dell'installazione è un errore, perché "zero addon"
 /// nasconderebbe un gioco spostato o un disco non montato. Una voce che non si legge resta in
@@ -174,6 +185,14 @@ const MAX_SCAN_THREADS: usize = 8;
 /// Una cartella da leggere: percorso, nome e data di modifica in millisecondi.
 type Folder = (PathBuf, String, Option<u64>);
 
+/// L'inizio dell'errore di una cartella che non si è potuta elencare: l'unico caso in cui la
+/// cartella è davvero illeggibile (vedi [`InstalledAddon::is_unreadable`]).
+const UNREADABLE_FOLDER: &str = "Unreadable folder (";
+
+pub(crate) fn unreadable_folder(error: &std::io::Error) -> String {
+    format!("{UNREADABLE_FOLDER}{}).", error.kind())
+}
+
 fn unreadable_entry(folder: String, error: &std::io::Error) -> InstalledAddon {
     InstalledAddon {
         folder,
@@ -181,7 +200,7 @@ fn unreadable_entry(folder: String, error: &std::io::Error) -> InstalledAddon {
         toc: TocInfo::default(),
         modified_ms: None,
         fingerprint: None,
-        error: Some(format!("Unreadable folder ({}).", error.kind())),
+        error: Some(unreadable_folder(error)),
     }
 }
 
@@ -206,7 +225,7 @@ fn read_addon(
             .filter_map(|entry| entry.file_name().into_string().ok())
             .collect(),
         Err(error) => {
-            addon.error = Some(format!("Unreadable folder ({}).", error.kind()));
+            addon.error = Some(unreadable_folder(&error));
             return addon;
         }
     };
@@ -424,6 +443,31 @@ mod tests {
         assert_eq!(addons.len(), 1);
         assert_eq!(addons[0].folder, "Linked");
         assert!(addons[0].error.as_deref().unwrap().contains("Unreadable"));
+        assert!(addons[0].is_unreadable());
+    }
+
+    /// Solo l'errore di una cartella che non si è potuta elencare la rende illeggibile: gli altri
+    /// errori della scansione nascono dopo un `read_dir` riuscito (issue #212).
+    #[test]
+    fn only_a_folder_that_cannot_be_listed_is_unreadable() {
+        let tmp = TempDir::new();
+        let addons_dir = tmp.path().join("Interface").join("AddOns");
+        // Una cartella leggibile senza `.toc` per il flavor: ha un errore, ma si legge.
+        fs::create_dir_all(addons_dir.join("NoToc")).unwrap();
+        fs::write(addons_dir.join("NoToc").join("core.lua"), "-- x\n").unwrap();
+        let addons = scan_addons(tmp.path(), "retail").unwrap();
+        assert!(addons[0].error.is_some());
+        assert!(!addons[0].is_unreadable());
+
+        let mut addon = addons[0].clone();
+        addon.error = Some(unreadable_folder(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )));
+        assert!(addon.is_unreadable());
+        addon.error = Some("Unreadable .toc file (permission denied).".to_owned());
+        assert!(!addon.is_unreadable());
+        addon.error = None;
+        assert!(!addon.is_unreadable());
     }
 
     #[test]

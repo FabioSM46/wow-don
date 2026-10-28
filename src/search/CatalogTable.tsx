@@ -1,19 +1,19 @@
 import type { KeyboardEvent, ReactNode } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CatalogAddon } from "../api";
 import { formatAuthors, formatCount, formatDate, formatDownloads } from "./catalog";
-import { blockedHint, type BlockedHint } from "./mirror";
+import { mirrorCheckFor } from "./mirror";
+import { blockedPill, type StatePill } from "./pills";
 
 type Props = {
   addons: CatalogAddon[];
   /** Con un gestore la riga si sceglie con un clic o con Invio (vista di dettaglio). */
   onSelect?: (addon: CatalogAddon) => void;
   selectedId?: number | null;
-  /** Le azioni di una riga (per esempio Install), in un'ultima colonna. */
+  /** Le azioni di una riga (per esempio Install), in un'ultima colonna sempre visibile. */
   renderActions?: (addon: CatalogAddon) => ReactNode;
-  /** L'etichetta di un addon che CurseForge non lascia scaricare, con l'esito del mirror
-   *  GitHub se è stato controllato (issue #165). */
-  hintFor?: (addon: CatalogAddon) => BlockedHint;
+  /** La pastiglia di un addon che CurseForge non lascia scaricare, con l'esito del mirror
+   *  GitHub se è stato controllato (issue #165, #229). */
+  pillFor?: (addon: CatalogAddon) => StatePill;
 };
 
 /** La tabella dei risultati del catalogo: logo, nome, sommario, autore, download, data. */
@@ -22,7 +22,7 @@ export function CatalogTable({
   onSelect,
   selectedId = null,
   renderActions,
-  hintFor = () => blockedHint(undefined),
+  pillFor = (addon) => blockedPill(mirrorCheckFor(addon, undefined)),
 }: Props) {
   function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, addon: CatalogAddon) {
     if (event.target !== event.currentTarget) return;
@@ -43,7 +43,7 @@ export function CatalogTable({
             <th>Author</th>
             <th className="numeric">Downloads</th>
             <th>Updated</th>
-            {renderActions && <th aria-label="Actions" />}
+            {renderActions && <th className="actions-cell" aria-label="Actions" />}
           </tr>
         </thead>
         <tbody>
@@ -71,7 +71,7 @@ export function CatalogTable({
                 )}
               </td>
               <td>
-                <NameCell addon={addon} hint={addon.allowModDistribution ? null : hintFor(addon)} />
+                <NameCell addon={addon} pill={addon.allowModDistribution ? null : pillFor(addon)} />
               </td>
               <td>
                 <span className="summary" title={addon.summary || undefined}>
@@ -87,7 +87,7 @@ export function CatalogTable({
                 {formatDownloads(addon.downloadCount)}
               </td>
               <td className="nowrap">{formatDate(addon.dateModified)}</td>
-              {renderActions && <td className="nowrap">{renderActions(addon)}</td>}
+              {renderActions && <td className="actions-cell">{renderActions(addon)}</td>}
             </tr>
           ))}
         </tbody>
@@ -96,31 +96,23 @@ export function CatalogTable({
   );
 }
 
-/** Il nome (link alla pagina su CurseForge), il segno "Installed" e l'etichetta di un addon
- *  che CurseForge non lascia scaricare. */
-function NameCell({ addon, hint }: { addon: CatalogAddon; hint: BlockedHint | null }) {
+/** Il nome e, sotto, le pastiglie di stato: "Installed" e quella di un addon che CurseForge non
+ *  lascia scaricare. La pagina su CurseForge si apre dal dettaglio (issue #229). */
+function NameCell({ addon, pill }: { addon: CatalogAddon; pill: StatePill | null }) {
   const name = addon.name || `#${addon.id}`;
   return (
     <>
-      {addon.url ? (
-        <button
-          className="link inline addon-title"
-          title="Open on CurseForge"
-          onClick={(event) => {
-            // Il link non sceglie la riga.
-            event.stopPropagation();
-            void openUrl(addon.url!);
-          }}
-        >
-          {name}
-        </button>
-      ) : (
-        <span className="addon-title">{name}</span>
-      )}
-      {addon.installed && <span className="tag">Installed</span>}
-      {hint && (
-        <span className="hint" title={hint.title}>
-          {hint.label}
+      <span className="addon-title catalog-name" title={name}>
+        {name}
+      </span>
+      {(addon.installed || pill) && (
+        <span className="catalog-states">
+          {addon.installed && <span className="pill ok">Installed</span>}
+          {pill && (
+            <span className={pill.className} title={pill.title}>
+              {pill.label}
+            </span>
+          )}
         </span>
       )}
     </>

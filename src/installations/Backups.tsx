@@ -97,7 +97,7 @@ export function useBackups(installationId: string): Backups {
   return { list, listError, actionError, creating, reload, create, reveal };
 }
 
-/** L'elenco compatto degli ultimi backup, sotto la riga dell'installazione. */
+/** L'elenco compatto degli ultimi backup, sotto il percorso dell'installazione. */
 export function BackupList({ backups }: { backups: Backups }) {
   const { list, listError, actionError, reload, reveal } = backups;
   // `list_backups` restituisce i backup dal più recente (ordinati nel backend, `backup.rs`):
@@ -124,7 +124,7 @@ export function BackupList({ backups }: { backups: Backups }) {
         !listError && <p className="backups-note">Loading backups…</p>
       ) : list.length === 0 ? (
         <p className="backups-note">
-          No backups yet. Use “Backup” to save <code>WTF</code> and <code>Interface</code> before
+          No backups yet. Use “Back up” to save <code>WTF</code> and <code>Interface</code> before
           changing many addons.
         </p>
       ) : (

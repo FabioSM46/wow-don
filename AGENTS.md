@@ -18,9 +18,9 @@ wow-don/
 ├── docs/                 # context, decisions, architecture, roadmap
 ├── scripts/              # gh-automation.sh, classificatore e gate della CI, test dell'automazione
 ├── .github/              # CI, review DeepSeek, labeler delle PR, ciclo di vita delle iterazioni
-├── .claude/skills/       # Skill Claude canoniche (/dev-issue, /process-pr, /scrum-master)
-├── .agents/skills/       # Adapter Codex generati ($dev-issue, $process-pr, $scrum-master)
-└── .opencode/skills/     # Adapter OpenCode generati (/dev-issue, /process-pr, /scrum-master)
+├── .claude/skills/       # Skill Claude canoniche (/dev-issue, /process-pr, /develop-iteration, /scrum-master)
+├── .agents/skills/       # Adapter Codex generati ($dev-issue, $process-pr, $develop-iteration, $scrum-master)
+└── .opencode/skills/     # Adapter OpenCode generati (/dev-issue, /process-pr, /develop-iteration, /scrum-master)
 ```
 
 ## Aree
@@ -91,9 +91,13 @@ La UI deve essere **minimale e moderna** (decisione D20 in `docs/decisions.md`).
   doppi, icone decorative o animazioni che non comunicano uno stato.
 - **Colore con parsimonia.** Una palette neutra con un solo colore d'accento; il colore segnala
   stato (errore, avviso, selezione), non abbellisce. Chiaro e scuro sono entrambi obbligatori:
-  oggi `src/App.css` cambia solo testo e sfondo con `prefers-color-scheme`; i colori nuovi vanno
-  definiti come variabili CSS in `:root`, con i valori del tema scuro nel blocco
-  `prefers-color-scheme: dark`, invece di essere scritti nei singoli componenti.
+  i colori nuovi vanno definiti come variabili CSS in `:root`, con il valore scuro come
+  `--dark-*` assegnato nei due blocchi del tema scuro di `src/App.css`, invece di essere scritti
+  nei singoli componenti.
+- **Token, non valori (D42).** Corpi, pesi, altezze dei controlli, raggi, spaziature e colori
+  sono le variabili in testa a `src/App.css`, elencate nel commento che le apre insieme alle
+  classi dei controlli (`.button` e varianti, `.switch`, `.segmented`, `.pill`). Ogni
+  `font-size` è un token `--text-*` o `inherit`, e `src/styleTokens.test.ts` lo verifica.
 - **I dati in primo piano.** Ricerca, filtri e ordinamento sono il punto di forza dell'app (D4):
   la casella di ricerca è sempre visibile, i filtri sono compatti, le tabelle sono dense ma
   leggibili.
@@ -211,7 +215,7 @@ livelli:
 
 | Livello      | Tecnologia                              | Responsabilità |
 | ------------ | --------------------------------------- | -------------- |
-| **Skill**    | Skill per Claude, Codex e OpenCode      | Implementazione, gestione delle PR, cerimonie scrum |
+| **Skill**    | Skill per Claude, Codex e OpenCode      | Implementazione, gestione delle PR, consegna delle iterazioni, cerimonie scrum |
 | **Workflow** | GitHub Actions (`.github/workflows/`)   | CI, review delle PR, etichettatura, transizioni delle iterazioni |
 | **Helper**   | `scripts/gh-automation.sh`              | Wrapper comune per le API REST e GraphQL |
 
@@ -265,12 +269,20 @@ pr-labeler.yml (a fine CI/review + giro ogni 6h): legge ci-gate e thread
 L'AI legge il risultato e i vincoli d'ordine → merge verso basi diverse da main
 ```
 
+`/develop-iteration` (Claude/OpenCode) o `$develop-iteration` (Codex) esegue tutto questo per
+le issue già assegnate a una milestone: un agente per issue con `/dev-issue`, ondate parallele
+solo per lavoro indipendente, `/process-pr` sulle PR da correggere e merge delle foglie pronte in
+ordine di dipendenza. Su `develop` non c'è una verifica dopo il merge (la CI gira solo su
+`pull_request`): per questo la skill unisce in `develop` una PR alla volta e riallinea alla nuova
+punta ogni altra PR prima di unirla.
+
 ### Skill
 
 | Skill          | Claude / OpenCode         | Codex                     | Comportamento |
 | -------------- | ------------------------- | ------------------------- | ------------- |
 | `dev-issue`    | `/dev-issue <numero>`     | `$dev-issue <numero>`     | Senza stato: issue → PR → esce |
 | `process-pr`   | `/process-pr <numero-pr>` | `$process-pr <numero-pr>` | Correzione attiva: conflitti, CI, feedback di review |
+| `develop-iteration` | `/develop-iteration [iterazione]` | `$develop-iteration [iterazione]` | Agenti paralleli per issue → correzioni → merge delle PR verso basi diverse da main |
 | `scrum-master` | `/scrum-master <cerimonia>` | `$scrum-master <cerimonia>` | backlog-refine, iteration-plan, feature-spec |
 
 Le skill possono essere avviate da un agente oltre che da una persona: non usare
@@ -278,7 +290,8 @@ Le skill possono essere avviate da un agente oltre che da una persona: non usare
 skill a un agente costruito a mano.
 
 Le cerimonie delle iterazioni restano con l'umano nel ciclo: scegliere quali issue entrano nella
-prossima iterazione è una decisione dell'utente.
+prossima iterazione è una decisione dell'utente. `/develop-iteration` consegna lo scope scelto e
+si ferma: non chiude la milestone e non esegue le cerimonie.
 
 #### Cosa ferma davvero un merge
 

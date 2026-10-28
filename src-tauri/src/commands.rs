@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -12,6 +12,7 @@ use crate::addon_list;
 use crate::addon_remove;
 use crate::addons::cache::FingerprintCache;
 use crate::addons::scan::{self, ListedAddon};
+use crate::auto_update::{AutoUpdate, AutoUpdateStatus};
 use crate::autostart;
 use crate::backup::{self, BackupInfo};
 use crate::catalog::{self, AddonDetail, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
@@ -22,6 +23,7 @@ use crate::install_local::{self, LocalInstall};
 use crate::install_new::{self, InstallOutcome, MirrorAvailability};
 use crate::installations::Installation;
 use crate::parallel;
+use crate::previous::{self, PreviousManifest, UndoOutcome};
 use crate::progress::{self, Progress, ProgressEvent};
 use crate::sources::curseforge::{
     self, CurseForgeClient, CurseForgeError, ReqwestTransport, SortOrder,
@@ -31,10 +33,10 @@ use crate::sources::github_mirror;
 use crate::sources::http::PublicReqwestTransport;
 use crate::sources::tukui::{self, TukuiSource};
 use crate::sources::wowinterface::{self, WowInterfaceSource};
-use crate::sources::{ProjectKey, SourceKind};
+use crate::sources::{ProjectKey, Source, SourceKind};
 use crate::store::{
-    AddonSettingsStore, AppSettings, AppSettingsStore, InstallationStore, InstalledAddonsStore,
-    InstalledRecords, SourceRecord, SourceRecords, Theme,
+    AddonSettingsStore, AppSettings, AppSettingsStore, AutoUpdateMode, InstallationAutoUpdate,
+    InstallationStore, InstalledAddonsStore, InstalledRecords, SourceRecord, SourceRecords, Theme,
 };
 use crate::tray::TrayStatus;
 use crate::updates::{
@@ -97,7 +99,7 @@ fn locked_app_settings(
 
 /// L'opzione "Beta quando non c'è una Release" (issue #141). Un `settings.json` illeggibile non
 /// blocca ricerca, installazione e aggiornamenti: vale il default, cioè solo Release.
-fn beta_when_no_release(settings: &Mutex<AppSettingsStore>) -> bool {
+pub(crate) fn beta_when_no_release(settings: &Mutex<AppSettingsStore>) -> bool {
     locked_app_settings(settings)
         .and_then(|store| store.get())
         .is_ok_and(|settings| settings.beta_when_no_release)
@@ -151,6 +153,113 @@ pub fn set_close_to_tray(
     )
 }
 
+/// Salva modalità (`off`, `notify` o `install`) e intervallo in ore dell'aggiornamento
+/// automatico (D41, issue #199) e restituisce le impostazioni aggiornate.
+#[tauri::command]
+pub fn set_auto_update(
+    mode: String,
+    interval_hours: u32,
+    settings: AppSettingsState<'_>,
+    tray: State<'_, TrayStatus>,
+    auto_update: State<'_, AutoUpdate>,
+) -> Result<SettingsView, String> {
+    let saved = save_auto_update(&settings, &mode, interval_hours);
+    if saved.is_ok() {
+        // Il giro ripianifica con la modalità e l'intervallo nuovi.
+        auto_update.wake();
+    }
+    settings_view(saved, &tray)
+}
+
+/// L'esito dell'ultimo giro automatico e quando è previsto il prossimo (issue #200), con le
+/// installazioni che hanno un giro annullabile (`undoable`, issue #201): lo stesso payload
+/// dell'evento `auto-update`, vedi [`AutoUpdateStatus`]. Memoria e il manifesto
+/// `auto-update-previous.json`, nessuna rete.
+#[tauri::command]
+pub fn get_auto_update_status(app: AppHandle) -> AutoUpdateStatus {
+    crate::auto_update::current_status(&app)
+}
+
+/// Annulla l'ultimo giro automatico di un'installazione (issue #201): per ogni progetto del giro
+/// rimette le cartelle e il record di prima, saltando quelli cambiati dopo. Restituisce un
+/// esito per progetto ([`UndoOutcome`]) ed emette l'evento `auto-update` con lo stato nuovo.
+/// Bloccante, sotto [`InstallLock`] come gli aggiornamenti.
+#[tauri::command]
+pub async fn undo_last_auto_update(
+    installation_id: String,
+    app: AppHandle,
+    store: Store<'_>,
+) -> Result<Vec<UndoOutcome>, String> {
+    let installation = find_installation(&store, &installation_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = app.state::<InstallLock>();
+        let _held = lock.hold();
+        let result = previous::undo(
+            &installation,
+            &app.state::<PreviousManifest>(),
+            &app.state::<Mutex<InstalledAddonsStore>>(),
+            Some(&app.state::<FingerprintCache>()),
+        );
+        let _ = app.emit(
+            crate::auto_update::EVENT,
+            crate::auto_update::current_status(&app),
+        );
+        result
+    })
+    .await
+    .map_err(|error| format!("The undo was interrupted ({error})."))?
+}
+
+/// Il corpo di [`set_auto_update`], separato dallo `State` di Tauri per i test. I valori si
+/// controllano prima del lock: uno sconosciuto non tocca né la memoria né il file.
+fn save_auto_update(
+    settings: &Mutex<AppSettingsStore>,
+    mode: &str,
+    interval_hours: u32,
+) -> Result<AppSettings, String> {
+    let mode = AutoUpdateMode::parse(mode)?;
+    crate::store::check_auto_update_interval(interval_hours)?;
+    locked_app_settings(settings)?.set_auto_update(mode, interval_hours)
+}
+
+/// Se l'installazione partecipa all'aggiornamento automatico e quali progetti ne sono esclusi
+/// (issue #199). Ogni escluso è `{ source, key }`: il frontend lo abbina a una riga confrontando
+/// `project.source` e `project.key` del suo `AddonUpdate` (vedi [`ProjectKey`]).
+#[tauri::command]
+pub fn get_auto_update(
+    installation_id: String,
+    store: Store<'_>,
+    settings: Settings<'_>,
+) -> Result<InstallationAutoUpdate, String> {
+    find_installation(&store, &installation_id)?;
+    locked_settings(&settings)?.auto_update_for(&installation_id)
+}
+
+/// Esclude un progetto dall'aggiornamento automatico (`excluded`) o lo riammette.
+#[tauri::command]
+pub fn set_auto_update_excluded(
+    installation_id: String,
+    project: ProjectKey,
+    excluded: bool,
+    store: Store<'_>,
+    settings: Settings<'_>,
+) -> Result<InstallationAutoUpdate, String> {
+    find_installation(&store, &installation_id)?;
+    locked_settings(&settings)?.set_auto_update_excluded(&installation_id, project, excluded)
+}
+
+/// Fa partecipare un'installazione all'aggiornamento automatico (`enabled`) o la esclude.
+#[tauri::command]
+pub fn set_installation_auto_update(
+    installation_id: String,
+    enabled: bool,
+    store: Store<'_>,
+    settings: Settings<'_>,
+) -> Result<InstallationAutoUpdate, String> {
+    find_installation(&store, &installation_id)?;
+    locked_settings(&settings)?.set_installation_auto_update(&installation_id, enabled)
+}
+
 /// Se l'app parte con il sistema (issue #159). Lo stato si legge dal sistema operativo a ogni
 /// chiamata: non è in `settings.json`.
 #[tauri::command]
@@ -165,8 +274,8 @@ pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     autostart::set_enabled(&app, enabled)
 }
 
-/// Le impostazioni dell'app (tema, opzione della Beta, "Close to tray") e se l'icona nella
-/// tray c'è; senza `settings.json` valgono i default.
+/// Le impostazioni dell'app (tema, opzione della Beta, "Close to tray", aggiornamento
+/// automatico) e se l'icona nella tray c'è; senza `settings.json` valgono i default.
 #[tauri::command]
 pub fn get_settings(
     settings: AppSettingsState<'_>,
@@ -203,13 +312,27 @@ impl InstallLock {
     fn hold(&self) -> MutexGuard<'_, ()> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// Come [`hold`](Self::hold), ma senza aspettare: `None` se un'installazione o un
+    /// aggiornamento lo tiene già. Lo usa il giro automatico (issue #200), che salta e riprova
+    /// invece di accodarsi dietro un comando dell'utente.
+    pub(crate) fn try_hold(&self) -> Option<MutexGuard<'_, ()>> {
+        match self.0.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
 }
 
-fn overrides_for(
-    settings: &Settings<'_>,
+pub(crate) fn overrides_for(
+    settings: &Mutex<AddonSettingsStore>,
     installation_id: &str,
 ) -> Result<VersionOverrides, String> {
-    locked_settings(settings)?.overrides_for(installation_id)
+    settings
+        .lock()
+        .map_err(|_| "Addon settings are not available: restart the app.".to_owned())?
+        .overrides_for(installation_id)
 }
 
 #[tauri::command]
@@ -1063,26 +1186,11 @@ pub async fn check_updates(
     let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
     let records = records_for_matching(&installed, &installation.id);
     tauri::async_runtime::spawn_blocking(move || {
-        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
-        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let client = CurseForgeClient::new(transport, key);
-        let tukui = tukui_source()?;
-        let wowi = wowinterface_source()?;
-        let github = github_source()?;
-        // I progetti che CurseForge non lascia scaricare usano il mirror GitHub (D34).
-        let curseforge = CurseForgeSource {
-            client: &client,
-            overrides: &overrides,
-            allow_beta,
-            github: Some(&github),
-        };
+        let sources = LiveSources::new(key)?;
         let cache = app.state::<FingerprintCache>();
-        updates::check_updates_with(
-            &installation,
-            Some(&cache),
-            &[&curseforge, &tukui, &wowi, &github],
-            &records,
-        )
+        sources.with(&overrides, allow_beta, |sources| {
+            updates::check_updates_with(&installation, Some(&cache), sources, &records)
+        })
     })
     .await
     .map_err(|error| format!("The update check was interrupted ({error})."))?
@@ -1126,36 +1234,22 @@ pub async fn update_addons(
     tauri::async_runtime::spawn_blocking(move || {
         let lock = app.state::<InstallLock>();
         let _held = lock.hold();
-        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
-        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let client = CurseForgeClient::new(transport, key);
-        let tukui = tukui_source()?;
-        let wowi = wowinterface_source()?;
-        let github = github_source()?;
-        // I progetti che CurseForge non lascia scaricare usano il mirror GitHub (D34).
-        let curseforge = CurseForgeSource {
-            client: &client,
-            overrides: &overrides,
-            allow_beta,
-            github: Some(&github),
-        };
+        let sources = LiveSources::new(key)?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         let cache = app.state::<FingerprintCache>();
-        let addons_dir = installation.path.join("Interface").join("AddOns");
-        updates::update_addons_with(
-            &installation,
-            Some(&cache),
-            &[&curseforge, &tukui, &wowi, &github],
-            &records,
-            &projects,
-            reinstall,
-            &mut |source, key, record| {
-                // Le cartelle appena scritte si ricalcolano alla prossima scansione.
-                cache.forget(&addons_dir, &record.folders);
-                locked_installed(&installed)?.record_source(&installation.id, source, key, record)
-            },
-            &emit_progress(&app, &installation.id),
-        )
+        let mut record = record_writer(&installed, &cache, &installation);
+        sources.with(&overrides, allow_beta, |sources| {
+            updates::update_addons_with(
+                &installation,
+                Some(&cache),
+                sources,
+                &records,
+                &projects,
+                reinstall,
+                &mut record,
+                &emit_progress(&app, &installation.id),
+            )
+        })
     })
     .await
     .map_err(|error| format!("The update was interrupted ({error})."))?
@@ -1172,6 +1266,68 @@ fn emit_progress<'a>(app: &'a AppHandle, installation_id: &'a str) -> impl Fn(Pr
                 progress,
             },
         );
+    }
+}
+
+/// Le fonti dei controlli e degli aggiornamenti, con la chiave CurseForge se c'è (D31: senza,
+/// le fonti libere funzionano lo stesso). Le usano `check_updates`, `update_addons` e il giro
+/// automatico (`auto_update`, issue #200), così le tre strade hanno le stesse fonti nello stesso
+/// ordine. Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+pub(crate) struct LiveSources {
+    client: CurseForgeClient<ReqwestTransport>,
+    tukui: TukuiSource<PublicReqwestTransport>,
+    wowi: WowInterfaceSource<PublicReqwestTransport>,
+    github: GithubSource<PublicReqwestTransport>,
+}
+
+impl LiveSources {
+    pub(crate) fn new(key: Option<String>) -> Result<Self, String> {
+        let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
+        Ok(Self {
+            client: CurseForgeClient::new(transport, key),
+            tukui: tukui_source()?,
+            wowi: wowinterface_source()?,
+            github: github_source()?,
+        })
+    }
+
+    /// Se c'è la chiave CurseForge: senza, il controllo di CurseForge fallisce sempre, e non per
+    /// la rete.
+    pub(crate) fn has_curseforge_key(&self) -> bool {
+        self.client.has_key()
+    }
+
+    /// Esegue `run` con le fonti nell'ordine di D33: CurseForge (con le versioni forzate
+    /// dell'installazione e l'opzione della Beta), Tukui, WoWInterface, GitHub.
+    pub(crate) fn with<R>(
+        &self,
+        overrides: &VersionOverrides,
+        allow_beta: bool,
+        run: impl FnOnce(&[&dyn Source]) -> R,
+    ) -> R {
+        // I progetti che CurseForge non lascia scaricare usano il mirror GitHub (D34).
+        let curseforge = CurseForgeSource {
+            client: &self.client,
+            overrides,
+            allow_beta,
+            github: Some(&self.github),
+        };
+        run(&[&curseforge, &self.tukui, &self.wowi, &self.github])
+    }
+}
+
+/// Registra in `installed-addons.json` quello che un aggiornamento ha appena installato; le
+/// cartelle scritte si ricalcolano alla prossima scansione. Il lock del registro si prende solo
+/// per scrivere ogni record.
+pub(crate) fn record_writer<'a>(
+    installed: &'a Mutex<InstalledAddonsStore>,
+    cache: &'a FingerprintCache,
+    installation: &'a Installation,
+) -> impl FnMut(SourceKind, &str, SourceRecord) -> Result<(), String> + 'a {
+    let addons_dir = installation.path.join("Interface").join("AddOns");
+    move |source, key, record| {
+        cache.forget(&addons_dir, &record.folders);
+        locked_installed(installed)?.record_source(&installation.id, source, key, record)
     }
 }
 
@@ -1208,7 +1364,10 @@ static GITHUB_CACHE: LazyLock<Arc<github::Cache>> = LazyLock::new(Arc::default);
 /// I record dell'installazione per l'ordine di abbinamento (D33). Un `installed-addons.json`
 /// illeggibile non blocca il controllo: senza record le cartelle si offrono a tutte le fonti,
 /// come prima dei record; le scritture lo segnalano comunque.
-fn records_for_matching(installed: &Installed<'_>, installation_id: &str) -> SourceRecords {
+pub(crate) fn records_for_matching(
+    installed: &Mutex<InstalledAddonsStore>,
+    installation_id: &str,
+) -> SourceRecords {
     locked_installed(installed)
         .and_then(|store| store.source_records_for(installation_id))
         .unwrap_or_default()
@@ -1276,9 +1435,12 @@ pub async fn install_addon(
 
 /// Il mirror GitHub del progetto CurseForge `mod_id` per l'installazione (D34, issue #164):
 /// `{ available, repo, tag, reason }`, per il file `file_id` se indicato (come `install_addon`),
-/// altrimenti per l'ultimo della versione del gioco. Si chiama su richiesta (dettaglio o Install), mai dalla
-/// ricerca; un progetto che CurseForge lascia scaricare risponde `available: false` con
-/// `reason: null` senza richieste a GitHub. Rete fuori dal thread principale.
+/// altrimenti per l'ultimo della versione del gioco. Si chiama su richiesta: dal dettaglio,
+/// da Install e dalla Search, che lo chiama da sola per i progetti bloccati con un
+/// `githubRepo` nel [`CatalogAddon`](crate::catalog::CatalogAddon) (issue #222, #223); un
+/// progetto senza `githubRepo` non ha un mirror possibile e non serve chiederlo. Un progetto
+/// che CurseForge lascia scaricare risponde `available: false` con `reason: null` senza
+/// richieste a GitHub. Rete fuori dal thread principale.
 #[tauri::command]
 pub async fn github_mirror(
     installation_id: String,
@@ -1644,6 +1806,63 @@ mod tests {
         );
     }
 
+    /// Il frontend esclude un addon con i campi `source` e `key` del `project` di un
+    /// `AddonUpdate`: quei due campi devono bastare a costruire un `ProjectKey`.
+    #[test]
+    fn a_project_of_an_update_row_reads_as_a_project_key() {
+        let project = serde_json::to_value(updates::Project {
+            id: 0,
+            source: SourceKind::Github,
+            key: "owner/repo".to_owned(),
+            name: "Addon".to_owned(),
+            url: None,
+            allow_mod_distribution: true,
+        })
+        .unwrap();
+        let key: ProjectKey = serde_json::from_value(serde_json::json!({
+            "source": project["source"],
+            "key": project["key"],
+        }))
+        .unwrap();
+        assert_eq!(
+            key,
+            ProjectKey {
+                source: SourceKind::Github,
+                key: "owner/repo".to_owned(),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&key).unwrap(),
+            serde_json::json!({"source": "github", "key": "owner/repo"})
+        );
+    }
+
+    #[test]
+    fn set_auto_update_rejects_unknown_values_before_touching_the_file() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        let settings = Mutex::new(AppSettingsStore::load(file.clone()));
+
+        assert_eq!(
+            save_auto_update(&settings, "always", 6).unwrap_err(),
+            "Unknown automatic update mode: use off, notify or install."
+        );
+        for hours in [0, 2, 48] {
+            assert_eq!(
+                save_auto_update(&settings, "install", hours).unwrap_err(),
+                "Unsupported automatic update interval: use 1, 3, 6, 12 or 24 hours."
+            );
+        }
+        assert!(!file.exists());
+
+        let saved = save_auto_update(&settings, "install", 1).unwrap();
+        assert_eq!(saved.auto_update, AutoUpdateMode::Install);
+        assert_eq!(saved.auto_update_interval_hours, 1);
+        let reloaded = AppSettingsStore::load(file).get().unwrap();
+        assert_eq!(reloaded.auto_update, AutoUpdateMode::Install);
+        assert_eq!(reloaded.auto_update_interval_hours, 1);
+    }
+
     /// Issue #179: un progetto bloccato con un repository GitHub si importa dal mirror.
     #[test]
     fn a_blocked_project_with_a_github_repository_can_be_imported() {
@@ -1687,11 +1906,19 @@ mod tests {
             theme: Theme::Dark,
             beta_when_no_release: true,
             close_to_tray: true,
+            auto_update: AutoUpdateMode::Install,
+            auto_update_interval_hours: 12,
         })
         .unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"theme": "dark", "betaWhenNoRelease": true, "closeToTray": true})
+            serde_json::json!({
+                "theme": "dark",
+                "betaWhenNoRelease": true,
+                "closeToTray": true,
+                "autoUpdate": "install",
+                "autoUpdateIntervalHours": 12
+            })
         );
     }
 
@@ -1705,6 +1932,8 @@ mod tests {
                 "theme": "system",
                 "betaWhenNoRelease": false,
                 "closeToTray": false,
+                "autoUpdate": "notify",
+                "autoUpdateIntervalHours": 6,
                 "trayAvailable": false
             })
         );

@@ -25,6 +25,104 @@ export type AppSettings = {
    * l'app gira (per esempio un'estensione di GNOME attivata o disattivata).
    */
   trayAvailable: boolean;
+  /** L'aggiornamento automatico degli addon (D41, issue #199): niente, solo avviso o installa. */
+  autoUpdate: AutoUpdateMode;
+  /** Le ore tra due giri dell'aggiornamento automatico: una di 1, 3, 6, 12 e 24. */
+  autoUpdateIntervalHours: number;
+};
+
+/** Cosa fa l'aggiornamento automatico (`AutoUpdateMode` del backend, in minuscolo). */
+export type AutoUpdateMode = "off" | "notify" | "install";
+
+/**
+ * L'aggiornamento automatico di un'installazione (`get_auto_update`, issue #199). Un escluso è
+ * `{ source, key }`: si abbina a una riga con `project.source` e `project.key` del suo
+ * `AddonUpdate`, mai con `project.id`, che vale `0` fuori da CurseForge.
+ */
+export type InstallationAutoUpdate = {
+  /** L'installazione non partecipa per intero. */
+  disabled: boolean;
+  excluded: { source: SourceKind; key: string }[];
+};
+
+/** Un progetto con un aggiornamento trovato da un giro automatico (`AvailableUpdate`). */
+export type AvailableUpdate = {
+  source: SourceKind;
+  key: string;
+  name: string;
+  latest: FileSummary;
+};
+
+/**
+ * Un errore di un giro automatico. Con `source` e `key` nulli `name` è una cartella che nessuna
+ * fonte ha riconosciuto; con `name` vuoto è la versione precedente che non si è potuta tenere
+ * per l'Undo (gli aggiornamenti restano installati).
+ */
+export type AutoUpdateError = {
+  source: SourceKind | null;
+  key: string | null;
+  name: string;
+  message: string;
+};
+
+/** L'esito di un giro automatico su un'installazione (`InstallationReport`, issue #200). */
+export type InstallationReport = {
+  installationId: string;
+  installationName: string;
+  /** ISO 8601 UTC. */
+  checkedAt: string;
+  available: AvailableUpdate[];
+  /** Solo in `install`. */
+  updated: UpdateOutcome[];
+  /** I progetti esclusi dall'utente: una scelta, non un problema. */
+  excluded: UpdateOutcome[];
+  /** Solo in `install`: i progetti che la fonte salta, con il motivo. */
+  skipped: UpdateOutcome[];
+  errors: AutoUpdateError[];
+  /** Il controllo dell'installazione è fallito per intero. */
+  checkError: string | null;
+};
+
+/** Un giro automatico finito (`RoundReport`): `mode` è `notify` o `install`. */
+export type RoundReport = {
+  mode: Exclude<AutoUpdateMode, "off">;
+  startedAt: string;
+  finishedAt: string;
+  /** Un controllo è fallito per la rete: il prossimo giro è anticipato. */
+  retrying: boolean;
+  /** Solo le installazioni che partecipano. */
+  installations: InstallationReport[];
+};
+
+/** Un giro annullabile con `undo_last_auto_update` (issue #201). */
+export type UndoableRound = {
+  installationId: string;
+  /** ISO 8601 UTC. */
+  roundAt: string;
+  /** Quanti addon l'Undo rimetterebbe. */
+  addons: number;
+};
+
+/**
+ * Lo stato dell'aggiornamento automatico: la risposta di `get_auto_update_status` e il payload
+ * dell'evento `auto-update` (emesso alla fine di ogni giro e dopo un Undo).
+ */
+export type AutoUpdateStatus = {
+  running: boolean;
+  /** ISO 8601 UTC, o `null` (modalità `off`, giro in corso, primo giro non ancora pianificato). */
+  nextRoundAt: string | null;
+  /** `null` prima del primo giro. */
+  lastRound: RoundReport | null;
+  undoable: UndoableRound[];
+};
+
+/** L'esito dell'Undo di un progetto; `message` spiega `skipped` ed `error`. */
+export type UndoOutcome = {
+  source: SourceKind;
+  key: string;
+  name: string;
+  status: "restored" | "skipped" | "error";
+  message?: string;
 };
 
 export type Installation = {
@@ -224,6 +322,13 @@ export type CatalogAddon = {
   url: string | null;
   /** Falso: CurseForge non permette di scaricarlo da un'app di terzi. */
   allowModDistribution: boolean;
+  /**
+   * Il repository GitHub `owner/repo` ricavato da `links.sourceUrl`, senza richieste in più.
+   * Conta solo con `allowModDistribution = false`: `null` vuol dire che il mirror GitHub è
+   * impossibile (si va subito al sito); un valore che è possibile, ma serve `github_mirror` per
+   * sapere se c'è la stessa versione (issue #222, #223).
+   */
+  githubRepo: string | null;
   latestFile: CatalogFile | null;
   /** Il progetto è già nell'installazione. */
   installed: boolean;
@@ -455,6 +560,29 @@ export const api = {
   getAutostart: () => invoke<boolean>("get_autostart"),
   /** Restituisce lo stato riletto dal sistema operativo dopo la modifica. */
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
+  /** Un valore sconosciuto (modalità o intervallo) è rifiutato dal backend. */
+  setAutoUpdate: (mode: AutoUpdateMode, intervalHours: number) =>
+    invoke<AppSettings>("set_auto_update", { mode, intervalHours }),
+  getAutoUpdate: (installationId: string) =>
+    invoke<InstallationAutoUpdate>("get_auto_update", { installationId }),
+  /** Esclude il progetto (`excluded`) o lo riammette; restituisce lo stato salvato. */
+  setAutoUpdateExcluded: (
+    installationId: string,
+    project: { source: SourceKind; key: string },
+    excluded: boolean,
+  ) =>
+    invoke<InstallationAutoUpdate>("set_auto_update_excluded", {
+      installationId,
+      project,
+      excluded,
+    }),
+  setInstallationAutoUpdate: (installationId: string, enabled: boolean) =>
+    invoke<InstallationAutoUpdate>("set_installation_auto_update", { installationId, enabled }),
+  /** Memoria del backend e il manifesto della versione precedente, nessuna rete. */
+  getAutoUpdateStatus: () => invoke<AutoUpdateStatus>("get_auto_update_status"),
+  /** Rifiuta se non c'è niente da annullare; emette `auto-update` con lo stato nuovo. */
+  undoLastAutoUpdate: (installationId: string) =>
+    invoke<UndoOutcome[]>("undo_last_auto_update", { installationId }),
   exportAddons: (installationId: string) =>
     invoke<ExportResult>("export_addons", { installationId }),
   previewImport: (installationId: string, text: string) =>

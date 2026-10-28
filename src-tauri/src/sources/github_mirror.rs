@@ -492,6 +492,7 @@ mod tests {
                 source_url: source_url.map(str::to_owned),
             },
             latest_files_indexes: Vec::new(),
+            latest_files: Vec::new(),
         }
     }
 

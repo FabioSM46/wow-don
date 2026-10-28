@@ -13,6 +13,8 @@ import {
 import { AddByLink } from "./AddByLink";
 import { AddonDetailView } from "./AddonDetail";
 import { CatalogTable } from "./CatalogTable";
+import { SearchIcon } from "./icons";
+import { blockedPill } from "./pills";
 import { InstallAction, InstallResult, type InstallRun } from "./InstallAction";
 import { useInstallProgress } from "../addons/ProgressBar";
 import {
@@ -27,10 +29,12 @@ import { projectId } from "../addons/sources";
 import { installedIds, summarizeInstall, withInstalled } from "./install";
 import { forgetFinishedRuns, forgetInstalled, installKey } from "./stale";
 import {
-  blockedHint,
+  MIRROR_CHECKS_AT_ONCE,
   detailNote,
   isBlocked,
+  mirrorCheckFor,
   mirrorStep,
+  mirrorsToCheck,
   type MirrorCheck,
 } from "./mirror";
 import {
@@ -94,6 +98,8 @@ export function Search({
 
   // Il testo della casella diventa ricerca dopo una pausa di scrittura o con Invio.
   const [text, setText] = useState("");
+  // "Add by link" aperto dal pulsante della barra (issue #229).
+  const [linkOpen, setLinkOpen] = useState(false);
   const [search, setSearch] = useState<Omit<CatalogSearch, "versionType">>(defaultSearch);
   const [versionChoice, setVersionChoice] = useState<VersionChoice | null>(null);
   const versionType =
@@ -108,6 +114,9 @@ export function Search({
   // con gli stessi filtri, lasciando in vista quello che c'è.
   const [refresh, setRefresh] = useState(0);
   const tracker = useRef(new RequestTracker());
+  // L'installazione dei risultati in `load`: dopo un cambio restano in vista quelli di prima
+  // finché non arriva la risposta nuova.
+  const resultsOf = useRef<string | null>(null);
 
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
   const [categoriesError, setCategoriesError] = useState<string | null>(null);
@@ -158,18 +167,31 @@ export function Search({
   });
 
   // Il mirror GitHub dei progetti bloccati (issue #165), per installazione e progetto: chiesto
-  // solo dal dettaglio o da Install, mai per tutti i risultati (GitHub dà 60 richieste l'ora), e
-  // ricordato per la sessione. `checking` evita due richieste per lo stesso progetto; `mirrorGen`
-  // scarta le risposte arrivate dopo che gli esiti sono stati dimenticati.
+  // da solo per i bloccati visibili con un repository GitHub (issue #223, al massimo
+  // `MIRROR_CHECKS_AT_ONCE` alla volta), dal dettaglio o da Install, e ricordato per la sessione.
+  // `checking` evita due richieste per lo stesso progetto; `mirrorGen` scarta le risposte
+  // arrivate dopo che gli esiti sono stati dimenticati. `autoRunning` conta i controlli
+  // automatici ancora senza risposta, anche di una generazione vecchia; `autoSettled` cambia a
+  // ogni risposta e fa partire i successivi. `autoPaused`: un controllo automatico è fallito
+  // (CurseForge o la rete non rispondono), quindi gli altri non partono più da soli fino alla
+  // ricerca o alla generazione successiva; Install e il dettaglio continuano a chiedere.
   const [mirrors, setMirrors] = useState<Map<string, MirrorCheck>>(new Map());
   const checking = useRef(new Set<string>());
   const mirrorGen = useRef(0);
+  const autoRunning = useRef(0);
+  const autoPaused = useRef(false);
+  const [autoSettled, setAutoSettled] = useState(0);
+  /** L'esito che vale per `addon` in questa installazione (un bloccato senza repository è già
+   *  "website only"). */
+  const mirrorOf = (addon: CatalogAddon) =>
+    mirrorCheckFor(addon, mirrors.get(installKey(installation.id, addon.id)));
 
   // L'opzione della Beta cambia il file che l'app installerebbe, e con lui il mirror: gli esiti,
   // le richieste in corso e i motivi già mostrati non valgono più. Una risposta arrivata dopo
   // si scarta (`mirrorGen`), così un nuovo clic su Install fa subito una richiesta nuova.
   useEffect(() => {
     mirrorGen.current += 1;
+    autoPaused.current = false;
     checking.current.clear();
     setMirrors((previous) => (previous.size === 0 ? previous : new Map()));
     setRuns((previous) => {
@@ -201,19 +223,21 @@ export function Search({
     setPageError(null);
   }
 
-  /** Chiede a `github_mirror` il mirror di `addon`; con `installAfter` poi lo installa. */
-  function checkMirror(addon: CatalogAddon, installAfter: boolean) {
+  /** Chiede a `github_mirror` il mirror di `addon`; con `installAfter` poi lo installa. `auto`:
+   *  il controllo automatico della lista, contato in `autoRunning`. */
+  function checkMirror(addon: CatalogAddon, installAfter: boolean, auto = false) {
     const id = installation.id;
     const key = installKey(id, addon.id);
     if (checking.current.has(key)) return;
     checking.current.add(key);
+    if (auto) autoRunning.current += 1;
     const gen = mirrorGen.current;
     // Una risposta di una generazione vecchia non scrive niente e non installa: il file che ha
     // controllato non è più quello che `install_addon` sceglierebbe.
     const current = () => gen === mirrorGen.current;
     const setCheck = (check: MirrorCheck) =>
       setMirrors((previous) => new Map(previous).set(key, check));
-    setCheck({ status: "checking" });
+    setCheck(installAfter ? { status: "checking", forInstall: true } : { status: "checking" });
     if (installAfter) {
       setLastInstall(key);
       setPageError(null);
@@ -236,6 +260,7 @@ export function Search({
         },
         (err) => {
           if (!current()) return;
+          if (auto) autoPaused.current = true;
           const message = errorMessage(err);
           setCheck({ status: "failed", message });
           if (installAfter) {
@@ -245,6 +270,10 @@ export function Search({
       )
       .finally(() => {
         if (current()) checking.current.delete(key);
+        if (auto) {
+          autoRunning.current -= 1;
+          setAutoSettled((n) => n + 1);
+        }
       });
   }
 
@@ -254,7 +283,7 @@ export function Search({
       install(addon);
       return;
     }
-    const check = mirrors.get(installKey(installation.id, addon.id));
+    const check = mirrorOf(addon);
     const step = mirrorStep(check);
     if (step.kind === "check") checkMirror(addon, true);
     else if (check && step.kind !== "wait") installChecked(addon, check);
@@ -312,7 +341,7 @@ export function Search({
         run={runs.get(installKey(installation.id, addon.id))}
         progress={runProgressOf(addon.id)}
         variant={variant}
-        mirror={mirrors.get(installKey(installation.id, addon.id))}
+        mirror={mirrorOf(addon)}
         onInstall={requestInstall}
         onOpenPage={openPage}
       />
@@ -324,16 +353,16 @@ export function Search({
   function renderBlockedNote(addon: CatalogAddon) {
     if (addon.installed) {
       return (
-        <p className="hint">
+        <p className="detail-notice">
           The author does not allow downloads from other apps: updates use GitHub when it has
           the same release.
         </p>
       );
     }
-    const check = mirrors.get(installKey(installation.id, addon.id));
+    const check = mirrorOf(addon);
     if (check?.status === "failed") {
       return (
-        <p className="detail-meta error" role="alert">
+        <p className="detail-notice error" role="alert">
           {detailNote(check)}{" "}
           <button className="link inline" onClick={() => checkMirror(addon, false)}>
             Try again
@@ -342,7 +371,7 @@ export function Search({
       );
     }
     return (
-      <p className="hint" role="status">
+      <p className="detail-notice" role="status">
         {detailNote(check)}
       </p>
     );
@@ -362,9 +391,13 @@ export function Search({
   }, []);
 
   // Il dettaglio di un addon bloccato e non installato chiede subito il mirror GitHub, una
-  // volta per sessione: Install e la frase sotto il nome lo mostrano (issue #165).
+  // volta per sessione: Install e la frase sotto il nome lo mostrano (issue #165). L'esito già
+  // chiesto dalla riga (anche in corso) vale anche qui; senza repository non si chiede niente.
   const detailBlocked =
-    selected !== null && isBlocked(selected) && !withInstalled(selected, installedHere).installed;
+    selected !== null &&
+    isBlocked(selected) &&
+    selected.githubRepo !== null &&
+    !withInstalled(selected, installedHere).installed;
   useEffect(() => {
     if (!selected || !detailBlocked) return;
     if (mirrors.has(installKey(installation.id, selected.id))) return;
@@ -424,6 +457,10 @@ export function Search({
       .searchCatalog(installation.id, params, 0)
       .then((page) => {
         if (!tracker.current.isLatest(id)) return;
+        resultsOf.current = installation.id;
+        // Una ricerca nuova riprova i controlli automatici dei progetti nuovi; quelli falliti
+        // restano falliti (riprova Install).
+        autoPaused.current = false;
         setLoad({ results: firstPage(page), loading: false, error: null });
       })
       .catch((err) => {
@@ -431,6 +468,25 @@ export function Search({
         setLoad({ results: null, loading: false, error: errorMessage(err) });
       });
   }, [started, missingKey, installation.id, params, retry, refresh, betaWhenNoRelease]);
+
+  // I bloccati visibili con un repository GitHub si controllano da soli (issue #223), nell'ordine
+  // della lista e al massimo `MIRROR_CHECKS_AT_ONCE` alla volta. Solo con i risultati della
+  // ricerca attuale: durante una ricerca nuova quelli in vista sono di prima. Quelli non ancora
+  // partiti non sono una coda: cambiando ricerca o pagina si sceglie di nuovo tra le righe in
+  // vista, e gli esiti già arrivati restano per la sessione.
+  useEffect(() => {
+    if (load.loading || !load.results || resultsOf.current !== installation.id) return;
+    if (autoPaused.current) return;
+    const slots = MIRROR_CHECKS_AT_ONCE - autoRunning.current;
+    if (slots <= 0) return;
+    const id = installation.id;
+    const visible = load.results.addons.map((addon) => withInstalled(addon, installedHere));
+    const known = (addon: CatalogAddon) => {
+      const key = installKey(id, addon.id);
+      return mirrors.has(key) || checking.current.has(key);
+    };
+    for (const addon of mirrorsToCheck(visible, known, slots)) checkMirror(addon, false, true);
+  }, [load.loading, load.results, installedHere, mirrors, autoSettled, installation.id]);
 
   // Addon tolti, reinstallati o installati fuori dalla Search: il segno "installato" dei
   // risultati, i progetti installati nella sessione e gli esiti finiti non valgono più. Le
@@ -492,11 +548,16 @@ export function Search({
     setSearch((previous) => ({ ...previous, query: "", categoryId: null }));
   }
 
-  // "Add by link" non usa CurseForge: resta anche senza la chiave. Il suo stato vale per
-  // l'installazione, quindi si rimonta quando cambia.
+  // "Add by link" non usa CurseForge: resta anche senza la chiave, e allora è sempre aperto.
+  // Con la chiave si apre dal pulsante della barra (issue #229), che esiste solo in quel
+  // ramo: senza chiave il ritorno anticipato qui sotto non disegna la barra. Chiuso nasconde
+  // solo il campo: anteprima, avanzamento ed esito restano in vista, e restano montati. Il suo
+  // stato vale per l'installazione, quindi si rimonta quando cambia.
   const addByLink = (
     <AddByLink
       key={installation.id}
+      id="add-by-link"
+      open={missingKey || linkOpen}
       installationId={installation.id}
       onInstalled={() => {
         onInstalled?.();
@@ -551,18 +612,21 @@ export function Search({
       )}
 
       <div ref={resultsRef} hidden={selected !== null}>
-        <div className="toolbar">
-          <input
-            className="search"
-            type="search"
-            placeholder="Search CurseForge add-ons…"
-            aria-label="Search CurseForge add-ons"
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") submitNow();
-            }}
-          />
+        <div className="toolbar search-toolbar">
+          <span className="search-field">
+            <SearchIcon />
+            <input
+              className="search"
+              type="search"
+              placeholder="Search CurseForge add-ons…"
+              aria-label="Search CurseForge add-ons"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") submitNow();
+              }}
+            />
+          </span>
           <select
             className="select"
             aria-label="Category"
@@ -629,6 +693,14 @@ export function Search({
               {ascending ? "↑" : "↓"}
             </button>
           </div>
+          <button
+            className="button secondary"
+            aria-expanded={linkOpen}
+            aria-controls="add-by-link"
+            onClick={() => setLinkOpen((open) => !open)}
+          >
+            Add by link
+          </button>
         </div>
 
         {addByLink}
@@ -684,9 +756,7 @@ export function Search({
                 onSelect={openDetail}
                 selectedId={lastSelectedId}
                 renderActions={renderInstall("row")}
-                hintFor={(addon) =>
-                  blockedHint(mirrors.get(installKey(installation.id, addon.id)))
-                }
+                pillFor={(addon) => blockedPill(mirrorOf(addon))}
               />
             )}
             {hasMore(results) && (

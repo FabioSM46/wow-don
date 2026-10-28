@@ -7,6 +7,7 @@ import {
   useState,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -37,7 +38,16 @@ import { SOURCE_LABELS, projectId, sourcesIn, updateRequest, type ProjectRef } f
 import { ProgressBar, useInstallProgress } from "./ProgressBar";
 import { refreshCheck } from "./refresh";
 import { ContextMenu } from "./ContextMenu";
+import {
+  EXCLUDED_TITLE,
+  excludedAfter,
+  excludedIds,
+  exclusionChoice,
+  exclusionProjects,
+  isExcluded,
+} from "./exclusion";
 import { blockedHint, isUpdatable } from "./mirror";
+import { interfaceSummary } from "./interfaceColumn";
 import {
   confirmText,
   foldersOf,
@@ -72,6 +82,9 @@ type Props = {
   /** Rimozione, aggiornamento o reinstallazione hanno (forse) cambiato gli addon sul disco
    * dell'installazione `installationId`: la tab Search rilegge i suoi risultati. */
   onChanged?: (installationId: string) => void;
+  /** La riga dell'aggiornamento automatico (`AutoUpdateLine`): una barra propria tra il titolo
+   * e i filtri. */
+  autoUpdateLine?: ReactNode;
 };
 
 /**
@@ -144,6 +157,7 @@ export function AddonTable({
   onInstallZip,
   zipBusy = false,
   onChanged,
+  autoUpdateLine,
 }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
@@ -299,6 +313,71 @@ export function AddonTable({
       mounted.current = false;
     };
   }, []);
+
+  // Gli addon esclusi dall'aggiornamento automatico (issue #204), per `projectId`: si leggono
+  // con `get_auto_update` per installazione e si abbinano alle righe su `project.source` e
+  // `project.key`. `undefined` finché la lettura non è riuscita.
+  const [excluded, setExcluded] = useState<ReadonlySet<string> | undefined>();
+  const [excludedError, setExcludedError] = useState<string | null>(null);
+  const [savingExclusion, setSavingExclusion] = useState(false);
+  // La scelta in salvataggio: le righe la mostrano finché il backend non risponde, poi vale lo
+  // stato salvato (anche dopo un errore, che riporta le righe a quello che c'è davvero).
+  const [pendingExclusion, setPendingExclusion] = useState<{
+    projects: ProjectRef[];
+    exclude: boolean;
+  } | null>(null);
+  const [exclusionError, setExclusionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    setExcluded(undefined);
+    setExcludedError(null);
+    setSavingExclusion(false);
+    setPendingExclusion(null);
+    setExclusionError(null);
+    api
+      .getAutoUpdate(installation.id)
+      .then((state) => current && setExcluded(excludedIds(state)))
+      .catch((err) => current && setExcludedError(errorMessage(err)));
+    return () => {
+      current = false;
+    };
+  }, [installation.id]);
+
+  /**
+   * Esclude o riammette i progetti, uno alla volta: ogni risposta è lo stato salvato e lo
+   * sostituisce. Al primo errore si ferma: le righe mostrano quello che il backend ha salvato.
+   */
+  async function saveExclusion(projects: ProjectRef[], exclude: boolean) {
+    const id = installation.id;
+    if (projects.length === 0 || savingExclusion) return;
+    setSavingExclusion(true);
+    setPendingExclusion({ projects, exclude });
+    setExclusionError(null);
+    try {
+      for (const project of projects) {
+        const saved = await api.setAutoUpdateExcluded(id, project, exclude);
+        if (!mounted.current || currentId.current !== id) return;
+        setExcluded(excludedIds(saved));
+        setExcludedError(null);
+      }
+    } catch (err) {
+      if (mounted.current && currentId.current === id) {
+        setExclusionError(`Could not save the automatic update choice: ${errorMessage(err)}`);
+      }
+    } finally {
+      if (mounted.current && currentId.current === id) {
+        setSavingExclusion(false);
+        setPendingExclusion(null);
+      }
+    }
+  }
+
+  // Quello che le righe mostrano: la scelta in salvataggio sopra lo stato salvato.
+  const shownExcluded =
+    pendingExclusion && excluded
+      ? excludedAfter(excluded, pendingExclusion.projects, pendingExclusion.exclude)
+      : excluded;
 
   // `reinstall` (issue #149): riscarica anche i progetti già aggiornati, con la stessa barra e
   // lo stesso riepilogo di un aggiornamento.
@@ -580,6 +659,12 @@ export function AddonTable({
         closeMenu(true);
         updateProjects(reinstallProjects(targets, updates), true);
         break;
+      case "autoUpdate": {
+        const projects = exclusionProjects(targets, updates);
+        closeMenu(true);
+        void saveExclusion(projects, exclusionChoice(projects, excluded));
+        break;
+      }
       case "remove":
         // Il focus va alla barra di conferma, non alla riga.
         closeMenu(false);
@@ -593,7 +678,7 @@ export function AddonTable({
     returnFocus.current?.focus();
   }
 
-  const menuState = { updates, busy, checking };
+  const menuState = { updates, busy, checking, excluded, excludedError, savingExclusion };
   // Una riga che i filtri hanno nascosto non può restare l'unica raggiungibile con Tab.
   const tabStop =
     focusRow !== null && visible.some((g) => g.main.folder === focusRow)
@@ -621,8 +706,17 @@ export function AddonTable({
 
   return (
     <section ref={sectionRef} className="addons" aria-labelledby="addons-title">
-      <header className="section-header">
-        <h2 id="addons-title">Addons · {installation.name}</h2>
+      <header className="section-header addons-header">
+        <h2 id="addons-title" className="addons-title">
+          Addons
+          {/* L'installazione resta nel titolo: la sezione è etichettata da questo testo. */}
+          <span className="addons-count">
+            {installation.name}
+            {load.state === "ready" &&
+              ` · ${visible.length === groups.length ? groups.length : `${visible.length} of ${groups.length}`} ${groups.length === 1 ? "addon" : "addons"}`}
+            {load.state === "ready" && updateCount > 0 && ` · ${updateCount} to update`}
+          </span>
+        </h2>
         <div className="section-actions">
           {selection !== null && (
             <span className="selection-status">
@@ -630,12 +724,6 @@ export function AddonTable({
               <button className="link" onClick={() => setSelection(null)}>
                 Clear selection
               </button>
-            </span>
-          )}
-          {load.state === "ready" && (
-            <span className="muted count">
-              {visible.length} of {groups.length} {groups.length === 1 ? "addon" : "addons"}
-              {updateCount > 0 && ` · ${updateCount} to update`}
             </span>
           )}
           {onInstallZip && (
@@ -656,16 +744,11 @@ export function AddonTable({
           >
             {rescanning ? "Reloading…" : "Reload addons"}
           </button>
-          <button
-            className="button secondary"
-            onClick={() => void runCheck()}
-            disabled={checking || busy}
-          >
-            {checking ? "Checking…" : "Check for updates"}
-          </button>
+          {/* Un solo pulsante principale (D20, D42): "Update all" è tenue come gli Update
+              delle righe. */}
           {(running || updatableIds.length > 0) && (
             <button
-              className="button"
+              className="button soft"
               onClick={() => updateProjects(updatableIds)}
               disabled={busy || checking || versionSaving !== null}
             >
@@ -678,8 +761,13 @@ export function AddonTable({
                 : `Update all (${updatableIds.length})`}
             </button>
           )}
+          <button className="button" onClick={() => void runCheck()} disabled={checking || busy}>
+            {checking ? "Checking…" : "Check for updates"}
+          </button>
         </div>
       </header>
+
+      {autoUpdateLine}
 
       {checkError && (
         <p className="message error" role="alert">
@@ -689,6 +777,19 @@ export function AddonTable({
       {rescanError && (
         <p className="message error" role="alert">
           {rescanError}
+        </p>
+      )}
+      {excludedError && (
+        <p className="message error" role="alert">
+          Could not read the automatic update choices: {excludedError}
+        </p>
+      )}
+      {exclusionError && (
+        <p className="message error" role="alert">
+          {exclusionError}{" "}
+          <button className="link subtle" onClick={() => setExclusionError(null)}>
+            Dismiss
+          </button>
         </p>
       )}
       {confirming && (
@@ -893,6 +994,11 @@ export function AddonTable({
                             {/* `aria-selected` su una riga di tabella non è letto da tutti gli
                                 screen reader: lo stato è anche nel testo della riga. */}
                             {isSelected && <span className="visually-hidden"> (selected)</span>}
+                            {isExcluded(update, shownExcluded) && (
+                              <span className="pill addon-pill" title={EXCLUDED_TITLE}>
+                                No auto-update
+                              </span>
+                            )}
                             {error && <span className="addon-error">{error}</span>}
                           </td>
                           <td className="mono">
@@ -912,9 +1018,7 @@ export function AddonTable({
                               {addon.author ?? "—"}
                             </span>
                           </td>
-                          <td className="mono interface">
-                            {addon.interface.length > 0 ? addon.interface.join(", ") : "—"}
-                          </td>
+                          <InterfaceCell versions={addon.interface} flavor={installation.flavor} />
                           <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
                           <ProjectCell
                             update={update}
@@ -969,9 +1073,10 @@ export function AddonTable({
                                   {other.author ?? "—"}
                                 </span>
                               </td>
-                              <td className="mono interface">
-                                {other.interface.length > 0 ? other.interface.join(", ") : "—"}
-                              </td>
+                              <InterfaceCell
+                                versions={other.interface}
+                                flavor={installation.flavor}
+                              />
                               <td className="nowrap">{formatModified(other.modifiedMs)}</td>
                               <td />
                               <td />
@@ -1205,11 +1310,12 @@ function UpdateCell({
   switch (update.status) {
     case "updateAvailable":
       return (
-        <td title={installedTitle(update, update.latest.date)}>
-          <span className="update-available">{update.latest.name}</span>
-          {isUpdatable(update) && (
+        <td className="nowrap" title={installedTitle(update, update.latest.date)}>
+          {isUpdatable(update) ? (
             <button
-              className="button secondary small row-action"
+              className="button soft small row-update"
+              // Il testo si accorcia con "…": la versione intera resta nel suggerimento.
+              title={`Update to ${update.latest.name}`}
               disabled={disabled}
               onClick={(event) => {
                 // Il pulsante non apre e chiude la riga del gruppo.
@@ -1217,31 +1323,61 @@ function UpdateCell({
                 onUpdate([update.project!]);
               }}
             >
-              Update
+              Update to {update.latest.name}
             </button>
+          ) : (
+            <span className="pill accent addon-pill">{update.latest.name}</span>
           )}
         </td>
       );
     case "upToDate":
       return (
-        <td className="muted" title={installedTitle(update)}>
-          Up to date
+        <td className="nowrap" title={installedTitle(update)}>
+          <span className="pill ok addon-pill">Up to date</span>
         </td>
       );
     case "betaOnly":
       return (
         <td
-          className="muted"
+          className="nowrap"
           title={`${installedTitle(update) ?? ""}\nOnly a beta is newer: ${update.latest.name}. Turn on "Use beta files when there is no release" in Options to update to it.`.trim()}
         >
-          Only beta files
+          <span className="pill addon-pill">Only beta files</span>
         </td>
       );
     case "error":
-      return <td className="error">{update.message}</td>;
+      return (
+        <td className="nowrap">
+          {/* Il messaggio intero nel suggerimento; per chi usa uno screen reader anche nel testo. */}
+          <span className="pill danger addon-pill" title={update.message}>
+            Error<span className="visually-hidden">: {update.message}</span>
+          </span>
+        </td>
+      );
     case "notMatched":
       return <td />;
   }
+}
+
+/** Una sola versione dell'interfaccia e il resto come `+N`; l'elenco intero nel suggerimento. */
+function InterfaceCell({ versions, flavor }: { versions: number[]; flavor: string }) {
+  const summary = interfaceSummary(versions, flavor);
+  if (!summary) return <td className="mono">—</td>;
+  return (
+    <td className="mono" title={summary.title}>
+      {summary.shown}
+      {summary.more > 0 && (
+        <span className="more-folders">
+          <span aria-hidden="true">+{summary.more}</span>
+          {/* Testo nascosto e non `aria-label`: uno span senza ruolo non viene sempre letto. */}
+          <span className="visually-hidden">
+            {" "}
+            and {summary.more} more: {summary.title}
+          </span>
+        </span>
+      )}
+    </td>
+  );
 }
 
 /** Lo stato riguarda il progetto: il suggerimento dice quale file del progetto è installato. */

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, errorMessage, type Theme } from "../api";
+import { SettingRow, SettingsSection, Segmented } from "./Setting";
 import { isTheme, THEMES } from "./theme";
 
 type Props = {
@@ -11,7 +12,7 @@ type Props = {
   onChange: (theme: Theme) => void;
 };
 
-/** La sezione "Appearance" di Options: un solo controllo per il tema. */
+/** La sezione "Appearance" di Options: un solo controllo segmentato per il tema. */
 export function Appearance({ theme, loadError, onChange }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -38,29 +39,30 @@ export function Appearance({ theme, loadError, onChange }: Props) {
   const shownError = error ?? loadError;
 
   return (
-    <section className="appearance" aria-labelledby="appearance-title">
-      <header className="section-header">
-        <h2 id="appearance-title">Appearance</h2>
-        <select
-          className="select"
-          aria-label="Theme"
-          value={theme ?? "system"}
-          disabled={theme === null || busy}
-          onChange={(event) => void choose(event.target.value)}
+    <SettingsSection id="appearance-title" title="Appearance" className="appearance">
+      <div className="settings-card">
+        <SettingRow
+          label="Theme"
+          labelId="theme-label"
+          description="System follows the light or dark setting of the computer."
+          descriptionId="theme-description"
         >
-          {THEMES.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </header>
+          <Segmented
+            labelledBy="theme-label"
+            describedBy="theme-description"
+            options={THEMES}
+            value={theme}
+            disabled={theme === null || busy}
+            onChange={(value) => void choose(value)}
+          />
+        </SettingRow>
+      </div>
 
       {shownError && (
         <p className="message error" role="alert">
           {shownError}
         </p>
       )}
-    </section>
+    </SettingsSection>
   );
 }

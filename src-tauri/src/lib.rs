@@ -2,6 +2,7 @@ mod addon_import;
 mod addon_list;
 mod addon_remove;
 mod addons;
+mod auto_update;
 mod autostart;
 mod backup;
 mod catalog;
@@ -14,6 +15,7 @@ mod install_local;
 mod install_new;
 mod installations;
 mod parallel;
+mod previous;
 mod progress;
 mod sources;
 mod store;
@@ -53,6 +55,7 @@ pub fn run() {
         .manage(commands::InstallLock::default())
         .manage(addons::cache::FingerprintCache::default())
         .manage(tray::TrayStatus::default())
+        .manage(auto_update::AutoUpdate::default())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             app.manage(Mutex::new(InstallationStore::load(
@@ -67,11 +70,19 @@ pub fn run() {
             app.manage(Mutex::new(AppSettingsStore::load(
                 config_dir.join(APP_SETTINGS_FILE),
             )));
+            // La versione precedente dell'ultimo giro automatico (issue #201): il manifesto si
+            // rilegge a ogni uso e si scrive solo sotto `InstallLock`, quindi niente `Mutex`.
+            app.manage(previous::PreviousManifest::new(
+                config_dir.join(previous::PREVIOUS_FILE),
+            ));
             tray::create(app.handle());
             // The main window is declared invisible in `tauri.conf.json` (no flash, D36), and
             // the window-state plugin above never restores visibility (no `VISIBLE` flag):
             // shown here unless an autostart launch stays in the tray.
             autostart::show_main_window_unless_hidden_start(app.handle());
+            // Il giro automatico degli aggiornamenti (D41, issue #200) parte anche con
+            // `--autostart`: il primo giro aspetta `STARTUP_DELAY`, gli stati sono già registrati.
+            auto_update::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(tray::on_window_event)
@@ -106,6 +117,12 @@ pub fn run() {
             commands::set_theme,
             commands::set_beta_when_no_release,
             commands::set_close_to_tray,
+            commands::set_auto_update,
+            commands::get_auto_update,
+            commands::set_auto_update_excluded,
+            commands::set_installation_auto_update,
+            commands::get_auto_update_status,
+            commands::undo_last_auto_update,
             commands::get_autostart,
             commands::set_autostart,
         ])

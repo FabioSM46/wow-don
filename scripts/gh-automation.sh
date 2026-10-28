@@ -77,7 +77,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # features set it:
 #
 #   - the `headRefOid` pull-request `--json` field — gh 2.18.0 (cli/cli#6399). The
-#     `/process-pr` head re-read requests it.
+#     `/develop-iteration` watch and the `/process-pr` head re-read both request it.
 #   - `gh pr merge --match-head-commit` — gh 2.13.0 (cli/cli#5692). `pr-merge --head`
 #     passes it, and without it the atomic head check is lost.
 #

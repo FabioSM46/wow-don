@@ -95,6 +95,16 @@ Iteration 6:
 - Import più veloce: download in parallelo, installazione in fila (#180); mediana su 12 addon
   CurseForge da 10,6 s a 4,5 s.
 
+## M4.9 — Aggiornamento automatico degli addon
+
+D41, issue #199–#204:
+
+- Modalità `off`, `notify` (default) e `install`, con intervallo e esclusioni per addon e per
+  installazione (#199).
+- Giro automatico all'avvio e a intervalli nel backend (#200), conteggio nella tray (#202).
+- Versione precedente tenuta dai giri automatici e "Undo last auto-update" (#201).
+- Options, voce "Don't auto-update" e riga di stato nella tab Installed (#203, #204).
+
 ## M5 — Chiave per applicazioni di terzi e primo rilascio
 
 - Inviare a CurseForge/Overwolf il form per la chiave da applicazione.
@@ -109,6 +119,8 @@ Iteration 6:
 
 - Token GitHub personale facoltativo, per superare il limite di 60 richieste l'ora.
 - Ricerca nel catalogo WoWInterface.
+- Notifiche di sistema per l'aggiornamento automatico (D41): richiedono
+  `tauri-plugin-notification`, una dipendenza da approvare.
 
 - Wago Addons (D39): richiesta di accesso all'API inviata dall'utente; la fonte si specifica
   solo se Wago concede una chiave da usare in WoW-don.

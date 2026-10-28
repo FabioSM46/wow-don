@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../api";
+import { SettingsSection, SwitchRow } from "./Setting";
 import { autostartHint, closeToTrayHint } from "./system";
 
 type Props = {
@@ -76,7 +77,7 @@ export function SystemOptions({ active }: Props) {
         setAutostart(await api.setAutostart(next));
       }
     } catch (err) {
-      // La casella è controllata: senza un valore salvato nuovo resta su quello di prima.
+      // L'interruttore è controllato: senza un valore salvato nuovo resta su quello di prima.
       setError(errorMessage(err));
     } finally {
       savingRef.current = false;
@@ -88,45 +89,28 @@ export function SystemOptions({ active }: Props) {
   const shownError = error ?? loadError;
 
   return (
-    <section className="system-option" aria-labelledby="system-title">
-      <header className="section-header">
-        <h2 id="system-title">System</h2>
-      </header>
-      <div className="option-row">
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={tray?.closeToTray ?? false}
-            disabled={tray === null || !tray.trayAvailable || saving !== null}
-            aria-describedby="close-to-tray-hint"
-            onChange={(event) => void save("tray", event.target.checked)}
-          />
-          Close to tray
-        </label>
-        <span className="hint" id="close-to-tray-hint">
-          {closeToTrayHint(trayAvailable)}
-        </span>
-      </div>
-      <div className="option-row">
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={autostart ?? false}
-            disabled={autostart === null || saving !== null}
-            aria-describedby="autostart-hint"
-            onChange={(event) => void save("autostart", event.target.checked)}
-          />
-          Start with the system
-        </label>
-        <span className="hint" id="autostart-hint">
-          {autostartHint(tray?.closeToTray ?? null, trayAvailable)}
-        </span>
+    <SettingsSection id="system-title" title="System" className="system-option">
+      <div className="settings-card">
+        <SwitchRow
+          label="Close to tray"
+          description={closeToTrayHint(trayAvailable)}
+          checked={tray?.closeToTray ?? false}
+          disabled={tray === null || !tray.trayAvailable || saving !== null}
+          onChange={(next) => void save("tray", next)}
+        />
+        <SwitchRow
+          label="Start with the system"
+          description={autostartHint(tray?.closeToTray ?? null, trayAvailable)}
+          checked={autostart ?? false}
+          disabled={autostart === null || saving !== null}
+          onChange={(next) => void save("autostart", next)}
+        />
       </div>
       {shownError && (
         <p className="message error" role="alert">
           {shownError}
         </p>
       )}
-    </section>
+    </SettingsSection>
   );
 }

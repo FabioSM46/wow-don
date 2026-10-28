@@ -7,7 +7,13 @@
 //!
 //! I chiamanti (`updates::update_addons` e `install_new::install_addon`) fanno:
 //! `WorkDir::staging(addons)` → [`extract`] → [`replace`].
+//!
+//! Il giro automatico (D41, issue #201) tiene la versione precedente: dentro
+//! [`keeping_replaced`] le cartelle che [`replace`] sposta da parte finiscono in una cartella
+//! della generazione invece di essere cancellate, e [`take_kept`] dice quali. Fuori da quello
+//! scope (ogni comando manuale) non cambia niente.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Cursor, Read, Write};
@@ -48,7 +54,10 @@ impl WorkDir {
         Self::create(addons_dir, "backup")
     }
 
-    fn create(addons_dir: &Path, kind: &str) -> Result<Self, String> {
+    /// Una cartella di lavoro `.wow-don-<kind>-*` accanto ad `AddOns`, per chi sposta cartelle
+    /// sullo stesso disco fuori da questo modulo (la generazione del giro automatico,
+    /// `previous`).
+    pub(crate) fn create(addons_dir: &Path, kind: &str) -> Result<Self, String> {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let parent = addons_dir
             .parent()
@@ -272,7 +281,7 @@ pub fn replace(addons_dir: &Path, staging_dir: &Path, remove: &[String]) -> Resu
     })
 }
 
-fn replace_with(
+pub(crate) fn replace_with(
     addons_dir: &Path,
     staging_dir: &Path,
     remove: &[String],
@@ -334,8 +343,118 @@ fn replace_with(
         }
         done.push((from, to));
     }
+    keep_aside(backup.path(), &set_aside, &mut rename);
     drop(backup);
     Ok(())
+}
+
+// ── Versione precedente del giro automatico (issue #201) ────────────────────
+
+thread_local! {
+    /// Attivo solo dentro [`keeping_replaced`], sul thread che lo chiama: il giro automatico
+    /// aggiorna i progetti uno dopo l'altro su quel thread, e nessun comando manuale lo vede.
+    static KEEPER: RefCell<Option<Keeper>> = const { RefCell::new(None) };
+}
+
+struct Keeper {
+    /// La cartella della generazione in preparazione.
+    root: PathBuf,
+    next_slot: usize,
+    /// Quello che i `replace` hanno tenuto dopo l'ultimo [`take_kept`].
+    current: Option<Kept>,
+}
+
+/// Le cartelle sostituite che i [`replace`] di un progetto hanno tenuto, in
+/// `<generazione>/<slot>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Kept {
+    /// Il nome della sottocartella della generazione, un numero (`0`, `1`, …).
+    pub slot: String,
+    /// Le cartelle tenute, con il nome che avevano in `AddOns`.
+    pub folders: Vec<String>,
+    /// Falso se una cartella non si è potuta tenere (ed è stata cancellata come oggi): la
+    /// versione precedente non è completa e non si può rimettere.
+    pub complete: bool,
+}
+
+/// Esegue `run` con i [`replace`] di questo thread che tengono le cartelle sostituite in una
+/// sottocartella di `root` invece di cancellarle. `root` deve esistere, sullo stesso disco di
+/// `AddOns`. Alla fine (anche dopo un panic) i `replace` tornano a cancellare.
+pub fn keeping_replaced<R>(root: &Path, run: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            KEEPER.with(|keeper| keeper.borrow_mut().take());
+        }
+    }
+    KEEPER.with(|keeper| {
+        *keeper.borrow_mut() = Some(Keeper {
+            root: root.to_path_buf(),
+            next_slot: 0,
+            current: None,
+        });
+    });
+    let _reset = Reset;
+    run()
+}
+
+/// Quello che i [`replace`] hanno tenuto dall'ultima chiamata, e ricomincia: la chiamata
+/// successiva dei `replace` usa uno slot nuovo. `None` fuori da [`keeping_replaced`] o se
+/// nessun `replace` è riuscito.
+pub fn take_kept() -> Option<Kept> {
+    KEEPER.with(|keeper| keeper.borrow_mut().as_mut().and_then(|k| k.current.take()))
+}
+
+/// Dopo un [`replace`] riuscito, sposta le cartelle `names` da `backup` allo slot del progetto,
+/// se [`keeping_replaced`] è attivo. Con lo slot ancora da creare basta un `rename` dell'intero
+/// appoggio; un secondo `replace` dello stesso progetto aggiunge le sue cartelle, senza
+/// sovrascrivere quelle già tenute (la versione più vecchia resta).
+fn keep_aside(
+    backup: &Path,
+    names: &[String],
+    rename: &mut impl FnMut(&Path, &Path) -> io::Result<()>,
+) {
+    KEEPER.with(|keeper| {
+        let mut keeper = keeper.borrow_mut();
+        let Some(Keeper {
+            root,
+            next_slot,
+            current,
+        }) = keeper.as_mut()
+        else {
+            return;
+        };
+        let kept = current.get_or_insert_with(|| {
+            let slot = next_slot.to_string();
+            *next_slot += 1;
+            Kept {
+                slot,
+                folders: Vec::new(),
+                complete: true,
+            }
+        });
+        if names.is_empty() {
+            return;
+        }
+        let slot = root.join(&kept.slot);
+        if fs::symlink_metadata(&slot).is_err() {
+            match rename(backup, &slot) {
+                Ok(()) => kept.folders.extend(names.iter().cloned()),
+                Err(_) => kept.complete = false,
+            }
+            return;
+        }
+        for name in names {
+            let lower = name.to_lowercase();
+            if kept.folders.iter().any(|f| f.to_lowercase() == lower) {
+                continue;
+            }
+            match rename(&backup.join(name), &slot.join(name)) {
+                Ok(()) => kept.folders.push(name.clone()),
+                Err(_) => kept.complete = false,
+            }
+        }
+    });
 }
 
 /// Cancella la cartella `name` di `addons_dir` (l'import con "Replace all", issue #134). `name`
@@ -368,7 +487,7 @@ pub fn remove_folder(addons_dir: &Path, name: &str) -> Result<(), String> {
 }
 
 /// Nomi delle voci di una cartella (cartelle e file), in ordine alfabetico.
-fn folder_names(dir: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn folder_names(dir: &Path) -> Result<Vec<String>, String> {
     let read_error =
         |error: io::Error| format!("Could not read {} ({}).", dir.display(), error.kind());
     let entries = match fs::read_dir(dir) {
@@ -808,6 +927,79 @@ mod tests {
         let backup = addons.parent().unwrap().join(backup);
         assert_eq!(read(&backup.join("A/old.lua")), "old");
         fs::remove_dir_all(backup).unwrap();
+    }
+
+    #[test]
+    fn inside_keeping_replaced_the_replaced_folders_go_to_a_slot() {
+        let tmp = TempDir::new();
+        let addons = addons_dir(&tmp);
+        let root = addons.parent().unwrap().join("generation");
+        fs::create_dir_all(&root).unwrap();
+        write(&addons.join("A/old.lua"), "old a");
+        write(&addons.join("Obsolete/x.lua"), "x");
+        write(&addons.join("B/old.lua"), "old b");
+        let (first, second, none) = keeping_replaced(&root, || {
+            let staging = staged(&addons, &[File("a/new.lua", b"new")]);
+            replace(&addons, staging.path(), &["Obsolete".to_string()]).unwrap();
+            // Un secondo `replace` dello stesso progetto aggiunge allo stesso slot, senza
+            // sovrascrivere la versione già tenuta.
+            let staging = staged(&addons, &[File("A/newer.lua", b"newer")]);
+            replace(&addons, staging.path(), &[]).unwrap();
+            let first = take_kept();
+            let staging = staged(&addons, &[File("B/new.lua", b"new")]);
+            replace(&addons, staging.path(), &[]).unwrap();
+            (first, take_kept(), take_kept())
+        });
+        let first = first.expect("kept");
+        assert_eq!(first.slot, "0");
+        assert_eq!(first.folders, ["A", "Obsolete"]);
+        assert!(first.complete);
+        assert_eq!(read(&root.join("0").join("A").join("old.lua")), "old a");
+        assert_eq!(read(&root.join("0").join("Obsolete").join("x.lua")), "x");
+        assert_eq!(listing(&root.join("0")), ["A", "Obsolete"]);
+        let second = second.expect("kept");
+        assert_eq!(
+            (second.slot.as_str(), second.folders),
+            ("1", vec!["B".to_string()])
+        );
+        assert_eq!(none, None);
+        assert_eq!(listing(&addons), ["A", "B"]);
+        // Fuori dallo scope `replace` torna a cancellare.
+        assert_eq!(take_kept(), None);
+        let staging = staged(&addons, &[File("B/newest.lua", b"newest")]);
+        replace(&addons, staging.path(), &[]).unwrap();
+        drop(staging);
+        assert_eq!(listing(&root), ["0", "1"]);
+        assert_eq!(interface_listing(&addons), ["AddOns", "generation"]);
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_kept_marks_the_slot_incomplete() {
+        let tmp = TempDir::new();
+        let addons = addons_dir(&tmp);
+        let root = addons.parent().unwrap().join("generation");
+        fs::create_dir_all(&root).unwrap();
+        write(&addons.join("A/old.lua"), "old");
+        let kept = keeping_replaced(&root, || {
+            let staging = staged(&addons, &[File("A/new.lua", b"new")]);
+            let mut calls = 0;
+            replace_with(&addons, staging.path(), &[], |from, to| {
+                calls += 1;
+                // Il terzo `rename` è quello verso lo slot.
+                if calls == 3 {
+                    Err(io::Error::from(io::ErrorKind::PermissionDenied))
+                } else {
+                    fs::rename(from, to)
+                }
+            })
+            .unwrap();
+            take_kept().unwrap()
+        });
+        assert!(!kept.complete);
+        assert!(kept.folders.is_empty());
+        assert_eq!(read(&addons.join("A/new.lua")), "new");
+        // L'appoggio si è cancellato come in un aggiornamento manuale.
+        assert_eq!(interface_listing(&addons), ["AddOns", "generation"]);
     }
 
     #[test]
