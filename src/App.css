@@ -1024,6 +1024,28 @@ label.setting-label {
 
 /* Addon */
 
+/* Il titolo della tab Installed (issue #230): "Addons" a --text-xl con il conteggio accanto,
+   non l'etichetta maiuscola delle altre sezioni. */
+.addons-title {
+  font-size: var(--text-xl);
+  text-transform: none;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.addons-count {
+  margin-left: var(--space-2);
+  font-size: var(--text-base);
+  font-weight: var(--weight-regular);
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+.addons-header {
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
 .count {
   font-size: var(--text-xs);
 }
@@ -1178,13 +1200,16 @@ label.setting-label {
   color: var(--danger);
 }
 
-/* Un addon escluso dall'aggiornamento automatico (issue #204): un segno discreto, testo
-   attenuato senza colore di stato, che segue il tema come `--muted`. */
-.auto-update-off {
+/* Le pastiglie nelle righe di Installed (issue #230): con margini verticali negativi una
+   pastiglia (22px) non allunga la riga oltre la linea del testo. Accanto al titolo (un addon
+   escluso dall'aggiornamento automatico, issue #204) è neutra, senza colore di stato. */
+.addon-table .addon-pill {
+  margin-top: -2px;
+  margin-bottom: -2px;
+}
+
+.addon-table td:first-child .addon-pill {
   margin-left: var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--muted);
-  white-space: nowrap;
 }
 
 .has-error .addon-title {
@@ -1199,11 +1224,6 @@ label.setting-label {
 
 .nowrap {
   white-space: nowrap;
-}
-
-/* Più versioni dell'interfaccia vanno a capo dopo la virgola invece di allargare la tabella. */
-.mono.interface {
-  white-space: normal;
 }
 
 /* Testo lungo su una riga sola, accorciato con "…": il testo intero è nel suggerimento. */
@@ -1236,19 +1256,28 @@ label.setting-label {
   color: var(--muted);
 }
 
-.update-available {
-  color: var(--accent);
-  font-weight: var(--weight-strong);
+/* L'aggiornamento di una riga (issue #230): un pulsante tenue con la versione nuova, su una
+   riga sola; una versione lunga si accorcia con "…" (il file installato e la data sono nel
+   suggerimento della cella). Margini negativi come le pastiglie: la riga non si allunga. */
+.addon-table .row-update {
+  display: inline-block;
+  max-width: 16rem;
+  margin-top: -4px;
+  margin-bottom: -4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: var(--control-height-sm);
+  vertical-align: middle;
 }
 
-.row-action {
-  margin-left: var(--space-2);
-}
-
-/* La riga dell'aggiornamento automatico sopra la tabella di Installed (issue #203): una riga
-   sobria, il colore solo per gli errori. */
+/* La riga dell'aggiornamento automatico tra il titolo e i filtri di Installed (issue #203):
+   una barra propria, sobria, il colore solo per gli errori (issue #230). */
 .auto-update-line {
   margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   font-size: var(--text-xs);
   color: var(--muted);
 }
@@ -1321,7 +1350,6 @@ label.setting-label {
   border-top: none;
   padding-top: var(--space-1);
   padding-bottom: var(--space-1);
-  font-size: var(--text-xs);
   color: var(--muted);
 }
 
@@ -1353,8 +1381,7 @@ label.setting-label {
    o con il focus da tastiera; l'etichetta "Forced: …" resta sempre visibile. */
 
 .select.compact {
-  height: auto;
-  min-height: 24px;
+  height: var(--control-height-sm);
   padding: 0 var(--space-5) 0 var(--space-2);
   font-size: var(--text-xs);
   background-position:
@@ -1365,7 +1392,7 @@ label.setting-label {
 /* Accanto al nome del progetto e con margini negativi: nascosto non allunga la riga. */
 .version-select {
   max-width: 100%;
-  margin: -3px 0 -3px var(--space-2);
+  margin: -4px 0 -4px var(--space-2);
   vertical-align: baseline;
   opacity: 0;
 }
