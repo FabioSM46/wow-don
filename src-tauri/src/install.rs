@@ -1,17 +1,17 @@
-//! Installazione di uno zip di addon: estrazione sicura in una cartella di staging e
-//! sostituzione delle cartelle in `Interface/AddOns` senza lasciarla a metà.
+//! Installation of an addon zip: safe extraction into a staging folder and replacement of the
+//! folders in `Interface/AddOns` without leaving it half-done.
 //!
-//! Solo funzioni su percorsi: niente rete, niente Tauri. Staging e appoggio sono cartelle
-//! nascoste nella cartella padre di `AddOns` ([`WorkDir`]), così ogni `rename` resta sullo stesso
-//! disco; si cancellano da sole anche dopo un errore.
+//! Path functions only: no network, no Tauri. Staging and scratch are hidden folders in the
+//! parent folder of `AddOns` ([`WorkDir`]), so every `rename` stays on the same disk; they
+//! delete themselves even after an error.
 //!
-//! I chiamanti (`updates::update_addons` e `install_new::install_addon`) fanno:
+//! The callers (`updates::update_addons` and `install_new::install_addon`) do:
 //! `WorkDir::staging(addons)` → [`extract`] → [`replace`].
 //!
-//! Il giro automatico (D41, issue #201) tiene la versione precedente: dentro
-//! [`keeping_replaced`] le cartelle che [`replace`] sposta da parte finiscono in una cartella
-//! della generazione invece di essere cancellate, e [`take_kept`] dice quali. Fuori da quello
-//! scope (ogni comando manuale) non cambia niente.
+//! The automatic round (D41, issue #201) keeps the previous version: inside
+//! [`keeping_replaced`] the folders that [`replace`] moves aside end up in a generation folder
+//! instead of being deleted, and [`take_kept`] says which ones. Outside that scope (every
+//! manual command) nothing changes.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -22,9 +22,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use zip::ZipArchive;
 
-/// Numero massimo di voci in uno zip.
+/// Maximum number of entries in a zip.
 pub const MAX_ENTRIES: usize = 20_000;
-/// Dimensione massima estratta, sommando tutti i file: 1 GiB.
+/// Maximum extracted size, summing all files: 1 GiB.
 pub const MAX_TOTAL_BYTES: u64 = 1 << 30;
 
 #[derive(Debug, Clone, Copy)]
@@ -38,24 +38,24 @@ const DEFAULT_LIMITS: Limits = Limits {
     total_bytes: MAX_TOTAL_BYTES,
 };
 
-/// Cartella di lavoro nascosta accanto ad `AddOns` (stesso padre, quindi stesso disco).
-/// Si cancella quando esce di scope, anche dopo un errore.
+/// Hidden work folder next to `AddOns` (same parent, hence same disk).
+/// Deletes itself when it goes out of scope, even after an error.
 #[derive(Debug)]
 pub struct WorkDir(PathBuf);
 
 impl WorkDir {
-    /// Cartella in cui estrarre lo zip.
+    /// Folder to extract the zip into.
     pub fn staging(addons_dir: &Path) -> Result<Self, String> {
         Self::create(addons_dir, "staging")
     }
 
-    /// Cartella in cui spostare da parte le cartelle sostituite o rimosse.
+    /// Folder to move replaced or removed folders aside into.
     fn backup(addons_dir: &Path) -> Result<Self, String> {
         Self::create(addons_dir, "backup")
     }
 
-    /// Una cartella di lavoro `.wow-don-<kind>-*` accanto ad `AddOns`, per chi sposta cartelle
-    /// sullo stesso disco fuori da questo modulo (la generazione del giro automatico,
+    /// A `.wow-don-<kind>-*` work folder next to `AddOns`, for callers that move folders on
+    /// the same disk outside this module (the automatic round's generation,
     /// `previous`).
     pub(crate) fn create(addons_dir: &Path, kind: &str) -> Result<Self, String> {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -68,7 +68,7 @@ impl WorkDir {
             COUNTER.fetch_add(1, Ordering::Relaxed)
         );
         let path = parent.join(name);
-        // Un avanzo di un'esecuzione interrotta con lo stesso pid non deve mescolarsi.
+        // A leftover from an interrupted run with the same pid must not get mixed in.
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).map_err(|error| {
             format!(
@@ -90,18 +90,18 @@ impl Drop for WorkDir {
     }
 }
 
-/// Estrae `zip_bytes` in `staging_dir`, che deve esistere ed essere vuota, e restituisce i nomi
-/// delle cartelle di primo livello (gli addon), nell'ordine in cui compaiono.
+/// Extracts `zip_bytes` into `staging_dir`, which must exist and be empty, and returns the names
+/// of the top-level folders (the addons), in the order they appear.
 ///
-/// Tutto lo zip viene controllato prima di scrivere il primo file: una voce con un percorso
-/// assoluto, un componente `..`, un prefisso di unità, un link simbolico, un file sciolto alla
-/// radice o un limite superato fanno rifiutare l'intero zip. Nessun file viene mai scritto fuori
-/// da `staging_dir`.
+/// The whole zip is checked before the first file is written: an entry with an absolute path,
+/// a `..` component, a drive prefix, a symbolic link, a loose file at the root or an exceeded
+/// limit makes the whole zip be rejected. No file is ever written outside
+/// `staging_dir`.
 pub fn extract(zip_bytes: &[u8], staging_dir: &Path) -> Result<Vec<String>, String> {
     extract_with_limits(zip_bytes, staging_dir, DEFAULT_LIMITS)
 }
 
-/// Una voce dello zip già validata.
+/// A zip entry that has already been validated.
 struct Entry {
     index: usize,
     components: Vec<String>,
@@ -131,7 +131,7 @@ fn extract_with_limits(
         ));
     }
 
-    // Primo passaggio: solo controlli, nessuna scrittura.
+    // First pass: checks only, no writing.
     let mut entries = Vec::with_capacity(archive.len());
     let mut folders: Vec<String> = Vec::new();
     let mut folder_keys: HashSet<String> = HashSet::new();
@@ -140,8 +140,8 @@ fn extract_with_limits(
         let file = archive
             .by_index_raw(index)
             .map_err(|_| "The zip is damaged.".to_string())?;
-        // `name()` decodifica secondo il flag della voce (UTF-8 oppure CP437 per gli zip
-        // vecchi), così i nomi accentati restano quelli dell'archivio.
+        // `name()` decodes according to the entry's flag (UTF-8 or CP437 for old zips), so
+        // accented names stay those of the archive.
         let name = file
             .name()
             .map_err(|_| "The zip is damaged.".to_string())?
@@ -184,7 +184,7 @@ fn extract_with_limits(
         return Err("The zip is empty.".to_string());
     }
 
-    // Secondo passaggio: scrittura, contando i byte reali (la dimensione dichiarata può mentire).
+    // Second pass: writing, counting the real bytes (the declared size can lie).
     let mut remaining = limits.total_bytes;
     for entry in entries {
         let target = entry
@@ -242,9 +242,9 @@ fn write_error(error: io::Error) -> String {
     format!("Could not extract the zip ({}).", error.kind())
 }
 
-/// Divide il nome di una voce in componenti sicuri. Accetta `/` e `\` come separatori (gli zip
-/// creati su Windows a volte usano il secondo) e ignora i componenti vuoti e `.`. Rifiuta `..`,
-/// i componenti con punto o spazio finale e quelli con `:`.
+/// Splits an entry name into safe components. Accepts `/` and `\` as separators (zips created
+/// on Windows sometimes use the latter) and ignores empty and `.` components. Rejects `..`,
+/// components with a trailing dot or space, and those with `:`.
 fn entry_components(name: &str) -> Result<Vec<String>, String> {
     let unsafe_path = || Err(format!("The zip contains an unsafe path ({name})."));
     if name.contains('\0') || name.starts_with('/') || name.starts_with('\\') {
@@ -255,10 +255,10 @@ fn entry_components(name: &str) -> Result<Vec<String>, String> {
         match part {
             "" | "." => continue,
             ".." => return unsafe_path(),
-            // Windows toglie punti e spazi finali da ogni componente: `.. ` diventerebbe `..`
-            // e risalirebbe fuori dallo staging.
+            // Windows strips trailing dots and spaces from every component: `.. ` would become
+            // `..` and climb out of the staging folder.
             _ if part.ends_with(['.', ' ']) => return unsafe_path(),
-            // `C:` è un prefisso di unità; altrove `:` apre uno stream alternativo su NTFS.
+            // `C:` is a drive prefix; elsewhere `:` opens an alternate data stream on NTFS.
             _ if part.contains(':') => return unsafe_path(),
             _ => components.push(part.to_string()),
         }
@@ -269,12 +269,12 @@ fn entry_components(name: &str) -> Result<Vec<String>, String> {
     Ok(components)
 }
 
-/// Sostituisce in `addons_dir` le cartelle estratte in `staging_dir`.
+/// Replaces in `addons_dir` the folders extracted into `staging_dir`.
 ///
-/// Sposta da parte, in una cartella di appoggio accanto ad `AddOns`, le cartelle esistenti con
-/// lo stesso nome di quelle nuove (senza distinguere maiuscole e minuscole) e quelle elencate in
-/// `remove`; poi sposta le nuove con `rename` e solo alla fine cancella l'appoggio. Se un passo
-/// fallisce rimette tutto com'era e restituisce l'errore.
+/// Moves aside, into a scratch folder next to `AddOns`, the existing folders with the same name
+/// as the new ones (case-insensitively) and those listed in `remove`; then moves the new ones
+/// in with `rename` and only at the end deletes the scratch folder. If a step fails it puts
+/// everything back as it was and returns the error.
 pub fn replace(addons_dir: &Path, staging_dir: &Path, remove: &[String]) -> Result<(), String> {
     replace_with(addons_dir, staging_dir, remove, |from, to| {
         fs::rename(from, to)
@@ -311,7 +311,7 @@ pub(crate) fn replace_with(
         .collect();
 
     let backup = WorkDir::backup(addons_dir)?;
-    // Ogni spostamento riuscito, in ordine, per poterlo annullare.
+    // Every successful move, in order, so it can be undone.
     let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
 
     let moves = set_aside
@@ -324,14 +324,14 @@ pub(crate) fn replace_with(
         );
     for (from, to) in moves {
         if let Err(error) = rename(&from, &to) {
-            // Si prova a ripristinare ogni spostamento, anche dopo un ripristino fallito.
+            // Try to restore every move, even after a failed restore.
             let restored = done
                 .iter()
                 .rev()
                 .fold(true, |ok, (from, to)| rename(to, from).is_ok() && ok);
             let mut message = rename_error(&error);
             if !restored {
-                // L'appoggio resta dov'è: contiene le cartelle originali non ripristinate.
+                // The scratch folder stays where it is: it holds the original folders not restored.
                 let kept = backup.path().to_path_buf();
                 std::mem::forget(backup);
                 message.push_str(&format!(
@@ -348,38 +348,38 @@ pub(crate) fn replace_with(
     Ok(())
 }
 
-// ── Versione precedente del giro automatico (issue #201) ────────────────────
+// ── Previous version from the automatic round (issue #201) ──────────────────
 
 thread_local! {
-    /// Attivo solo dentro [`keeping_replaced`], sul thread che lo chiama: il giro automatico
-    /// aggiorna i progetti uno dopo l'altro su quel thread, e nessun comando manuale lo vede.
+    /// Active only inside [`keeping_replaced`], on the thread that calls it: the automatic round
+    /// updates projects one after the other on that thread, and no manual command sees it.
     static KEEPER: RefCell<Option<Keeper>> = const { RefCell::new(None) };
 }
 
 struct Keeper {
-    /// La cartella della generazione in preparazione.
+    /// The folder of the generation being prepared.
     root: PathBuf,
     next_slot: usize,
-    /// Quello che i `replace` hanno tenuto dopo l'ultimo [`take_kept`].
+    /// What the `replace` calls kept since the last [`take_kept`].
     current: Option<Kept>,
 }
 
-/// Le cartelle sostituite che i [`replace`] di un progetto hanno tenuto, in
-/// `<generazione>/<slot>`.
+/// The replaced folders that a project's [`replace`] calls kept, in
+/// `<generation>/<slot>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Kept {
-    /// Il nome della sottocartella della generazione, un numero (`0`, `1`, …).
+    /// The name of the generation subfolder, a number (`0`, `1`, …).
     pub slot: String,
-    /// Le cartelle tenute, con il nome che avevano in `AddOns`.
+    /// The kept folders, with the name they had in `AddOns`.
     pub folders: Vec<String>,
-    /// Falso se una cartella non si è potuta tenere (ed è stata cancellata come oggi): la
-    /// versione precedente non è completa e non si può rimettere.
+    /// False if a folder could not be kept (and was deleted as today): the previous version is
+    /// not complete and cannot be put back.
     pub complete: bool,
 }
 
-/// Esegue `run` con i [`replace`] di questo thread che tengono le cartelle sostituite in una
-/// sottocartella di `root` invece di cancellarle. `root` deve esistere, sullo stesso disco di
-/// `AddOns`. Alla fine (anche dopo un panic) i `replace` tornano a cancellare.
+/// Runs `run` with this thread's [`replace`] calls keeping the replaced folders in a subfolder
+/// of `root` instead of deleting them. `root` must exist, on the same disk as `AddOns`. At the
+/// end (even after a panic) the `replace` calls go back to deleting.
 pub fn keeping_replaced<R>(root: &Path, run: impl FnOnce() -> R) -> R {
     struct Reset;
     impl Drop for Reset {
@@ -398,17 +398,17 @@ pub fn keeping_replaced<R>(root: &Path, run: impl FnOnce() -> R) -> R {
     run()
 }
 
-/// Quello che i [`replace`] hanno tenuto dall'ultima chiamata, e ricomincia: la chiamata
-/// successiva dei `replace` usa uno slot nuovo. `None` fuori da [`keeping_replaced`] o se
-/// nessun `replace` è riuscito.
+/// What the [`replace`] calls kept since the last call, and starts over: the next `replace`
+/// call uses a new slot. `None` outside [`keeping_replaced`] or if no `replace`
+/// succeeded.
 pub fn take_kept() -> Option<Kept> {
     KEEPER.with(|keeper| keeper.borrow_mut().as_mut().and_then(|k| k.current.take()))
 }
 
-/// Dopo un [`replace`] riuscito, sposta le cartelle `names` da `backup` allo slot del progetto,
-/// se [`keeping_replaced`] è attivo. Con lo slot ancora da creare basta un `rename` dell'intero
-/// appoggio; un secondo `replace` dello stesso progetto aggiunge le sue cartelle, senza
-/// sovrascrivere quelle già tenute (la versione più vecchia resta).
+/// After a successful [`replace`], moves the `names` folders from `backup` to the project's
+/// slot, if [`keeping_replaced`] is active. With the slot still to be created a `rename` of the
+/// whole scratch folder is enough; a second `replace` of the same project adds its folders,
+/// without overwriting those already kept (the oldest version stays).
 fn keep_aside(
     backup: &Path,
     names: &[String],
@@ -457,10 +457,10 @@ fn keep_aside(
     });
 }
 
-/// Cancella la cartella `name` di `addons_dir` (l'import con "Replace all", issue #134). `name`
-/// deve essere un solo componente valido, con gli stessi controlli di [`replace`]: niente
-/// separatori, `..`, nomi vuoti o riservati. Un link simbolico si toglie senza seguirlo, quindi
-/// niente fuori da `AddOns` viene toccato; un file che non è una cartella resta dov'è.
+/// Deletes the folder `name` of `addons_dir` (the import with "Replace all", issue #134). `name`
+/// must be a single valid component, with the same checks as [`replace`]: no separators, `..`,
+/// empty or reserved names. A symbolic link is removed without following it, so nothing
+/// outside `AddOns` is touched; a file that is not a folder stays where it is.
 pub fn remove_folder(addons_dir: &Path, name: &str) -> Result<(), String> {
     if entry_components(name).map(|parts| parts.len()) != Ok(1) || name.contains(['/', '\\']) {
         return Err(format!("Invalid name for a folder to remove ({name})."));
@@ -469,7 +469,7 @@ pub fn remove_folder(addons_dir: &Path, name: &str) -> Result<(), String> {
     let error = |error: io::Error| format!("Could not remove {name} ({}).", error.kind());
     let meta = fs::symlink_metadata(&path).map_err(error)?;
     if meta.file_type().is_symlink() {
-        // Su Windows un link a una cartella si toglie come cartella, altrove come file.
+        // On Windows a link to a folder is removed as a folder, elsewhere as a file.
         return fs::remove_file(&path)
             .or_else(|_| fs::remove_dir(&path))
             .map_err(error);
@@ -486,7 +486,7 @@ pub fn remove_folder(addons_dir: &Path, name: &str) -> Result<(), String> {
     })
 }
 
-/// Nomi delle voci di una cartella (cartelle e file), in ordine alfabetico.
+/// Names of a folder's entries (folders and files), in alphabetical order.
 pub(crate) fn folder_names(dir: &Path) -> Result<Vec<String>, String> {
     let read_error =
         |error: io::Error| format!("Could not read {} ({}).", dir.display(), error.kind());
@@ -508,8 +508,8 @@ pub(crate) fn folder_names(dir: &Path) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// Messaggio per un `rename` fallito. Su Windows un file aperto dal gioco blocca lo spostamento:
-/// in quel caso si chiede di chiudere WoW. Su Linux e macOS non succede (vedi `is_locked`).
+/// Message for a failed `rename`. On Windows a file opened by the game blocks the move: in that
+/// case the user is asked to close WoW. On Linux and macOS it does not happen (see `is_locked`).
 fn rename_error(error: &io::Error) -> String {
     if is_locked(error) {
         "Some addon files are in use: close World of Warcraft and try again.".to_string()
@@ -524,10 +524,10 @@ fn is_locked(error: &io::Error) -> bool {
     matches!(error.raw_os_error(), Some(5 | 32 | 33))
 }
 
-/// Su Linux il gioco gira sotto Wine e su macOS è il client nativo (D29): in entrambi i casi
-/// valgono le regole Unix, dove un file aperto non blocca il `rename` della cartella che lo
-/// contiene. Un `rename` non fallisce perché WoW è aperto, quindi nessun errore si attribuisce
-/// al gioco.
+/// On Linux the game runs under Wine and on macOS it is the native client (D29): in both cases
+/// Unix rules apply, where an open file does not block the `rename` of the folder that
+/// contains it. A `rename` does not fail because WoW is open, so no error is attributed to
+/// the game.
 #[cfg(not(target_os = "windows"))]
 fn is_locked(_error: &io::Error) -> bool {
     false
@@ -563,8 +563,8 @@ mod tests {
         writer.finish().unwrap().into_inner()
     }
 
-    /// `Interface/AddOns` dentro una cartella temporanea, con spazi nel percorso come nei
-    /// prefissi Wine.
+    /// `Interface/AddOns` inside a temporary folder, with spaces in the path as in
+    /// Wine prefixes.
     fn addons_dir(tmp: &TempDir) -> PathBuf {
         let dir = tmp
             .path()
@@ -590,7 +590,7 @@ mod tests {
         folder_names(dir).unwrap()
     }
 
-    /// Le uniche voci accanto ad `AddOns`: nessuna cartella di lavoro rimasta.
+    /// The only entries next to `AddOns`: no leftover work folder.
     fn interface_listing(addons: &Path) -> Vec<String> {
         listing(addons.parent().unwrap())
     }
@@ -698,8 +698,8 @@ mod tests {
     #[test]
     fn decodes_legacy_cp437_names() {
         let mut bytes = zip_of(&[File("Addon/caf_.lua", b"x")]);
-        // Senza il flag UTF-8 il nome è CP437: 0x82 è `é`. Il nome compare nell'intestazione
-        // locale e nella directory centrale; il CRC copre solo i dati.
+        // Without the UTF-8 flag the name is CP437: 0x82 is `é`. The name appears in the local
+        // header and in the central directory; the CRC covers only the data.
         let mut patched = 0;
         for i in 0..bytes.len() - 3 {
             if &bytes[i..i + 4] == b"caf_" {
@@ -802,7 +802,7 @@ mod tests {
         assert_eq!(interface_listing(&addons), ["AddOns"]);
     }
 
-    /// Estrae `items` in uno staging nuovo accanto ad `addons`.
+    /// Extracts `items` into a new staging folder next to `addons`.
     fn staged(addons: &Path, items: &[Item]) -> WorkDir {
         let staging = WorkDir::staging(addons).unwrap();
         extract(&zip_of(items), staging.path()).unwrap();
@@ -875,8 +875,8 @@ mod tests {
             ],
         );
 
-        // Spostamenti: 2 da parte, poi DBM-Core installato; il quarto (DBM-StatusBarTimers)
-        // fallisce.
+        // Moves: 2 aside, then DBM-Core installed; the fourth (DBM-StatusBarTimers)
+        // fails.
         for fail_at in 0..4 {
             let mut calls = 0;
             let error = replace_with(
@@ -898,7 +898,7 @@ mod tests {
             assert_eq!(read(&addons.join("DBM-Core/old.lua")), "old");
             assert_eq!(read(&addons.join("DBM-Obsolete/x.lua")), "x");
             assert_eq!(listing(staging.path()), ["DBM-Core", "DBM-StatusBarTimers"]);
-            // Solo AddOns e lo staging: l'appoggio è stato cancellato.
+            // Only AddOns and the staging folder: the scratch folder was deleted.
             assert_eq!(interface_listing(&addons).len(), 2, "attempt {fail_at}");
         }
     }
@@ -941,8 +941,8 @@ mod tests {
         let (first, second, none) = keeping_replaced(&root, || {
             let staging = staged(&addons, &[File("a/new.lua", b"new")]);
             replace(&addons, staging.path(), &["Obsolete".to_string()]).unwrap();
-            // Un secondo `replace` dello stesso progetto aggiunge allo stesso slot, senza
-            // sovrascrivere la versione già tenuta.
+            // A second `replace` of the same project adds to the same slot, without
+            // overwriting the version already kept.
             let staging = staged(&addons, &[File("A/newer.lua", b"newer")]);
             replace(&addons, staging.path(), &[]).unwrap();
             let first = take_kept();
@@ -964,7 +964,7 @@ mod tests {
         );
         assert_eq!(none, None);
         assert_eq!(listing(&addons), ["A", "B"]);
-        // Fuori dallo scope `replace` torna a cancellare.
+        // Outside the scope `replace` goes back to deleting.
         assert_eq!(take_kept(), None);
         let staging = staged(&addons, &[File("B/newest.lua", b"newest")]);
         replace(&addons, staging.path(), &[]).unwrap();
@@ -985,7 +985,7 @@ mod tests {
             let mut calls = 0;
             replace_with(&addons, staging.path(), &[], |from, to| {
                 calls += 1;
-                // Il terzo `rename` è quello verso lo slot.
+                // The third `rename` is the one into the slot.
                 if calls == 3 {
                     Err(io::Error::from(io::ErrorKind::PermissionDenied))
                 } else {
@@ -998,7 +998,7 @@ mod tests {
         assert!(!kept.complete);
         assert!(kept.folders.is_empty());
         assert_eq!(read(&addons.join("A/new.lua")), "new");
-        // L'appoggio si è cancellato come in un aggiornamento manuale.
+        // The scratch folder was deleted as in a manual update.
         assert_eq!(interface_listing(&addons), ["AddOns", "generation"]);
     }
 

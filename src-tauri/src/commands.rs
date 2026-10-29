@@ -1,4 +1,4 @@
-//! Comandi Tauri invocabili dal frontend.
+//! Tauri commands invocable from the frontend.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ use crate::updates::{
 #[serde(rename_all = "camelCase")]
 pub struct AppStatus {
     version: &'static str,
-    /// Solo se la chiave c'è: la chiave non lascia mai il backend.
+    /// Only if the key is there: the key never leaves the backend.
     curseforge_key_configured: bool,
 }
 
@@ -97,18 +97,18 @@ fn locked_app_settings(
         .map_err(|_| "Settings are not available: restart the app.".to_owned())
 }
 
-/// L'opzione "Beta quando non c'è una Release" (issue #141). Un `settings.json` illeggibile non
-/// blocca ricerca, installazione e aggiornamenti: vale il default, cioè solo Release.
+/// The "Beta when there is no Release" option (issue #141). An unreadable `settings.json` does not
+/// block search, installation and updates: the default applies, that is Release only.
 pub(crate) fn beta_when_no_release(settings: &Mutex<AppSettingsStore>) -> bool {
     locked_app_settings(settings)
         .and_then(|store| store.get())
         .is_ok_and(|settings| settings.beta_when_no_release)
 }
 
-/// Le impostazioni come le riceve il frontend: quelle salvate in `settings.json` più
-/// `trayAvailable`, che non si salva perché dice solo se adesso l'icona nella tray c'è e
-/// qualcuno la mostra (issue #158). Senza icona `closeToTray` resta salvata ma non ha effetto:
-/// la X chiude.
+/// The settings as the frontend receives them: those saved in `settings.json` plus
+/// `trayAvailable`, which is not saved because it only says whether the tray icon is there right
+/// now and something shows it (issue #158). Without an icon `closeToTray` stays saved but has no
+/// effect: the X closes.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsView {
@@ -127,7 +127,7 @@ fn settings_view(
     })
 }
 
-/// Salva l'opzione "Beta quando non c'è una Release" e restituisce le impostazioni aggiornate.
+/// Saves the "Beta when there is no Release" option and returns the updated settings.
 #[tauri::command]
 pub fn set_beta_when_no_release(
     enabled: bool,
@@ -140,7 +140,7 @@ pub fn set_beta_when_no_release(
     )
 }
 
-/// Salva l'opzione "Close to tray" (issue #158) e restituisce le impostazioni aggiornate.
+/// Saves the "Close to tray" option (issue #158) and returns the updated settings.
 #[tauri::command]
 pub fn set_close_to_tray(
     enabled: bool,
@@ -153,8 +153,8 @@ pub fn set_close_to_tray(
     )
 }
 
-/// Salva modalità (`off`, `notify` o `install`) e intervallo in ore dell'aggiornamento
-/// automatico (D41, issue #199) e restituisce le impostazioni aggiornate.
+/// Saves the mode (`off`, `notify` or `install`) and the interval in hours of the automatic
+/// update (D41, issue #199) and returns the updated settings.
 #[tauri::command]
 pub fn set_auto_update(
     mode: String,
@@ -165,25 +165,25 @@ pub fn set_auto_update(
 ) -> Result<SettingsView, String> {
     let saved = save_auto_update(&settings, &mode, interval_hours);
     if saved.is_ok() {
-        // Il giro ripianifica con la modalità e l'intervallo nuovi.
+        // The run reschedules with the new mode and interval.
         auto_update.wake();
     }
     settings_view(saved, &tray)
 }
 
-/// L'esito dell'ultimo giro automatico e quando è previsto il prossimo (issue #200), con le
-/// installazioni che hanno un giro annullabile (`undoable`, issue #201): lo stesso payload
-/// dell'evento `auto-update`, vedi [`AutoUpdateStatus`]. Memoria e il manifesto
-/// `auto-update-previous.json`, nessuna rete.
+/// The outcome of the last automatic run and when the next one is due (issue #200), with the
+/// installations that have an undoable run (`undoable`, issue #201): the same payload as the
+/// `auto-update` event, see [`AutoUpdateStatus`]. Memory and the
+/// `auto-update-previous.json` manifest, no network.
 #[tauri::command]
 pub fn get_auto_update_status(app: AppHandle) -> AutoUpdateStatus {
     crate::auto_update::current_status(&app)
 }
 
-/// Annulla l'ultimo giro automatico di un'installazione (issue #201): per ogni progetto del giro
-/// rimette le cartelle e il record di prima, saltando quelli cambiati dopo. Restituisce un
-/// esito per progetto ([`UndoOutcome`]) ed emette l'evento `auto-update` con lo stato nuovo.
-/// Bloccante, sotto [`InstallLock`] come gli aggiornamenti.
+/// Undoes the last automatic run of an installation (issue #201): for every project of the run it
+/// puts back the previous folders and record, skipping those changed afterwards. Returns one
+/// outcome per project ([`UndoOutcome`]) and emits the `auto-update` event with the new state.
+/// Blocking, under [`InstallLock`] like the updates.
 #[tauri::command]
 pub async fn undo_last_auto_update(
     installation_id: String,
@@ -210,8 +210,8 @@ pub async fn undo_last_auto_update(
     .map_err(|error| format!("The undo was interrupted ({error})."))?
 }
 
-/// Il corpo di [`set_auto_update`], separato dallo `State` di Tauri per i test. I valori si
-/// controllano prima del lock: uno sconosciuto non tocca né la memoria né il file.
+/// The body of [`set_auto_update`], separated from Tauri's `State` for the tests. The values are
+/// checked before the lock: an unknown one touches neither the memory nor the file.
 fn save_auto_update(
     settings: &Mutex<AppSettingsStore>,
     mode: &str,
@@ -222,9 +222,9 @@ fn save_auto_update(
     locked_app_settings(settings)?.set_auto_update(mode, interval_hours)
 }
 
-/// Se l'installazione partecipa all'aggiornamento automatico e quali progetti ne sono esclusi
-/// (issue #199). Ogni escluso è `{ source, key }`: il frontend lo abbina a una riga confrontando
-/// `project.source` e `project.key` del suo `AddonUpdate` (vedi [`ProjectKey`]).
+/// Whether the installation takes part in the automatic update and which projects are excluded
+/// from it (issue #199). Each excluded one is `{ source, key }`: the frontend matches it to a row
+/// by comparing `project.source` and `project.key` of its `AddonUpdate` (see [`ProjectKey`]).
 #[tauri::command]
 pub fn get_auto_update(
     installation_id: String,
@@ -235,7 +235,7 @@ pub fn get_auto_update(
     locked_settings(&settings)?.auto_update_for(&installation_id)
 }
 
-/// Esclude un progetto dall'aggiornamento automatico (`excluded`) o lo riammette.
+/// Excludes a project from the automatic update (`excluded`) or readmits it.
 #[tauri::command]
 pub fn set_auto_update_excluded(
     installation_id: String,
@@ -248,7 +248,7 @@ pub fn set_auto_update_excluded(
     locked_settings(&settings)?.set_auto_update_excluded(&installation_id, project, excluded)
 }
 
-/// Fa partecipare un'installazione all'aggiornamento automatico (`enabled`) o la esclude.
+/// Makes an installation take part in the automatic update (`enabled`) or excludes it.
 #[tauri::command]
 pub fn set_installation_auto_update(
     installation_id: String,
@@ -260,22 +260,22 @@ pub fn set_installation_auto_update(
     locked_settings(&settings)?.set_installation_auto_update(&installation_id, enabled)
 }
 
-/// Se l'app parte con il sistema (issue #159). Lo stato si legge dal sistema operativo a ogni
-/// chiamata: non è in `settings.json`.
+/// Whether the app starts with the system (issue #159). The state is read from the operating
+/// system on every call: it is not in `settings.json`.
 #[tauri::command]
 pub fn get_autostart(app: AppHandle) -> Result<bool, String> {
     autostart::is_enabled(&app)
 }
 
-/// Attiva o disattiva l'avvio con il sistema e restituisce lo stato riletto dal sistema
-/// operativo.
+/// Turns starting with the system on or off and returns the state reread from the operating
+/// system.
 #[tauri::command]
 pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     autostart::set_enabled(&app, enabled)
 }
 
-/// Le impostazioni dell'app (tema, opzione della Beta, "Close to tray", aggiornamento
-/// automatico) e se l'icona nella tray c'è; senza `settings.json` valgono i default.
+/// The app's settings (theme, Beta option, "Close to tray", automatic update) and whether the
+/// tray icon is there; without `settings.json` the defaults apply.
 #[tauri::command]
 pub fn get_settings(
     settings: AppSettingsState<'_>,
@@ -284,7 +284,7 @@ pub fn get_settings(
     settings_view(locked_app_settings(&settings)?.get(), &tray)
 }
 
-/// Salva il tema (`system`, `light` o `dark`) e restituisce le impostazioni aggiornate.
+/// Saves the theme (`system`, `light` or `dark`) and returns the updated settings.
 #[tauri::command]
 pub fn set_theme(
     theme: String,
@@ -294,17 +294,17 @@ pub fn set_theme(
     settings_view(save_theme(&settings, &theme), &tray)
 }
 
-/// Il corpo di [`set_theme`], separato dallo `State` di Tauri per i test. Il nome si controlla
-/// prima del lock: un valore sconosciuto non tocca né la memoria né il file.
+/// The body of [`set_theme`], separated from Tauri's `State` for the tests. The name is checked
+/// before the lock: an unknown value touches neither the memory nor the file.
 fn save_theme(settings: &Mutex<AppSettingsStore>, theme: &str) -> Result<AppSettings, String> {
     let theme = Theme::parse(theme)?;
     locked_app_settings(settings)?.set_theme(theme)
 }
 
-/// Serializza installazioni e aggiornamenti: `install_addon` e `update_addons` lo tengono per
-/// tutto il lavoro bloccante, così il controllo delle cartelle di altri progetti e la
-/// sostituzione sul disco non si intrecciano con un'altra installazione. Il lock non protegge
-/// dati: un panic che lo avvelena non lascia niente di incoerente, quindi si riprende.
+/// Serialises installations and updates: `install_addon` and `update_addons` hold it for all the
+/// blocking work, so the check of other projects' folders and the replacement on disk do not
+/// interleave with another installation. The lock protects no data: a panic that poisons it
+/// leaves nothing inconsistent, so it is recovered.
 #[derive(Default)]
 pub struct InstallLock(Mutex<()>);
 
@@ -313,9 +313,9 @@ impl InstallLock {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Come [`hold`](Self::hold), ma senza aspettare: `None` se un'installazione o un
-    /// aggiornamento lo tiene già. Lo usa il giro automatico (issue #200), che salta e riprova
-    /// invece di accodarsi dietro un comando dell'utente.
+    /// Like [`hold`](Self::hold), but without waiting: `None` if an installation or an update
+    /// already holds it. Used by the automatic run (issue #200), which skips and retries
+    /// instead of queuing behind a user command.
     pub(crate) fn try_hold(&self) -> Option<MutexGuard<'_, ()>> {
         match self.0.try_lock() {
             Ok(guard) => Some(guard),
@@ -345,10 +345,10 @@ pub fn add_installation(path: String, store: Store<'_>) -> Result<Installation, 
     locked(&store)?.add(Path::new(&path))
 }
 
-/// Cerca le installazioni di WoW nei percorsi standard della piattaforma e restituisce quelle
-/// non ancora aggiunte. Suggerisce soltanto: non scrive `installations.json`. Non trovare
-/// niente non è un errore. La lettura del disco (e del registro su Windows) gira fuori dal
-/// thread principale.
+/// Looks for WoW installations in the platform's standard paths and returns those not added
+/// yet. It only suggests: it does not write `installations.json`. Finding nothing is not an
+/// error. Reading the disk (and the registry on Windows) runs off the
+/// main thread.
 #[tauri::command]
 pub async fn discover_installations(
     app: AppHandle,
@@ -363,9 +363,9 @@ pub async fn discover_installations(
     .map_err(|error| format!("The search for installations was interrupted ({error})."))
 }
 
-/// Rimuove prima le impostazioni e i record degli addon, poi l'installazione: se qualcosa non
-/// si può togliere l'installazione resta e si può riprovare, invece di lasciare dati orfani. I
-/// lock non si tengono mai insieme.
+/// Removes the settings and the addon records first, then the installation: if something cannot
+/// be removed the installation stays and can be retried, instead of leaving orphaned data. The
+/// locks are never held together.
 #[tauri::command]
 pub fn remove_installation(
     id: String,
@@ -378,13 +378,13 @@ pub fn remove_installation(
     locked(&store)?.remove(&id)
 }
 
-/// I tipi di versione del gioco che si possono forzare per un addon. Nessuna chiamata di rete.
+/// The game version types that can be forced for an addon. No network call.
 #[tauri::command]
 pub fn list_version_types() -> Vec<VersionType> {
     updates::version_types()
 }
 
-/// Forza la versione del gioco usata per cercare gli aggiornamenti del progetto `mod_id`.
+/// Forces the game version used to look for updates of the project `mod_id`.
 #[tauri::command]
 pub fn set_version_override(
     installation_id: String,
@@ -397,7 +397,7 @@ pub fn set_version_override(
     locked_settings(&settings)?.set_override(&installation_id, mod_id, version_type)
 }
 
-/// Torna alla versione del gioco dell'installazione per il progetto `mod_id`.
+/// Goes back to the installation's game version for the project `mod_id`.
 #[tauri::command]
 pub fn clear_version_override(
     installation_id: String,
@@ -407,14 +407,14 @@ pub fn clear_version_override(
     locked_settings(&settings)?.clear_override(&installation_id, mod_id)
 }
 
-/// Gli addon di un'installazione, con il progetto che l'app vi ha installato (issue #62). La
-/// scansione legge il disco, quindi gira fuori dal thread principale per non bloccare la
-/// finestra con molti addon; il registro si legge prima, qui. Un registro illeggibile non
-/// nasconde gli addon: la lettura procede senza record, mentre le scritture restano bloccate e
-/// il prossimo aggiornamento riporta l'errore nel suo esito.
+/// The addons of an installation, with the project the app installed there (issue #62). The
+/// scan reads the disk, so it runs off the main thread so as not to block the window with many
+/// addons; the registry is read first, here. An unreadable registry does not hide the addons:
+/// the read goes ahead without records, while writes stay blocked and the next update reports
+/// the error in its outcome.
 ///
-/// I fingerprint vengono da [`FingerprintCache`]; con `force` (il pulsante "Reload addons") si
-/// ricalcolano tutti, così una modifica fatta a mano fuori dall'app si vede sempre.
+/// The fingerprints come from [`FingerprintCache`]; with `force` (the "Reload addons" button) they
+/// are all recomputed, so a change made by hand outside the app always shows.
 #[tauri::command]
 pub async fn list_addons(
     installation_id: String,
@@ -440,14 +440,14 @@ pub async fn list_addons(
             .map(|addons| scan::with_installed_projects(addons, &records))
     })
     .await
-    // L'errore di Tauri dice se il compito è andato in panic o è stato annullato.
+    // Tauri's error says whether the task panicked or was cancelled.
     .map_err(|error| format!("Reading the addons was interrupted ({error})."))?
 }
 
-/// La lista degli addon e i loro stati di aggiornamento da una sola scansione (issue #126):
-/// "Reload addons" e le riletture dopo un aggiornamento o un'installazione la usano al posto di
-/// `list_addons` seguito da `check_updates`. Un controllo fallito non toglie la lista, che arriva
-/// con `checkError`. `force` ricalcola i fingerprint come in `list_addons`.
+/// The addon list and their update states from a single scan (issue #126): "Reload addons" and
+/// the rereads after an update or an installation use it instead of `list_addons` followed by
+/// `check_updates`. A failed check does not take away the list, which arrives with
+/// `checkError`. `force` recomputes the fingerprints as in `list_addons`.
 #[tauri::command]
 pub async fn refresh_addons(
     installation_id: String,
@@ -463,7 +463,7 @@ pub async fn refresh_addons(
     let overrides = overrides_for(&settings, &installation.id)?;
     let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
     let records = records_for_matching(&installed, &installation.id);
-    // Come in `list_addons`: un registro illeggibile non nasconde gli addon.
+    // As in `list_addons`: an unreadable registry does not hide the addons.
     let listed_records = locked_installed(&installed)?
         .records_for(&installation.id)
         .unwrap_or_default();
@@ -486,7 +486,7 @@ pub async fn refresh_addons(
     .map_err(|error| format!("Reading the addons was interrupted ({error})."))?
 }
 
-/// Il corpo di [`refresh_addons`], fuori dal runtime asincrono: lo usa anche l'export.
+/// The body of [`refresh_addons`], outside the async runtime: the export uses it too.
 fn refresh_blocking(
     installation: &Installation,
     cache: &FingerprintCache,
@@ -496,8 +496,8 @@ fn refresh_blocking(
     records: &SourceRecords,
     listed_records: &InstalledRecords,
 ) -> Result<updates::Refresh, String> {
-    // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono. Se le
-    // connessioni non si preparano, la lista arriva lo stesso, con il motivo.
+    // reqwest's blocking client must be created and dropped outside the async runtime. If the
+    // connections cannot be set up, the list arrives anyway, with the reason.
     let prepared = ReqwestTransport::new()
         .map_err(|e| e.to_string())
         .and_then(|transport| {
@@ -536,10 +536,10 @@ fn refresh_blocking(
     )
 }
 
-/// La stringa con gli addon dell'installazione (issue #133): i progetti riconosciuti dal
-/// controllo e quelli registrati dall'app, con la versione del gioco forzata. Le cartelle che
-/// nessun progetto copre (per esempio addon installati da zip) restano fuori, per nome. Senza
-/// chiave CurseForge esce almeno quello che le fonti libere e i record conoscono.
+/// The string with the installation's addons (issue #133): the projects recognised by the check
+/// and those recorded by the app, with the forced game version. The folders that no project
+/// covers (for example addons installed from a zip) are left out, by name. Without a CurseForge
+/// key at least what the free sources and the records know comes out.
 #[tauri::command]
 pub async fn export_addons(
     installation_id: String,
@@ -558,7 +558,7 @@ pub async fn export_addons(
         .unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
         let cache = app.state::<FingerprintCache>();
-        // L'opzione della Beta cambia solo gli stati, non quali progetti si riconoscono.
+        // The Beta option changes only the states, not which projects are recognised.
         let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
         let refresh = refresh_blocking(
             &installation,
@@ -580,9 +580,9 @@ pub async fn export_addons(
     .map_err(|error| format!("The export was interrupted ({error})."))?
 }
 
-/// L'anteprima dell'import di una stringa (issue #134): per ogni progetto se è nuovo, già
-/// installato o non scaricabile, le voci non valide e le cartelle che *Replace all* toglierebbe.
-/// Non scrive niente.
+/// The preview of a string import (issue #134): for each project whether it is new, already
+/// installed or not downloadable, the invalid entries and the folders *Replace all* would remove.
+/// It writes nothing.
 #[tauri::command]
 pub async fn preview_import(
     installation_id: String,
@@ -631,10 +631,10 @@ pub async fn preview_import(
     .map_err(|error| format!("The preview was interrupted ({error})."))?
 }
 
-/// Importa una stringa di addon (issue #134): installa i progetti che mancano e, con `replace`,
-/// toglie da `Interface/AddOns` le cartelle che nessun progetto importato reclama, ma solo quelle
-/// in `confirmedRemovals` (l'elenco che l'utente ha visto nell'anteprima). Niente backup, per
-/// scelta dell'utente. Tiene [`InstallLock`] per tutto il lavoro.
+/// Imports an addon string (issue #134): installs the missing projects and, with `replace`,
+/// removes from `Interface/AddOns` the folders no imported project claims, but only those in
+/// `confirmedRemovals` (the list the user saw in the preview). No backup, by the user's
+/// choice. Holds [`InstallLock`] for all the work.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn import_addons(
@@ -650,7 +650,7 @@ pub async fn import_addons(
     let decoded = addon_list::decode(&text)?;
     let key = config.curseforge_api_key.clone();
     let installation = find_installation(&store, &installation_id)?;
-    // Le versioni forzate si rileggono dopo averle scritte: qui serve solo che si leggano.
+    // The forced versions are reread after writing them: here they only need to be readable.
     overrides_for(&settings, &installation.id)?;
     let confirmed = confirmed_removals.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
@@ -661,7 +661,7 @@ pub async fn import_addons(
         let settings = app.state::<Mutex<AddonSettingsStore>>();
         let addons_dir = installation.path.join("Interface").join("AddOns");
         let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
-        // Lo stato prima e dopo le installazioni, con le versioni forzate di quel momento.
+        // The state before and after the installations, with the forced versions of that moment.
         let read_state = || -> Result<(updates::Refresh, SourceRecords), String> {
             let overrides = settings
                 .lock()
@@ -722,7 +722,7 @@ pub async fn import_addons(
         result.lookup_error = lookup_error;
         if !result.removed.is_empty() {
             cache.forget(&addons_dir, &result.removed);
-            // Le cartelle sono già tolte: un registro che non si aggiorna non annulla niente.
+            // The folders are already removed: a registry that does not update undoes nothing.
             let _ = locked_installed(&installed)
                 .and_then(|mut store| store.forget_folders(&installation.id, &result.removed));
         }
@@ -734,13 +734,13 @@ pub async fn import_addons(
 
 type Availabilities = HashMap<(SourceKind, String), addon_import::Availability>;
 
-/// I progetti CurseForge chiesti in una sola `get_mods` dall'anteprima di un import.
+/// The CurseForge projects requested in a single `get_mods` by the preview of an import.
 const MODS_PER_REQUEST: usize = 100;
 
-/// Se i progetti della stringa si possono scaricare: per CurseForge da `allowModDistribution`
-/// (una sola richiesta per tutti), per Tukui dal suo elenco. Se una fonte non risponde, i suoi
-/// progetti valgono come scaricabili (l'installazione dirà il motivo) e il secondo valore
-/// riporta l'errore.
+/// Whether the projects of the string can be downloaded: for CurseForge from `allowModDistribution`
+/// (a single request for all of them), for Tukui from its list. If a source does not answer, its
+/// projects count as downloadable (the installation will give the reason) and the second value
+/// reports the error.
 fn import_availability(
     entries: &[addon_list::ListEntry],
     client: &CurseForgeClient<ReqwestTransport>,
@@ -769,8 +769,8 @@ fn import_availability(
                 );
             }
         } else {
-            // A pezzi: una stringa può avere fino a 1.000 progetti, e un pezzo che fallisce non
-            // toglie le risposte degli altri.
+            // In chunks: a string can have up to 1,000 projects, and a chunk that fails does not
+            // take away the answers of the others.
             for chunk in mod_ids.chunks(MODS_PER_REQUEST) {
                 match client.get_mods(chunk) {
                     Ok(mods) => {
@@ -814,8 +814,8 @@ fn import_availability(
         .iter()
         .filter(|e| !matches!(e.source, SourceKind::Curseforge | SourceKind::Tukui))
     {
-        // Un progetto GitHub vale come installabile senza leggere la release, per non spendere
-        // il limite di richieste; un id che non è `owner/repo` no.
+        // A GitHub project counts as installable without reading the release, so as not to spend
+        // the request limit; an id that is not `owner/repo` does not.
         let message = match entry.source {
             SourceKind::Github if github::is_valid_repo(&entry.key) => continue,
             SourceKind::Github => "Invalid GitHub project: it must be owner/repo.".to_owned(),
@@ -830,9 +830,9 @@ fn import_availability(
     (availability, error)
 }
 
-/// Se un progetto CurseForge della stringa si può installare: sì se CurseForge permette il
-/// download, e anche se lo blocca ma il progetto dichiara un repository GitHub (issue #179):
-/// l'installazione prova il mirror (D34) e, se non si può usare, dice il motivo. Nessuna rete.
+/// Whether a CurseForge project in the string can be installed: yes if CurseForge allows the
+/// download, and also if it blocks it but the project declares a GitHub repository (issue #179):
+/// the installation tries the mirror (D34) and, if it cannot be used, gives the reason. No network.
 fn curseforge_availability(found: &curseforge::Mod) -> addon_import::Availability {
     if found.allow_mod_distribution == Some(true)
         || github_mirror::github_repo(found.links.source_url.as_deref()).is_some()
@@ -855,50 +855,50 @@ fn availability_of(
         .unwrap_or(addon_import::Availability::Available)
 }
 
-/// Installa i progetti di un import con le fonti vere. Non conosce Tauri: lo stato dell'app
-/// arriva per riferimento, così il banco di prova (`import_bench`) usa lo stesso percorso.
+/// Installs the projects of an import with the real sources. It does not know Tauri: the app
+/// state arrives by reference, so the test bench (`import_bench`) uses the same path.
 struct CommandInstaller<'a> {
     installation: &'a Installation,
     client: &'a CurseForgeClient<ReqwestTransport>,
     tukui: &'a TukuiSource<PublicReqwestTransport>,
-    /// Per i progetti GitHub e per il mirror dei progetti CurseForge bloccati (issue #179).
-    /// L'anteprima non legge le release.
+    /// For GitHub projects and for the mirror of blocked CurseForge projects (issue #179).
+    /// The preview does not read the releases.
     github: &'a GithubSource<PublicReqwestTransport>,
     availability: &'a Availabilities,
-    /// L'impostazione "Use beta files when there is no release" (issue #141).
+    /// The "Use beta files when there is no release" setting (issue #141).
     allow_beta: bool,
     installed: &'a Mutex<InstalledAddonsStore>,
     settings: &'a Mutex<AddonSettingsStore>,
     cache: &'a FingerprintCache,
     progress: &'a (dyn Fn(Progress) + Sync),
-    /// Quello che la prima fase ha scaricato e la seconda non ha ancora installato (issue #180).
+    /// What the first phase downloaded and the second has not installed yet (issue #180).
     prepared: Prepared,
 }
 
-/// Gli zip scaricati dalla prima fase di un import, in attesa della loro installazione.
+/// The zips downloaded by the first phase of an import, waiting for their installation.
 #[derive(Default)]
 struct Prepared {
     curseforge: install_new::Prefetched,
-    /// Per chiave Tukui, lo zip o l'esito che dice perché non c'è.
+    /// By Tukui key, the zip or the outcome that says why there is none.
     tukui: HashMap<String, Result<tukui::TukuiDownload, Box<updates::UpdateOutcome>>>,
-    /// Per repository GitHub, la release con lo zip o l'esito che dice perché non c'è.
+    /// By GitHub repository, the release with the zip or the outcome that says why there is none.
     github: HashMap<String, Result<github::GithubDownload, Box<updates::UpdateOutcome>>>,
 }
 
-/// Uno zip di una fonte libera scaricato dalla prima fase.
+/// A free-source zip downloaded by the first phase.
 enum FreeDownload {
     Tukui(Result<tukui::TukuiDownload, Box<updates::UpdateOutcome>>),
     Github(Result<github::GithubDownload, Box<updates::UpdateOutcome>>),
 }
 
 impl CommandInstaller<'_> {
-    /// Le richieste vere a CurseForge, per la prima fase e per quello che non ha letto.
+    /// The real requests to CurseForge, for the first phase and for what it did not read.
     fn live(&self) -> install_new::Live<'_, ReqwestTransport> {
         install_new::Live {
             client: self.client,
-            // Un progetto bloccato da CurseForge si installa dal mirror GitHub (D34): le release
-            // si leggono senza l'API (issue #179), quindi un elenco lungo non consuma il limite
-            // di 60 richieste l'ora.
+            // A project blocked by CurseForge is installed from the GitHub mirror (D34): the
+            // releases are read without the API (issue #179), so a long list does not use up the
+            // limit of 60 requests per hour.
             github: Some(self.github),
             allow_beta: self.allow_beta,
         }
@@ -906,8 +906,8 @@ impl CommandInstaller<'_> {
 }
 
 impl addon_import::Installer for CommandInstaller<'_> {
-    /// Risolve e scarica le voci del gruppo, più voci insieme ([`parallel::DOWNLOADS_AT_ONCE`]);
-    /// il disco e i record non si toccano.
+    /// Resolves and downloads the group's entries, several at once
+    /// ([`parallel::DOWNLOADS_AT_ONCE`]); the disk and the records are not touched.
     fn prepare(&mut self, entries: &[&addon_list::ListEntry]) {
         let installation = self.installation;
         let availability = self.availability;
@@ -926,9 +926,9 @@ impl addon_import::Installer for CommandInstaller<'_> {
             .ok()
             .and_then(|store| store.overrides_for(&installation.id).ok())
             .unwrap_or_default();
-        // La versione del gioco che l'installazione userà, con la stessa funzione: `install`
-        // salva quella della voce come versione forzata prima di rileggerle, quindi qui vale come
-        // già salvata.
+        // The game version the installation will use, with the same function: `install` saves
+        // the entry's one as the forced version before rereading them, so here it counts as
+        // already saved.
         let projects: Vec<(u32, Option<u32>)> = available(SourceKind::Curseforge)
             .filter_map(|entry| {
                 let mod_id = entry.key.parse::<u32>().ok()?;
@@ -942,7 +942,7 @@ impl addon_import::Installer for CommandInstaller<'_> {
                 ))
             })
             .collect();
-        // Senza record l'installazione si ferma comunque: niente da scaricare.
+        // Without records the installation stops anyway: nothing to download.
         if !projects.is_empty()
             && let Ok(records) = locked_installed(self.installed)
                 .and_then(|store| store.records_for(&installation.id))
@@ -957,7 +957,7 @@ impl addon_import::Installer for CommandInstaller<'_> {
                 self.progress,
             );
         }
-        // Tukui e GitHub insieme, con lo stesso limite.
+        // Tukui and GitHub together, with the same limit.
         let free: Vec<(SourceKind, &str)> = available(SourceKind::Tukui)
             .chain(available(SourceKind::Github))
             .map(|entry| (entry.source, entry.key.as_str()))
@@ -1123,8 +1123,8 @@ impl addon_import::Installer for CommandInstaller<'_> {
     }
 }
 
-/// L'esito di un progetto CurseForge importato dagli esiti di `install_addon`: il primo è il
-/// progetto, gli altri le sue dipendenze.
+/// The outcome of an imported CurseForge project from the outcomes of `install_addon`: the first is
+/// the project, the others its dependencies.
 fn import_outcome_from_install(
     entry: &addon_list::ListEntry,
     outcomes: &[InstallOutcome],
@@ -1167,8 +1167,8 @@ fn import_outcome_from_install(
     outcome
 }
 
-/// Riconosce gli addon con le fonti (D33) e indica quali hanno un aggiornamento. Scansione e rete
-/// girano fuori dal thread principale.
+/// Recognises the addons with the sources (D33) and indicates which have an update. Scan and
+/// network run off the main thread.
 #[tauri::command]
 pub async fn check_updates(
     installation_id: String,
@@ -1178,8 +1178,8 @@ pub async fn check_updates(
     installed: Installed<'_>,
     config: State<'_, Config>,
 ) -> Result<Vec<AddonUpdate>, String> {
-    // Senza chiave CurseForge non controlla niente, ma le fonti libere sì (D31): le cartelle
-    // che nessuna riconosce riportano il motivo.
+    // Without a CurseForge key it checks nothing, but the free sources do (D31): the folders
+    // that none recognises report the reason.
     let key = config.curseforge_api_key.clone();
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
@@ -1196,12 +1196,12 @@ pub async fn check_updates(
     .map_err(|error| format!("The update check was interrupted ({error})."))?
 }
 
-/// Aggiorna i progetti dell'installazione: `mod_ids` sono progetti CurseForge, `projects` quelli
-/// di qualsiasi fonte (`{source, key}`). Con `reinstall` (default `false`, issue #148) riscarica
-/// anche i progetti già aggiornati, con lo stesso ciclo e le stesse regole. Rifà il controllo, scarica e installa, e registra in
-/// `installed-addons.json` quello che ha installato. Rete e disco girano fuori dal thread
-/// principale, sotto [`InstallLock`]; il lock del registro si prende solo per scrivere ogni
-/// record.
+/// Updates the installation's projects: `mod_ids` are CurseForge projects, `projects` those
+/// of any source (`{source, key}`). With `reinstall` (default `false`, issue #148) it also
+/// redownloads the projects already up to date, with the same loop and the same rules. It redoes
+/// the check, downloads and installs, and records in `installed-addons.json` what it installed.
+/// Network and disk run off the main thread, under [`InstallLock`]; the registry lock is taken
+/// only to write each record.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn update_addons(
@@ -1216,8 +1216,8 @@ pub async fn update_addons(
     config: State<'_, Config>,
 ) -> Result<Vec<UpdateOutcome>, String> {
     let reinstall = reinstall.unwrap_or(false);
-    // Senza chiave CurseForge non controlla niente, ma le fonti libere sì (D31): le cartelle
-    // che nessuna riconosce riportano il motivo.
+    // Without a CurseForge key it checks nothing, but the free sources do (D31): the folders
+    // that none recognises report the reason.
     let key = config.curseforge_api_key.clone();
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
@@ -1255,8 +1255,8 @@ pub async fn update_addons(
     .map_err(|error| format!("The update was interrupted ({error})."))?
 }
 
-/// Consegna gli avanzamenti di un'installazione alla finestra come evento
-/// [`progress::EVENT`] (issue #127). Un evento che non parte non ferma l'installazione.
+/// Delivers an installation's progress to the window as a [`progress::EVENT`] event
+/// (issue #127). An event that fails to go out does not stop the installation.
 fn emit_progress<'a>(app: &'a AppHandle, installation_id: &'a str) -> impl Fn(Progress) + 'a {
     move |progress| {
         let _ = app.emit(
@@ -1269,10 +1269,10 @@ fn emit_progress<'a>(app: &'a AppHandle, installation_id: &'a str) -> impl Fn(Pr
     }
 }
 
-/// Le fonti dei controlli e degli aggiornamenti, con la chiave CurseForge se c'è (D31: senza,
-/// le fonti libere funzionano lo stesso). Le usano `check_updates`, `update_addons` e il giro
-/// automatico (`auto_update`, issue #200), così le tre strade hanno le stesse fonti nello stesso
-/// ordine. Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+/// The sources for checks and updates, with the CurseForge key if there is one (D31: without it,
+/// the free sources work anyway). `check_updates`, `update_addons` and the automatic run
+/// (`auto_update`, issue #200) use them, so the three paths have the same sources in the same
+/// order. reqwest's blocking client must be created and dropped outside the async runtime.
 pub(crate) struct LiveSources {
     client: CurseForgeClient<ReqwestTransport>,
     tukui: TukuiSource<PublicReqwestTransport>,
@@ -1291,21 +1291,21 @@ impl LiveSources {
         })
     }
 
-    /// Se c'è la chiave CurseForge: senza, il controllo di CurseForge fallisce sempre, e non per
-    /// la rete.
+    /// Whether the CurseForge key is there: without it, the CurseForge check always fails, and not
+    /// because of the network.
     pub(crate) fn has_curseforge_key(&self) -> bool {
         self.client.has_key()
     }
 
-    /// Esegue `run` con le fonti nell'ordine di D33: CurseForge (con le versioni forzate
-    /// dell'installazione e l'opzione della Beta), Tukui, WoWInterface, GitHub.
+    /// Runs `run` with the sources in D33 order: CurseForge (with the installation's forced
+    /// versions and the Beta option), Tukui, WoWInterface, GitHub.
     pub(crate) fn with<R>(
         &self,
         overrides: &VersionOverrides,
         allow_beta: bool,
         run: impl FnOnce(&[&dyn Source]) -> R,
     ) -> R {
-        // I progetti che CurseForge non lascia scaricare usano il mirror GitHub (D34).
+        // The projects CurseForge does not let you download use the GitHub mirror (D34).
         let curseforge = CurseForgeSource {
             client: &self.client,
             overrides,
@@ -1316,9 +1316,9 @@ impl LiveSources {
     }
 }
 
-/// Registra in `installed-addons.json` quello che un aggiornamento ha appena installato; le
-/// cartelle scritte si ricalcolano alla prossima scansione. Il lock del registro si prende solo
-/// per scrivere ogni record.
+/// Records in `installed-addons.json` what an update has just installed; the written folders
+/// are recomputed at the next scan. The registry lock is taken only
+/// to write each record.
 pub(crate) fn record_writer<'a>(
     installed: &'a Mutex<InstalledAddonsStore>,
     cache: &'a FingerprintCache,
@@ -1331,23 +1331,24 @@ pub(crate) fn record_writer<'a>(
     }
 }
 
-/// La fonte Tukui (D31), senza chiave. Va creata fuori dal runtime asincrono, come il client
-/// di CurseForge.
+/// The Tukui source (D31), without a key. It must be created outside the async runtime, like the
+/// CurseForge client.
 fn tukui_source() -> Result<TukuiSource<PublicReqwestTransport>, String> {
     let transport = PublicReqwestTransport::new(&tukui::DOMAINS)
         .map_err(|_| "Could not prepare the connection to Tukui.".to_owned())?;
     Ok(TukuiSource::new(transport))
 }
 
-/// La fonte WoWInterface (D31, issue #107), senza chiave. Va creata fuori dal runtime
-/// asincrono, come le altre.
+/// The WoWInterface source (D31, issue #107), without a key. It must be created outside the async
+/// runtime, like the others.
 fn wowinterface_source() -> Result<WowInterfaceSource<PublicReqwestTransport>, String> {
     let transport = PublicReqwestTransport::new(&wowinterface::DOMAINS)
         .map_err(|_| "Could not prepare the connection to WoWInterface.".to_owned())?;
     Ok(WowInterfaceSource::new(transport))
 }
 
-/// La fonte GitHub Releases (issue #108), senza token. Va creata fuori dal runtime asincrono.
+/// The GitHub Releases source (issue #108), without a token. It must be created outside the async
+/// runtime.
 fn github_source() -> Result<GithubSource<PublicReqwestTransport>, String> {
     let transport = PublicReqwestTransport::new(&github::DOMAINS)
         .map_err(|_| "Could not prepare the connection to GitHub.".to_owned())?;
@@ -1357,13 +1358,13 @@ fn github_source() -> Result<GithubSource<PublicReqwestTransport>, String> {
     ))
 }
 
-/// Le release GitHub lette e il limite di richieste, condivisi da tutti i comandi: ogni Reload
-/// rifà il controllo, e le richieste senza token sono 60 l'ora.
+/// The GitHub releases read and the request limit, shared by all the commands: every Reload
+/// redoes the check, and requests without a token are 60 per hour.
 static GITHUB_CACHE: LazyLock<Arc<github::Cache>> = LazyLock::new(Arc::default);
 
-/// I record dell'installazione per l'ordine di abbinamento (D33). Un `installed-addons.json`
-/// illeggibile non blocca il controllo: senza record le cartelle si offrono a tutte le fonti,
-/// come prima dei record; le scritture lo segnalano comunque.
+/// The installation's records for the matching order (D33). An unreadable `installed-addons.json`
+/// does not block the check: without records the folders are offered to all the sources, as
+/// before the records; writes report it anyway.
 pub(crate) fn records_for_matching(
     installed: &Mutex<InstalledAddonsStore>,
     installation_id: &str,
@@ -1373,15 +1374,15 @@ pub(crate) fn records_for_matching(
         .unwrap_or_default()
 }
 
-/// Installa un addon nuovo dal catalogo: il file `file_id` se indicato, altrimenti l'ultimo
-/// Release per la versione del gioco forzata per il progetto o dell'installazione, poi le sue
-/// dipendenze obbligatorie. Restituisce l'esito del progetto seguito da quelli delle
-/// dipendenze, ognuno con `dependencyOf`. Tutta la visita delle dipendenze resta sotto lo
-/// stesso lock. Rete e disco
-/// girano fuori dal thread principale, sotto [`InstallLock`]. I record si leggono lì, con il lock
-/// già preso, così nessun'altra installazione li cambia prima della sostituzione: un registro
-/// illeggibile blocca l'installazione, perché senza record non si sa quali cartelle
-/// appartengono ad altri progetti.
+/// Installs a new addon from the catalog: the file `file_id` if given, otherwise the latest
+/// Release for the game version forced for the project or the installation's, then its required
+/// dependencies. Returns the project's outcome followed by those of the
+/// dependencies, each with `dependencyOf`. The whole dependency walk stays under the
+/// same lock. Network and disk
+/// run off the main thread, under [`InstallLock`]. The records are read there, with the lock
+/// already taken, so no other installation changes them before the replacement: an unreadable
+/// registry blocks the installation, because without records it is unknown which folders
+/// belong to other projects.
 #[tauri::command]
 pub async fn install_addon(
     installation_id: String,
@@ -1402,10 +1403,10 @@ pub async fn install_addon(
     tauri::async_runtime::spawn_blocking(move || {
         let lock = app.state::<InstallLock>();
         let _held = lock.hold();
-        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+        // reqwest's blocking client must be created and dropped outside the async runtime.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         let client = CurseForgeClient::new(transport, Some(key));
-        // I progetti che CurseForge non lascia scaricare usano il mirror GitHub (D34).
+        // The projects CurseForge does not let you download use the GitHub mirror (D34).
         let github = github_source()?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         let records = locked_installed(&installed)?.records_for(&installation.id)?;
@@ -1419,7 +1420,7 @@ pub async fn install_addon(
             file_id,
             allow_beta,
             &mut |mod_id, record| {
-                // Le cartelle appena scritte si ricalcolano alla prossima scansione.
+                // The folders just written are recomputed at the next scan.
                 app.state::<FingerprintCache>().forget(
                     &installation.path.join("Interface").join("AddOns"),
                     &record.folders,
@@ -1433,14 +1434,14 @@ pub async fn install_addon(
     .map_err(|error| format!("The installation was interrupted ({error})."))?
 }
 
-/// Il mirror GitHub del progetto CurseForge `mod_id` per l'installazione (D34, issue #164):
-/// `{ available, repo, tag, reason }`, per il file `file_id` se indicato (come `install_addon`),
-/// altrimenti per l'ultimo della versione del gioco. Si chiama su richiesta: dal dettaglio,
-/// da Install e dalla Search, che lo chiama da sola per i progetti bloccati con un
-/// `githubRepo` nel [`CatalogAddon`](crate::catalog::CatalogAddon) (issue #222, #223); un
-/// progetto senza `githubRepo` non ha un mirror possibile e non serve chiederlo. Un progetto
-/// che CurseForge lascia scaricare risponde `available: false` con `reason: null` senza
-/// richieste a GitHub. Rete fuori dal thread principale.
+/// The GitHub mirror of the CurseForge project `mod_id` for the installation (D34, issue #164):
+/// `{ available, repo, tag, reason }`, for the file `file_id` if given (like `install_addon`),
+/// otherwise for the latest one of the game version. It is called on request: from the detail,
+/// from Install and from Search, which calls it on its own for blocked projects with a
+/// `githubRepo` in the [`CatalogAddon`](crate::catalog::CatalogAddon) (issue #222, #223); a
+/// project without `githubRepo` has no possible mirror and there is no need to ask. A project
+/// that CurseForge lets you download answers `available: false` with `reason: null` without
+/// requests to GitHub. Network off the main thread.
 #[tauri::command]
 pub async fn github_mirror(
     installation_id: String,
@@ -1459,7 +1460,7 @@ pub async fn github_mirror(
     let overrides = overrides_for(&settings, &installation.id)?;
     let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
     tauri::async_runtime::spawn_blocking(move || {
-        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+        // reqwest's blocking client must be created and dropped outside the async runtime.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         let client = CurseForgeClient::new(transport, Some(key));
         let github = github_source()?;
@@ -1477,11 +1478,11 @@ pub async fn github_mirror(
     .map_err(|error| format!("The GitHub check was interrupted ({error})."))?
 }
 
-/// Installa nell'installazione lo zip che l'utente ha scaricato a mano e trascinato nella
-/// finestra o scelto con il selettore (D32). Il frontend passa solo il percorso: il file si legge
-/// qui. Toglie i record dei progetti di cui ha sostituito le cartelle. Tiene `InstallLock` come
-/// gli altri comandi che scrivono in `AddOns`, sia per la sostituzione sia per i record; il disco
-/// si tocca fuori dal thread principale.
+/// Installs into the installation the zip the user downloaded by hand and dragged into the
+/// window or chose with the picker (D32). The frontend passes only the path: the file is read
+/// here. Removes the records of the projects whose folders it replaced. Holds `InstallLock` like
+/// the other commands that write to `AddOns`, both for the replacement and for the records; the
+/// disk is touched off the main thread.
 #[tauri::command]
 pub async fn install_zip(
     installation_id: String,
@@ -1501,10 +1502,10 @@ pub async fn install_zip(
         )?;
         app.state::<FingerprintCache>()
             .forget(&addons_dir, &result.installed);
-        // Un record che nomina una cartella appena scritta descriverebbe un file che non c'è più
-        // (D32, D33): si toglie. Valgono tutte le cartelle dello zip, non solo quelle sostituite:
-        // un record può nominare una cartella cancellata a mano e ora ricreata dallo zip.
-        // L'installazione è già fatta, quindi un errore qui diventa un avviso e non un fallimento.
+        // A record that names a folder just written would describe a file that no longer exists
+        // (D32, D33): it is removed. All the zip's folders count, not only the replaced ones:
+        // a record can name a folder deleted by hand and now recreated by the zip.
+        // The installation is already done, so an error here becomes a warning and not a failure.
         {
             let installed = app.state::<Mutex<InstalledAddonsStore>>();
             if let Err(error) = locked_installed(&installed)
@@ -1521,10 +1522,10 @@ pub async fn install_zip(
     .map_err(|error| format!("The installation was interrupted ({error})."))?
 }
 
-/// Riconosce un link di GitHub, WoWInterface o Tukui e ne restituisce l'anteprima (issue #109):
-/// fonte, id, nome, versione, se si può scaricare per l'installazione, pagina del progetto e se
-/// l'app l'ha già installato. Un link non riconosciuto o malformato è un errore prima di
-/// qualunque richiesta di rete; la rete gira fuori dal thread principale.
+/// Recognises a GitHub, WoWInterface or Tukui link and returns its preview (issue #109):
+/// source, id, name, version, whether it can be downloaded for the installation, project page
+/// and whether the app has already installed it. An unrecognised or malformed link is an error
+/// before any network request; the network runs off the main thread.
 #[tauri::command]
 pub async fn resolve_link(
     installation_id: String,
@@ -1536,7 +1537,7 @@ pub async fn resolve_link(
     let installation = find_installation(&store, &installation_id)?;
     let records = records_for_matching(&installed, &installation.id);
     tauri::async_runtime::spawn_blocking(move || {
-        // Le fonti bloccanti di reqwest vanno create e distrutte fuori dal runtime asincrono.
+        // reqwest's blocking sources must be created and dropped outside the async runtime.
         let (github, wowinterface, tukui) =
             (github_source()?, wowinterface_source()?, tukui_source()?);
         let sources = LinkSources {
@@ -1550,12 +1551,12 @@ pub async fn resolve_link(
     .map_err(|error| format!("Reading the link was interrupted ({error})."))?
 }
 
-/// Installa il progetto `id` della fonte `source` (`github`, `wowinterface` o `tukui`) letto da
-/// [`resolve_link`]. Un progetto già installato si salta senza rete; una cartella dello zip di un
-/// altro progetto fa fallire l'installazione senza toccare il disco. Tiene [`InstallLock`] e
-/// legge lì i record di tutte le fonti: un registro illeggibile blocca l'installazione, perché
-/// senza record non si sa quali cartelle appartengono ad altri progetti. Registra il progetto in
-/// `installed-addons.json` e restituisce un esito con la forma di `UpdateOutcome`.
+/// Installs the project `id` of the source `source` (`github`, `wowinterface` or `tukui`) read by
+/// [`resolve_link`]. A project already installed is skipped without network; a zip folder of
+/// another project makes the installation fail without touching the disk. Holds [`InstallLock`]
+/// and reads there the records of all the sources: an unreadable registry blocks the installation,
+/// because without records it is unknown which folders belong to other projects. Records the
+/// project in `installed-addons.json` and returns an outcome shaped like `UpdateOutcome`.
 #[tauri::command]
 pub async fn install_from_link(
     installation_id: String,
@@ -1596,11 +1597,11 @@ pub async fn install_from_link(
     .map_err(|error| format!("The installation was interrupted ({error})."))?
 }
 
-/// Toglie dall'installazione le cartelle `folders` di `Interface/AddOns` (issue #147), con un
-/// esito per cartella: un nome non valido o una cartella che non si toglie non ferma le altre.
-/// Le cartelle tolte escono dai record e dalla cache dei fingerprint. Niente backup (scelta
-/// dell'utente) e niente fuori da `AddOns`. Tiene `InstallLock` come gli altri comandi che
-/// scrivono in `AddOns`; il disco si tocca fuori dal thread principale.
+/// Removes the folders `folders` of `Interface/AddOns` from the installation (issue #147), with
+/// one outcome per folder: an invalid name or a folder that cannot be removed does not stop the
+/// others. The removed folders leave the records and the fingerprint cache. No backup (the
+/// user's choice) and nothing outside `AddOns`. Holds `InstallLock` like the other commands that
+/// write to `AddOns`; the disk is touched off the main thread.
 #[tauri::command]
 pub async fn remove_addons(
     installation_id: String,
@@ -1625,10 +1626,10 @@ pub async fn remove_addons(
     .map_err(|error| format!("The removal was interrupted ({error})."))
 }
 
-/// Una pagina della ricerca nel catalogo di CurseForge per l'installazione (50 risultati da
-/// `index`). Senza `version_type` vale la versione del gioco dell'installazione. Il flag
-/// `installed` si calcola dai record e dai `.toc`, senza rete; rete e disco girano fuori dal
-/// thread principale.
+/// A page of the CurseForge catalog search for the installation (50 results from
+/// `index`). Without `version_type` the installation's game version applies. The
+/// `installed` flag is computed from the records and the `.toc` files, without network; network
+/// and disk run off the main thread.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn search_catalog(
@@ -1649,7 +1650,8 @@ pub async fn search_catalog(
         .clone()
         .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
     let installation = find_installation(&store, &installation_id)?;
-    // Come in `list_addons`: un registro illeggibile non blocca la ricerca, vale solo il `.toc`.
+    // As in `list_addons`: an unreadable registry does not block the search, only the `.toc`
+    // counts.
     let records = locked_installed(&installed)?
         .records_for(&installation.id)
         .unwrap_or_default();
@@ -1663,7 +1665,7 @@ pub async fn search_catalog(
         allow_beta: beta_when_no_release(&app_settings),
     };
     tauri::async_runtime::spawn_blocking(move || {
-        // Il client bloccante di reqwest va creato e distrutto fuori dal runtime asincrono.
+        // reqwest's blocking client must be created and dropped outside the async runtime.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         let client = CurseForgeClient::new(transport, Some(key));
         catalog::search_catalog(&installation, &client, &records, &request)
@@ -1672,7 +1674,7 @@ pub async fn search_catalog(
     .map_err(|error| format!("The search was interrupted ({error})."))?
 }
 
-/// Le categorie degli addon di WoW su CurseForge, per nome, senza le classi.
+/// The categories of WoW addons on CurseForge, by name, without the classes.
 #[tauri::command]
 pub async fn list_categories(config: State<'_, Config>) -> Result<Vec<CatalogCategory>, String> {
     let key = config
@@ -1688,10 +1690,10 @@ pub async fn list_categories(config: State<'_, Config>) -> Result<Vec<CatalogCat
     .map_err(|error| format!("Reading the categories was interrupted ({error})."))?
 }
 
-/// Il dettaglio di un addon del catalogo: descrizione in testo semplice, file Release e Beta
-/// recenti e dipendenze obbligatorie. Senza `version_type` vale la versione forzata del
-/// progetto, altrimenti quella dell'installazione. Rete e disco girano fuori dal thread
-/// principale.
+/// The detail of a catalog addon: description in plain text, recent Release and Beta files
+/// and required dependencies. Without `version_type` the project's forced version applies,
+/// otherwise the installation's. Network and disk run off the main
+/// thread.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn addon_detail(
@@ -1711,7 +1713,7 @@ pub async fn addon_detail(
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let allow_beta = beta_when_no_release(&app_settings);
-    // Come nella ricerca: un registro illeggibile non blocca il dettaglio, vale solo il `.toc`.
+    // As in the search: an unreadable registry does not block the detail, only the `.toc` counts.
     let records = locked_installed(&installed)?
         .records_for(&installation.id)
         .unwrap_or_default();
@@ -1740,7 +1742,7 @@ fn find_installation(store: &Store<'_>, installation_id: &str) -> Result<Install
         .ok_or_else(|| "Installation not found.".to_owned())
 }
 
-/// `app_data_dir()/backups/<id-installazione>/`: la cartella la sceglie Tauri.
+/// `app_data_dir()/backups/<installation-id>/`: Tauri chooses the folder.
 fn backups_dir(app: &AppHandle, installation_id: &str) -> Result<PathBuf, String> {
     let data = app
         .path()
@@ -1749,8 +1751,8 @@ fn backups_dir(app: &AppHandle, installation_id: &str) -> Result<PathBuf, String
     Ok(data.join("backups").join(installation_id))
 }
 
-/// Zip di `WTF` e `Interface` dell'installazione. Può leggere centinaia di MB, quindi gira
-/// fuori dal thread principale.
+/// Zip of the installation's `WTF` and `Interface`. It can read hundreds of MB, so it runs
+/// off the main thread.
 #[tauri::command]
 pub async fn create_backup(
     installation_id: String,
@@ -1764,7 +1766,7 @@ pub async fn create_backup(
         .map_err(|error| format!("The backup was interrupted ({error})."))?
 }
 
-/// I backup di un'installazione, dal più recente.
+/// The backups of an installation, most recent first.
 #[tauri::command]
 pub async fn list_backups(
     installation_id: String,
@@ -1778,7 +1780,7 @@ pub async fn list_backups(
         .map_err(|error| format!("Reading the backups was interrupted ({error})."))?
 }
 
-/// Il banco di prova dell'import (issue #180): mai in CI.
+/// The import test bench (issue #180): never in CI.
 #[cfg(test)]
 #[path = "import_bench.rs"]
 mod import_bench;
@@ -1806,8 +1808,8 @@ mod tests {
         );
     }
 
-    /// Il frontend esclude un addon con i campi `source` e `key` del `project` di un
-    /// `AddonUpdate`: quei due campi devono bastare a costruire un `ProjectKey`.
+    /// The frontend excludes an addon with the `source` and `key` fields of the `project` of an
+    /// `AddonUpdate`: those two fields must be enough to build a `ProjectKey`.
     #[test]
     fn a_project_of_an_update_row_reads_as_a_project_key() {
         let project = serde_json::to_value(updates::Project {
@@ -1863,7 +1865,7 @@ mod tests {
         assert_eq!(reloaded.auto_update_interval_hours, 1);
     }
 
-    /// Issue #179: un progetto bloccato con un repository GitHub si importa dal mirror.
+    /// Issue #179: a blocked project with a GitHub repository is imported from the mirror.
     #[test]
     fn a_blocked_project_with_a_github_repository_can_be_imported() {
         let project = |allow: Option<bool>, source_url: Option<&str>| -> curseforge::Mod {

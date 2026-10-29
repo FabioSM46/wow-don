@@ -1,20 +1,20 @@
-//! Installazione da un link di GitHub, WoWInterface o Tukui (issue #109).
+//! Installing from a GitHub, WoWInterface or Tukui link (issue #109).
 //!
-//! [`parse_link`] riconosce il link senza nessuna richiesta di rete e lo traduce nel progetto
-//! di una fonte (`ProjectKey`): `github.com/<owner>/<repo>` (anche con `/releases` e simili),
-//! `wowinterface.com/downloads/info<ID>-<nome>.html` e `tukui.org/elvui` o `/tukui`, con o
-//! senza `www`. Il testo si legge con `reqwest::Url`, mai confrontando il testo intero.
+//! [`parse_link`] recognizes the link without any network request and translates it into a
+//! source's project (`ProjectKey`): `github.com/<owner>/<repo>` (also with `/releases` and the
+//! like), `wowinterface.com/downloads/info<ID>-<name>.html` and `tukui.org/elvui` or `/tukui`,
+//! with or without `www`. The text is read with `reqwest::Url`, never by comparing the whole text.
 //!
-//! [`preview`] chiede alla fonte nome, versione e se il progetto si può scaricare per
-//! l'installazione; [`install`] lo installa con le fonti esistenti (`install_new` di ognuna),
-//! con le regole di `install_new::install_addon`:
-//! - un progetto già installato (un record della stessa fonte con almeno una cartella ancora in
-//!   `AddOns`) si salta senza rete;
-//! - una cartella dello zip che esiste già e appartiene a un altro progetto (un record di
-//!   qualunque fonte, o senza record il `## X-Curse-Project-ID` del suo `.toc`) fa fallire
-//!   l'installazione prima di toccare il disco; una cartella senza record né id si sostituisce.
+//! [`preview`] asks the source for name, version and whether the project can be downloaded for
+//! the installation; [`install`] installs it with the existing sources (each one's `install_new`),
+//! with the rules of `install_new::install_addon`:
+//! - an already installed project (a record of the same source with at least one folder still in
+//!   `AddOns`) is skipped without network;
+//! - a zip folder that already exists and belongs to another project (a record of any source,
+//!   or without a record the `## X-Curse-Project-ID` of its `.toc`) makes the installation fail
+//!   before touching the disk; a folder with neither record nor id is replaced.
 //!
-//! Bloccante: va chiamato fuori dal thread principale.
+//! Blocking: must be called off the main thread.
 
 use std::path::Path;
 
@@ -36,7 +36,7 @@ const UNRECOGNIZED: &str = "WoW-don cannot install from this link: paste a GitHu
 const MALFORMED: &str = "This is not a valid link.";
 const CURSEFORGE: &str = "CurseForge addons are installed from the Search tab.";
 
-/// I primi segmenti di `github.com` che non sono un proprietario di repository.
+/// The first segments of `github.com` that are not a repository owner.
 const GITHUB_RESERVED: [&str; 14] = [
     "about",
     "apps",
@@ -54,8 +54,8 @@ const GITHUB_RESERVED: [&str; 14] = [
     "users",
 ];
 
-/// Il progetto indicato da un link. Nessuna richiesta di rete: un link non riconosciuto, di un
-/// altro host o malformato dà un errore che dice cosa incollare. Senza schema vale `https://`.
+/// The project a link points to. No network request: an unrecognized link, one for another host
+/// or a malformed one gives an error that says what to paste. Without a scheme, `https://` applies.
 pub fn parse_link(text: &str) -> Result<ProjectKey, String> {
     let text = text.trim();
     if text.is_empty() {
@@ -96,7 +96,7 @@ pub fn parse_link(text: &str) -> Result<ProjectKey, String> {
     }
 }
 
-/// `owner/repo` dai primi due segmenti, senza un `.git` finale.
+/// `owner/repo` from the first two segments, without a trailing `.git`.
 fn github_repo(segments: &[&str]) -> Result<String, String> {
     let not_a_repo =
         || "This GitHub link does not point to a repository (github.com/owner/repo).".to_owned();
@@ -118,7 +118,7 @@ fn github_repo(segments: &[&str]) -> Result<String, String> {
     }
 }
 
-/// L'id di `downloads/info<ID>-<nome>.html` (anche `download<ID>…` e `fileinfo.php?id=<ID>`).
+/// The id of `downloads/info<ID>-<name>.html` (also `download<ID>…` and `fileinfo.php?id=<ID>`).
 fn wowinterface_id(url: &reqwest::Url, segments: &[&str]) -> Result<String, String> {
     let not_an_addon = || {
         "This WoWInterface link does not point to an addon page (wowinterface.com/downloads/info…)."
@@ -155,7 +155,7 @@ fn wowinterface_id(url: &reqwest::Url, segments: &[&str]) -> Result<String, Stri
         .ok_or_else(not_an_addon)
 }
 
-/// Solo cifre, non zero, al massimo nove: l'id finisce nell'URL dell'API.
+/// Digits only, not zero, at most nine: the id ends up in the API URL.
 fn is_wowinterface_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 9
@@ -163,34 +163,35 @@ fn is_wowinterface_id(id: &str) -> bool {
         && id.bytes().any(|b| b != b'0')
 }
 
-/// Le fonti che sanno installare da un link.
+/// The sources that can install from a link.
 pub struct LinkSources<'a, T: PublicTransport> {
     pub github: &'a GithubSource<T>,
     pub wowinterface: &'a WowInterfaceSource<T>,
     pub tukui: &'a TukuiSource<T>,
 }
 
-/// L'anteprima di un link per l'installazione.
+/// The preview of a link for the installation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkPreview {
     pub source: SourceKind,
-    /// L'id del progetto nella fonte, da passare a `install_from_link`.
+    /// The project's id in the source, to pass to `install_from_link`.
     pub id: String,
     pub name: String,
     pub version: String,
-    /// Se WoW-don lo può scaricare per il gioco dell'installazione.
+    /// Whether WoW-don can download it for the installation's game.
     pub downloadable: bool,
-    /// Perché non si può scaricare, o un avviso.
+    /// Why it cannot be downloaded, or a warning.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// La pagina del progetto sul sito della fonte.
+    /// The project's page on the source's site.
     pub url: String,
-    /// Se l'app l'ha già installato (un record della fonte con le cartelle ancora presenti).
+    /// Whether the app has already installed it (a record of the source with its folders still
+    /// present).
     pub installed: bool,
 }
 
-/// L'id `key` è un id valido per la fonte: un controllo senza rete prima di comporre un URL.
+/// The id `key` is a valid id for the source: a check without network before building a URL.
 fn check_key(source: SourceKind, key: &str) -> Result<(), String> {
     let valid = match source {
         SourceKind::Github => github::is_valid_repo(key),
@@ -208,16 +209,16 @@ fn check_key(source: SourceKind, key: &str) -> Result<(), String> {
     }
 }
 
-/// Se il record `(source_b, key_b)` è dello stesso progetto: i repository GitHub non
-/// distinguono maiuscole e minuscole.
+/// Whether the record `(source_b, key_b)` belongs to the same project: GitHub repositories are
+/// case-insensitive.
 fn same_project(source: SourceKind, key: &str, source_b: SourceKind, key_b: &str) -> bool {
     source == source_b
         && (key == key_b || (source == SourceKind::Github && key.eq_ignore_ascii_case(key_b)))
 }
 
-/// Se l'app ha installato il progetto: un record della stessa fonte nomina una cartella che
-/// c'è ancora in `AddOns`. Solo disco, nessuna rete. Una cartella `AddOns` illeggibile è un
-/// errore, non "non installato": l'installazione fallirebbe comunque nel controllo delle cartelle.
+/// Whether the app has installed the project: a record of the same source names a folder that
+/// is still in `AddOns`. Disk only, no network. An unreadable `AddOns` folder is an error, not
+/// "not installed": the installation would fail anyway in the folder check.
 fn is_installed(
     addons_dir: &Path,
     records: &SourceRecords,
@@ -235,10 +236,10 @@ fn is_installed(
         .any(|folder| on_disk.contains_key(&folder.to_lowercase())))
 }
 
-/// Rifiuta lo zip se una delle sue cartelle esiste già e appartiene a un altro progetto, con la
-/// regola di `install_new`: lo dice un record di qualunque fonte, oppure, per una cartella
-/// senza record, il `## X-Curse-Project-ID` del suo `.toc` per il flavor. Nomi confrontati senza
-/// distinguere maiuscole e minuscole, come fa il gioco.
+/// Rejects the zip if one of its folders already exists and belongs to another project, with the
+/// rule of `install_new`: a record of any source says so, or, for a folder without a record, the
+/// `## X-Curse-Project-ID` of its `.toc` for the flavor. Names are compared case-insensitively,
+/// as the game does.
 fn check_foreign_folders(
     addons_dir: &Path,
     flavor: &str,
@@ -281,8 +282,8 @@ fn check_foreign_folders(
     Ok(())
 }
 
-/// L'anteprima del progetto `target` per l'installazione: una richiesta alla sua fonte. `Err`
-/// se la fonte non risponde o non conosce il progetto.
+/// The preview of project `target` for the installation: one request to its source. `Err`
+/// if the source does not answer or does not know the project.
 pub fn preview<T: PublicTransport>(
     installation: &Installation,
     sources: &LinkSources<'_, T>,
@@ -291,7 +292,7 @@ pub fn preview<T: PublicTransport>(
 ) -> Result<LinkPreview, String> {
     check_key(target.source, &target.key)?;
     let key = target.key.as_str();
-    // Prima il disco: un `AddOns` illeggibile fallisce senza rete.
+    // Disk first: an unreadable `AddOns` fails without network.
     let addons_dir = installation.path.join("Interface").join("AddOns");
     let installed = is_installed(&addons_dir, records, target.source, key)?;
     let info: LinkInfo = match target.source {
@@ -312,9 +313,9 @@ pub fn preview<T: PublicTransport>(
     })
 }
 
-/// Installa il progetto `key` della fonte `source`. `records` sono i record di tutte le fonti
-/// per l'installazione, letti sotto `InstallLock`; `record` salva quello appena installato.
-/// L'esito ha la forma di `UpdateOutcome`: `updated` vuol dire installato.
+/// Installs project `key` of source `source`. `records` are the records of every source for
+/// the installation, read under `InstallLock`; `record` saves the one just installed.
+/// The outcome has the shape of `UpdateOutcome`: `updated` means installed.
 pub fn install<T: PublicTransport>(
     installation: &Installation,
     sources: &LinkSources<'_, T>,
@@ -468,7 +469,7 @@ mod tests {
         );
     }
 
-    // ── Comandi con un trasporto finto ──
+    // ── Commands with a fake transport ──
 
     const REPO: &str = "BigWigsMods/BigWigs";
     const LATEST: &str = "https://api.github.com/repos/BigWigsMods/BigWigs/releases/latest";
@@ -477,7 +478,7 @@ mod tests {
     const WOWI_ZIP: &str = "https://cdn.wowinterface.com/downloads/file5108/Clique.zip";
     const TUKUI_ZIP: &str = "https://api.tukui.org/v1/download/main/elvui.zip?token=x";
 
-    /// Risponde per URL e registra ogni richiesta.
+    /// Answers by URL and records every request.
     #[derive(Default)]
     struct Fake {
         json: HashMap<String, String>,
@@ -493,7 +494,7 @@ mod tests {
                     status: 200,
                     body: body.clone(),
                 },
-                // Come MMOUI per un id che non esiste.
+                // Like MMOUI for an id that does not exist.
                 None => HttpResponse {
                     status: 404,
                     body: r#"{"ERROR":"No AddOn found."}"#.to_owned(),
@@ -501,8 +502,8 @@ mod tests {
             })
         }
 
-        /// `releases/latest` sul sito rimanda al tag della release che l'API elenca per lo
-        /// stesso repository; senza release, 404.
+        /// `releases/latest` on the site redirects to the tag of the release the API lists for
+        /// the same repository; without a release, 404.
         fn get_redirect(&self, url: &str) -> Result<RedirectResponse, TransportError> {
             self.calls.lock().unwrap().push(url.to_owned());
             let api = url.replace("https://github.com/", "https://api.github.com/repos/");
@@ -560,8 +561,8 @@ mod tests {
         writer.finish().unwrap().into_inner()
     }
 
-    /// Le risposte delle tre fonti: una release GitHub senza `release.json` con un solo zip,
-    /// il file 5108 di WoWInterface e l'elenco di Tukui con ElvUI.
+    /// The responses of the three sources: a GitHub release without `release.json` with a single
+    /// zip, WoWInterface file 5108 and the Tukui list with ElvUI.
     fn fake() -> Fake {
         let mut fake = Fake::default();
         fake.json.insert(
@@ -628,7 +629,7 @@ mod tests {
         }
     }
 
-    /// Le tre fonti sullo stesso trasporto finto.
+    /// The three sources on the same fake transport.
     struct Sources {
         github: GithubSource<Fake>,
         wowinterface: WowInterfaceSource<Fake>,
@@ -664,7 +665,7 @@ mod tests {
         }
     }
 
-    /// Le tre fonti con il progetto, la cartella dello zip, il nome e la versione.
+    /// The three sources with the project, the zip folder, the name and the version.
     const CASES: [(SourceKind, &str, &str, &str, &str); 3] = [
         (SourceKind::Github, REPO, "BigWigs", "BigWigs", "v427.8"),
         (
@@ -740,7 +741,8 @@ mod tests {
             assert_eq!(preview.message, None);
             assert!(!preview.installed);
             assert!(preview.url.starts_with("https://"), "{}", preview.url);
-            // GitHub legge il tag senza l'API, poi, senza `release.json`, gli asset dall'API.
+            // GitHub reads the tag without the API, then, without `release.json`, the assets from
+            // the API.
             let requests = if source == SourceKind::Github { 3 } else { 1 };
             assert_eq!(sources.calls().len(), requests, "{:?}", sources.calls());
         }
@@ -856,7 +858,7 @@ mod tests {
     #[test]
     fn a_folder_of_another_project_fails_without_touching_the_disk() {
         for (source, key, folder, _, _) in CASES {
-            // Un record di un'altra fonte nomina la cartella dello zip.
+            // A record of another source names the zip folder.
             let game = game();
             let existing = game.addons.join(folder.to_lowercase());
             fs::create_dir_all(&existing).unwrap();
@@ -874,7 +876,7 @@ mod tests {
             assert!(written.is_empty());
             assert!(existing.join("Mine.lua").is_file());
 
-            // Senza record, il `## X-Curse-Project-ID` del `.toc` installato.
+            // Without a record, the `## X-Curse-Project-ID` of the installed `.toc`.
             let game = super::tests::game();
             let existing = game.addons.join(folder);
             fs::create_dir_all(&existing).unwrap();
@@ -894,8 +896,8 @@ mod tests {
         }
     }
 
-    /// Un `AddOns` che non si legge (qui un file al suo posto) è un errore senza rete, non
-    /// "non installato".
+    /// An `AddOns` that cannot be read (here a file in its place) is an error without network,
+    /// not "not installed".
     #[test]
     fn an_unreadable_addons_folder_fails_without_network() {
         let game = game();

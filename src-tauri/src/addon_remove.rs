@@ -1,13 +1,13 @@
-//! Rimozione di uno o più addon dalla tab Installed (issue #147).
+//! Removal of one or more addons from the Installed tab (issue #147).
 //!
-//! Ogni cartella si toglie con [`install::remove_folder`], la stessa funzione di *Replace all*
-//! dell'import: un solo componente valido dentro `AddOns`, i link simbolici si tolgono senza
-//! seguirli, un file che non è una cartella resta dov'è. Una cartella che non si può togliere dà
-//! un esito d'errore e non ferma le altre. Niente backup (scelta dell'utente); `WTF`, le
-//! SavedVariables e tutto quello fuori da `AddOns` non si toccano mai.
+//! Each folder is removed with [`install::remove_folder`], the same function as the import's
+//! *Replace all*: a single valid component inside `AddOns`, symbolic links are removed without
+//! following them, a file that is not a folder stays where it is. A folder that cannot be removed
+//! gives an error outcome and does not stop the others. No backup (the user's choice); `WTF`, the
+//! SavedVariables and everything outside `AddOns` are never touched.
 //!
-//! Le cartelle tolte escono dal registro delle fonti ([`InstalledAddonsStore::forget_folders`])
-//! e dalla cache dei fingerprint ([`FingerprintCache::forget`]).
+//! The removed folders leave the sources registry ([`InstalledAddonsStore::forget_folders`])
+//! and the fingerprint cache ([`FingerprintCache::forget`]).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -26,29 +26,29 @@ pub enum RemovalStatus {
     Error,
 }
 
-/// L'esito di una cartella chiesta.
+/// The outcome of a requested folder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderRemoval {
     pub folder: String,
     pub status: RemovalStatus,
-    /// Perché la cartella non è stata tolta (in inglese), solo con `error`.
+    /// Why the folder was not removed (in English), only with `error`.
     pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveResult {
-    /// Un esito per cartella, nell'ordine chiesto; un nome ripetuto conta una volta sola. Il nome
-    /// è quello della scansione, quindi si confronta esatto: su Linux `Alpha` e `alpha` possono
-    /// essere due cartelle.
+    /// One outcome per folder, in the requested order; a repeated name counts only once. The name
+    /// is the one from the scan, so it is compared exactly: on Linux `Alpha` and `alpha` can be
+    /// two folders.
     pub folders: Vec<FolderRemoval>,
-    /// Le cartelle sono tolte ma il registro non si è aggiornato: un avviso, non un fallimento.
+    /// The folders are removed but the registry was not updated: a warning, not a failure.
     pub warning: Option<String>,
 }
 
-/// Toglie le cartelle `folders` da `addons_dir`, poi aggiorna registro e cache per quelle tolte.
-/// Il registro si blocca solo dopo il lavoro su disco.
+/// Removes the folders `folders` from `addons_dir`, then updates registry and cache for the removed
+/// ones. The registry is locked only after the work on disk.
 pub fn remove_addons(
     addons_dir: &Path,
     installation_id: &str,
@@ -216,7 +216,7 @@ mod tests {
         let addons = setup.addons();
         addon(&addons, "Alpha");
         addon(&addons, "Omega");
-        // Una cartella accanto ad AddOns che un nome ostile proverebbe a raggiungere.
+        // A folder next to AddOns that a hostile name would try to reach.
         let outside = addon(&setup.tmp.path().join("Interface"), "Outside");
         let result = setup.remove(&[
             "",
@@ -328,7 +328,7 @@ mod tests {
         setup.cache.fingerprint(&beta);
         assert_eq!(setup.cache.len(), 2);
 
-        // Una cartella mancante non toglie il record che la nomina.
+        // A missing folder does not remove the record that names it.
         let result = setup.remove(&["Alpha", "Missing"]);
         assert_eq!(
             statuses(&result),
