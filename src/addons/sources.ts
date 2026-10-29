@@ -1,9 +1,9 @@
-// Le fonti degli addon nella tab Installed (D12, D31): l'identità di un progetto, il nome della
-// fonte e la richiesta per `update_addons`. Funzioni pure, senza React né I/O.
+// The addon sources in the Installed tab (D12, D31): a project's identity, the source name
+// and the request for `update_addons`. Pure functions, no React or I/O.
 
 import type { AddonUpdate, SourceKind } from "../api";
 
-/** I nomi delle fonti, nell'ordine in cui il backend le interroga. */
+/** The source names, in the order the backend queries them. */
 export const SOURCE_LABELS: Record<SourceKind, string> = {
   curseforge: "CurseForge",
   tukui: "Tukui",
@@ -11,18 +11,18 @@ export const SOURCE_LABELS: Record<SourceKind, string> = {
   github: "GitHub",
 };
 
-/** Un progetto di una fonte, come lo identifica il backend. */
+/** A project of a source, as the backend identifies it. */
 export type ProjectRef = { source: SourceKind; key: string };
 
 /**
- * L'identità di un progetto nel frontend: la fonte e l'id nella fonte. Due fonti possono usare
- * lo stesso id (`5108` su CurseForge e su WoWInterface), quindi la fonte ne fa parte.
+ * A project's identity in the frontend: the source and the id within the source. Two sources
+ * can use the same id (`5108` on CurseForge and on WoWInterface), so the source is part of it.
  */
 export function projectId(project: ProjectRef): string {
   return `${project.source}:${project.key}`;
 }
 
-/** I progetti CurseForge vanno in `modIds`, quelli delle altre fonti in `projects`. */
+/** CurseForge projects go in `modIds`, those of the other sources in `projects`. */
 export function updateRequest(projects: ProjectRef[]): {
   modIds: number[];
   projects: ProjectRef[];
@@ -44,7 +44,7 @@ export function updateRequest(projects: ProjectRef[]): {
   return { modIds, projects: others };
 }
 
-/** Le fonti che compaiono nel controllo, nell'ordine di `SOURCE_LABELS`. */
+/** The sources that appear in the check, in the order of `SOURCE_LABELS`. */
 export function sourcesIn(updates?: Map<string, AddonUpdate>): SourceKind[] {
   if (!updates) return [];
   const present = new Set<SourceKind>();

@@ -163,7 +163,7 @@ describe("pages", () => {
     const done = firstPage(page(0, [], 3, 3));
     assert.equal(hasMore(done), false);
     assert.equal(hiddenOnlyMessage(done), "No add-on with a release for this game version.");
-    // Una lista vuota senza nascosti, o una lista con risultati, ha le sue frasi.
+    // An empty list with nothing hidden, or a list with results, has its own sentences.
     assert.equal(hiddenOnlyMessage(firstPage(page(0, [], 0))), null);
     assert.equal(hiddenOnlyMessage(firstPage(page(0, [1], 10, 2))), null);
   });
@@ -206,7 +206,7 @@ describe("formatting", () => {
 
   it("dates, with a dash for missing or invalid ones", () => {
     assert.equal(formatDate("2026-10-24T09:30:00Z"), "Oct 24, 2026");
-    // Il giorno è quello UTC a qualsiasi fuso della macchina.
+    // The day is the UTC one whatever the machine's time zone.
     assert.equal(formatDate("2026-10-24T00:30:00Z"), "Oct 24, 2026");
     assert.equal(formatDate("2026-10-24T23:30:00Z"), "Oct 24, 2026");
     assert.equal(formatDate(""), "—");

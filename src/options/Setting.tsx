@@ -1,16 +1,16 @@
 import { useId, type ReactNode } from "react";
 
 /**
- * Le parti comuni della tab Options (issue #231): una sezione con il suo titolo, una scheda di
- * righe e una riga con etichetta e descrizione a sinistra e il controllo a destra. Solo
- * presentazione: lo stato e i salvataggi restano nei componenti delle sezioni.
+ * The shared parts of the Options tab (issue #231): a section with its title, a panel of
+ * rows and a row with label and description on the left and the control on the right. Only
+ * presentation: state and saves stay in the section components.
  */
 
 type SectionProps = {
-  /** L'id del titolo, che dà il nome alla sezione (`aria-labelledby`). */
+  /** The id of the title, which names the section (`aria-labelledby`). */
   id: string;
   title: string;
-  /** Il pulsante principale della sezione, accanto al titolo. */
+  /** The main button of the section, next to the title. */
   action?: ReactNode;
   className?: string;
   busy?: boolean;
@@ -35,16 +35,16 @@ export function SettingsSection({ id, title, action, className, busy, children }
 
 type RowProps = {
   label: ReactNode;
-  /** L'id del controllo, quando l'etichetta è un `<label>` che lo nomina. */
+  /** The id of the control, when the label is a `<label>` that names it. */
   htmlFor?: string;
-  /** L'id dell'etichetta, per un controllo che si nomina con `aria-labelledby` (un gruppo). */
+  /** The id of the label, for a control named with `aria-labelledby` (a group). */
   labelId?: string;
   description?: ReactNode;
   descriptionId?: string;
   children?: ReactNode;
 };
 
-/** Una riga della scheda: etichetta e descrizione a sinistra, controllo a destra. */
+/** A row of the panel: label and description on the left, control on the right. */
 export function SettingRow({ label, htmlFor, labelId, description, descriptionId, children }: RowProps) {
   return (
     <div className="setting">
@@ -72,14 +72,14 @@ export function SettingRow({ label, htmlFor, labelId, description, descriptionId
 type SwitchProps = {
   label: ReactNode;
   description?: ReactNode;
-  /** Una descrizione comune a più righe, già nella pagina, al posto di `description`. */
+  /** A description shared by several rows, already on the page, in place of `description`. */
   describedBy?: string;
   checked: boolean;
   disabled: boolean;
   onChange: (checked: boolean) => void;
 };
 
-/** Una riga sì/no: l'interruttore `.switch` di D42, nominato dalla sua etichetta. */
+/** A yes/no row: the `.switch` of D42, named by its label. */
 export function SwitchRow({ label, description, describedBy, checked, disabled, onChange }: SwitchProps) {
   const id = useId();
   const descriptionId = description ? `${id}-description` : describedBy;
@@ -106,7 +106,7 @@ export function SwitchRow({ label, description, describedBy, checked, disabled, 
 }
 
 type SegmentedProps<T extends string> = {
-  /** L'id dell'etichetta che dà il nome al gruppo. */
+  /** The id of the label that names the group. */
   labelledBy: string;
   describedBy?: string;
   options: readonly { id: T; label: string }[];
@@ -116,8 +116,8 @@ type SegmentedProps<T extends string> = {
 };
 
 /**
- * Una scelta tra poche voci: il `.segmented` di D42, un gruppo di pulsanti con quello scelto in
- * `aria-pressed`. Ogni pulsante si raggiunge con Tab e si sceglie con Invio o Spazio.
+ * A choice among a few items: the `.segmented` of D42, a group of buttons with the chosen one
+ * in `aria-pressed`. Each button is reached with Tab and chosen with Enter or Space.
  */
 export function Segmented<T extends string>({
   labelledBy,

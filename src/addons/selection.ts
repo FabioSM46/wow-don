@@ -1,5 +1,5 @@
-// Menu contestuale e selezione multipla della tab Installed (issue #149): stato della
-// selezione, voci del menu e testi della conferma. Funzioni pure, senza React né I/O.
+// Context menu and multiple selection of the Installed tab (issue #149): selection state,
+// menu items and confirmation texts. Pure functions, no React or I/O.
 
 import type { AddonUpdate, RemoveResult } from "../api";
 import {
@@ -13,17 +13,17 @@ import { reinstallBlockedReason } from "./mirror.ts";
 import { projectId, type ProjectRef } from "./sources.ts";
 
 /**
- * Le righe selezionate, per cartella principale del gruppo; `null` fuori dalla modalità
- * selezione. Una modalità attiva può restare senza righe: il clic sinistro ne aggiunge.
+ * The selected rows, by the group's main folder; `null` outside selection mode. An active
+ * mode can stay with no rows: a left click adds them.
  */
 export type Selection = ReadonlySet<string> | null;
 
-/** "Select" dal menu: la riga entra nella selezione, e la modalità si attiva se non lo era. */
+/** "Select" from the menu: the row joins the selection, and the mode turns on if it was off. */
 export function selectRow(selection: Selection, key: string): Set<string> {
   return new Set(selection ?? []).add(key);
 }
 
-/** Il clic sinistro in modalità selezione: aggiunge la riga o la toglie. */
+/** The left click in selection mode: adds the row or removes it. */
 export function toggleRow(selection: Selection, key: string): Set<string> {
   const next = new Set(selection ?? []);
   if (next.has(key)) next.delete(key);
@@ -32,8 +32,8 @@ export function toggleRow(selection: Selection, key: string): Set<string> {
 }
 
 /**
- * La selezione dopo una rilettura della lista: restano solo le righe che esistono ancora (una
- * riga rimossa esce). Se non ne resta nessuna di quelle che c'erano, la modalità finisce.
+ * The selection after re-reading the list: only rows that still exist remain (a removed
+ * row leaves). If none of those that were there remains, the mode ends.
  */
 export function pruneSelection(selection: Selection, existing: Iterable<string>): Selection {
   if (selection === null) return null;
@@ -43,7 +43,7 @@ export function pruneSelection(selection: Selection, existing: Iterable<string>)
   return kept.length > 0 ? new Set(kept) : null;
 }
 
-/** I gruppi su cui agisce il menu: la selezione in modalità selezione, altrimenti la riga. */
+/** The groups the menu acts on: the selection in selection mode, otherwise the row. */
 export function menuTargets(
   groups: AddonGroup[],
   selection: Selection,
@@ -53,7 +53,7 @@ export function menuTargets(
   return groups.filter((group) => keys.has(group.main.folder));
 }
 
-/** Tutte le cartelle dei gruppi, una volta sola: quelle che "Remove" toglie. */
+/** All the groups' folders, once each: those "Remove" removes. */
 export function foldersOf(groups: AddonGroup[]): string[] {
   const folders = new Set<string>();
   for (const group of groups) {
@@ -64,8 +64,8 @@ export function foldersOf(groups: AddonGroup[]): string[] {
 }
 
 /**
- * I progetti da reinstallare: uno per fonte e id, dai gruppi che hanno una fonte. Restano fuori
- * i progetti che il backend salterebbe di sicuro (`reinstallBlockedReason`, issue #165).
+ * The projects to reinstall: one per source and id, from the groups that have a source. Left
+ * out are the projects the backend would surely skip (`reinstallBlockedReason`, issue #165).
  */
 export function reinstallProjects(
   groups: AddonGroup[],
@@ -87,34 +87,34 @@ export type MenuAction = "select" | "reinstall" | "autoUpdate" | "remove" | "cle
 export type MenuItem = {
   action: MenuAction;
   label: string;
-  /** Il motivo per cui la voce è disattivata, mostrato nel `title`; `null` se è attiva. */
+  /** The reason the item is disabled, shown in the `title`; `null` if it is enabled. */
   disabledReason: string | null;
 };
 
 export type MenuState = {
-  /** Gli stati dell'ultimo controllo; `undefined` finché non ce n'è uno. */
+  /** The statuses of the last check; `undefined` until there is one. */
   updates?: Map<string, AddonUpdate>;
-  /** Un aggiornamento, una reinstallazione o una rimozione in corso. */
+  /** An update, a reinstall or a removal in progress. */
   busy: boolean;
-  /** Un controllo degli aggiornamenti in corso. */
+  /** An update check in progress. */
   checking: boolean;
   /**
-   * I progetti esclusi dall'aggiornamento automatico (`projectId`); `undefined` finché
-   * `get_auto_update` non ha risposto (issue #204).
+   * The projects excluded from automatic updates (`projectId`); `undefined` until
+   * `get_auto_update` has answered (issue #204).
    */
   excluded?: ReadonlySet<string>;
-  /** L'errore della lettura degli esclusi, se non è riuscita. */
+  /** The error of reading the excluded projects, if it failed. */
   excludedError?: string | null;
-  /** Una scelta "Don't auto-update" / "Allow auto-update" in salvataggio. */
+  /** A "Don't auto-update" / "Allow auto-update" choice being saved. */
   savingExclusion?: boolean;
 };
 
 const BUSY_REASON = "Wait for the current operation to finish.";
 
 /**
- * Le voci del menu. Fuori dalla modalità selezione: Select, Reinstall, la voce
- * dell'aggiornamento automatico e Remove per la riga; dentro: Reinstall N, la stessa voce,
- * Remove N e Clear selection per la selezione.
+ * The menu items. Outside selection mode: Select, Reinstall, the automatic update item and
+ * Remove for the row; inside: Reinstall N, the same item,
+ * Remove N and Clear selection for the selection.
  */
 export function menuItems(
   targets: AddonGroup[],
@@ -145,7 +145,7 @@ export function menuItems(
   ];
 }
 
-/** "Don't auto-update" o "Allow auto-update" per i progetti dei gruppi (issue #204). */
+/** "Don't auto-update" or "Allow auto-update" for the groups' projects (issue #204). */
 function autoUpdateItem(targets: AddonGroup[], state: MenuState): MenuItem {
   const projects = exclusionProjects(targets, state.updates);
   return {
@@ -162,10 +162,10 @@ function autoUpdateItem(targets: AddonGroup[], state: MenuState): MenuItem {
   };
 }
 
-/** Perché Reinstall è spento quando nessuno dei gruppi ha un progetto da reinstallare. */
+/** Why Reinstall is off when none of the groups has a project to reinstall. */
 function noProjectsReason(targets: AddonGroup[], state: MenuState): string {
   const count = targets.length;
-  // Progetti bloccati da CurseForge il cui mirror GitHub non si può usare (issue #165).
+  // Projects blocked by CurseForge whose GitHub mirror cannot be used (issue #165).
   const blocked = targets
     .map((group) => reinstallBlockedReason(groupUpdate(group, state.updates)))
     .filter((reason): reason is string => reason !== null);
@@ -189,18 +189,18 @@ function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-/** La domanda della barra di conferma: "Remove 2 addons (3 folders)?". */
+/** The question of the confirmation bar: "Remove 2 addons (3 folders)?". */
 export function confirmText(groups: AddonGroup[]): string {
   const folders = foldersOf(groups).length;
   return `Remove ${plural(groups.length, "addon", "addons")} (${plural(folders, "folder", "folders")})?`;
 }
 
-/** Il conteggio vicino ai pulsanti in modalità selezione. */
+/** The count next to the buttons in selection mode. */
 export function selectedText(selection: Selection): string {
   return `${selection?.size ?? 0} selected`;
 }
 
-/** Il riepilogo di una rimozione: la riga principale e il motivo di ogni cartella non tolta. */
+/** The summary of a removal: the main line and the reason for each folder not removed. */
 export function removalSummary(result: RemoveResult): {
   text: string;
   errors: { folder: string; message: string }[];
@@ -216,7 +216,7 @@ export function removalSummary(result: RemoveResult): {
   return { text: parts.length > 0 ? parts.join(", ") : "Nothing was removed", errors };
 }
 
-/** Le cartelle davvero tolte, per far uscire le loro righe dalla selezione. */
+/** The folders actually removed, so their rows leave the selection. */
 export function removedFolders(result: RemoveResult): string[] {
   return result.folders.filter((f) => f.status === "removed").map((f) => f.folder);
 }

@@ -9,29 +9,29 @@ import { ExternalLinkIcon } from "./icons";
 import { checkLink, linkOutcome, previewNote, type LinkResult } from "./link";
 
 type Props = {
-  /** L'id del riquadro, per `aria-controls` del pulsante che lo apre. */
+  /** The id of the panel, for `aria-controls` of the button that opens it. */
   id?: string;
-  /** Il campo del link è aperto. Chiuso si nasconde solo il campo (con l'errore del link
-   *  scritto): l'anteprima, un'installazione in corso e il suo esito restano in vista finché
-   *  non si chiudono con ×, così chiudere il campo non nasconde mai un avanzamento o un errore. */
+  /** The link field is open. Closed, only the field is hidden (with the error of the typed
+   *  link): the preview, an install in progress and its outcome stay in view until they
+   *  are closed with ×, so closing the field never hides a progress or an error. */
   open: boolean;
   installationId: string;
-  /** Un'installazione ha messo il progetto nell'installazione (la tab Installed). */
+  /** An install put the project into the installation (the Installed tab). */
   onInstalled?: () => void;
 };
 
-/** L'installazione dell'anteprima: in corso, finita con l'esito, o rifiutata dal comando. */
+/** The preview's install: in progress, finished with the outcome, or rejected by the command. */
 type Run =
   | { status: "running"; progress?: InstallProgress }
   | { status: "done"; result: LinkResult }
   | { status: "failed"; message: string };
 
 /**
- * "Add by link" (issue #110): il campo e il pulsante sotto la barra della ricerca, aperti dal
- * pulsante "Add by link" della barra (issue #229).
- * L'invio chiama `resolve_link` e mostra l'anteprima come una riga di tabella, con Install e
- * Open page; un progetto che l'app non può scaricare ha solo Open page e la spiegazione.
- * Lo stato vale per l'installazione: chi lo usa lo rimonta con `key` quando cambia.
+ * "Add by link" (issue #110): the field and the button under the search bar, opened by the
+ * bar's "Add by link" button (issue #229).
+ * Submitting calls `resolve_link` and shows the preview as a table row, with Install and
+ * Open page; a project the app cannot download has only Open page and the explanation.
+ * The state is per installation: whoever uses it remounts it with `key` when it changes.
  */
 export function AddByLink({ id, open, installationId, onInstalled }: Props) {
   const [text, setText] = useState("");
@@ -42,13 +42,13 @@ export function AddByLink({ id, open, installationId, onInstalled }: Props) {
   const [pageError, setPageError] = useState<string | null>(null);
   const tracker = useRef(new RequestTracker());
   const inputRef = useRef<HTMLInputElement>(null);
-  // Il focus va sul campo quando il riquadro si apre, non quando compare già aperto.
+  // Focus goes to the field when the panel opens, not when it appears already open.
   const wasOpen = useRef(open);
   useEffect(() => {
     if (open && !wasOpen.current) inputRef.current?.focus();
     wasOpen.current = open;
   }, [open]);
-  // La chiave degli eventi di avanzamento dell'installazione in corso, letta dal listener.
+  // The key of the progress events of the install in progress, read by the listener.
   const runKey = useRef<string | null>(null);
 
   useInstallProgress(installationId, (event) => {
@@ -75,7 +75,7 @@ export function AddByLink({ id, open, installationId, onInstalled }: Props) {
         if (!tracker.current.isLatest(id)) return;
         setResolving(false);
         setPreview(result);
-        // Un'installazione in corso non si perde: il suo esito resta da mostrare.
+        // An install in progress is not lost: its outcome is still to be shown.
         setRun((previous) => (previous?.status === "running" ? previous : null));
       },
       (err) => {
@@ -89,7 +89,7 @@ export function AddByLink({ id, open, installationId, onInstalled }: Props) {
   }
 
   function install(target: LinkPreview) {
-    // Durante una lettura l'anteprima sta per essere sostituita.
+    // During a read the preview is about to be replaced.
     if (installing || resolving) return;
     runKey.current = projectId({ source: target.source, key: target.id });
     setRun({ status: "running" });
@@ -118,7 +118,7 @@ export function AddByLink({ id, open, installationId, onInstalled }: Props) {
   }
 
   function dismiss() {
-    // Anche una lettura in corso si annulla: la sua risposta non si applicherà più.
+    // A read in progress is cancelled too: its answer will no longer apply.
     tracker.current.next();
     setResolving(false);
     setPreview(null);
@@ -230,7 +230,7 @@ export function AddByLink({ id, open, installationId, onInstalled }: Props) {
   );
 }
 
-/** Install, la barra durante l'installazione, o niente per un progetto installato o non scaricabile. */
+/** Install, the bar during the install, or nothing for an installed or non-downloadable project. */
 function PreviewInstall({
   preview,
   run,
@@ -239,7 +239,7 @@ function PreviewInstall({
 }: {
   preview: LinkPreview;
   run: Run | null;
-  /** Una lettura di un altro link è in corso. */
+  /** A read of another link is in progress. */
   disabled: boolean;
   onInstall: (preview: LinkPreview) => void;
 }) {

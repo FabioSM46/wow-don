@@ -2,26 +2,26 @@ import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 
 
 export type RowMenuItem = {
   label: string;
-  /** Un'azione distruttiva, nel colore di pericolo. */
+  /** A destructive action, in the danger color. */
   danger?: boolean;
-  /** Una voce non disponibile resta raggiungibile, con il motivo nel `title`. */
+  /** An unavailable item stays reachable, with the reason in its `title`. */
   disabledReason?: string | null;
   onSelect: () => void;
 };
 
 type Props = {
-  /** Il nome accessibile del pulsante e del menu, per esempio "More actions for Retail". */
+  /** The accessible name of the button and of the menu, for example "More actions for Retail". */
   label: string;
   items: RowMenuItem[];
-  /** Il pulsante "⋯": chi usa il menu ci riporta il focus quando l'azione scelta finisce. */
+  /** The "⋯" button: whoever uses the menu brings focus back to it when the chosen action ends. */
   triggerRef?: RefObject<HTMLButtonElement | null>;
 };
 
 /**
- * Il menu "⋯" di una riga di Options (issue #231): le azioni rare di un'installazione, fuori
- * dalla vista finché non servono. Si apre sotto il pulsante e si chiude con Esc, Tab (che
- * prosegue verso il controllo seguente o precedente), un clic fuori o la finestra che perde il
- * focus; le voci si scelgono con le frecce e Invio (pattern
+ * The "⋯" menu of an Options row (issue #231): an installation's rare actions, out of view
+ * until they are needed. It opens below the button and closes with Esc, Tab (which moves on
+ * to the next or previous control), a click outside or the window losing focus; items are
+ * chosen with the arrows and Enter (pattern
  * WAI-ARIA "menu button").
  */
 export function RowMenu({ label, items, triggerRef }: Props) {
@@ -48,7 +48,7 @@ export function RowMenu({ label, items, triggerRef }: Props) {
       document.removeEventListener("mousedown", outside, true);
       window.removeEventListener("blur", close);
     };
-    // Solo all'apertura: le voci che cambiano non spostano il focus.
+    // Only on opening: items that change do not move the focus.
   }, [open]);
 
   function closeAndFocus() {
@@ -79,8 +79,8 @@ export function RowMenu({ label, items, triggerRef }: Props) {
         closeAndFocus();
         return;
       case "Tab":
-        // Senza `preventDefault`: il focus passa al pulsante "⋯" e il browser continua la
-        // sequenza da lì, in avanti con Tab e indietro con Maiusc+Tab (pattern WAI-ARIA).
+        // No `preventDefault`: focus goes to the "⋯" button and the browser continues the
+        // sequence from there, forward with Tab and backward with Shift+Tab (WAI-ARIA pattern).
         closeAndFocus();
         return;
       default:

@@ -1,17 +1,17 @@
-// Il mirror GitHub dei progetti CurseForge bloccati nella tab Installed (D34, issue #165):
-// l'etichetta accanto al progetto, se Update è abilitato e se Reinstall può servire. Funzioni
-// pure, senza React né I/O.
+// The GitHub mirror of blocked CurseForge projects in the Installed tab (D34, issue #165):
+// the label next to the project, whether Update is enabled and whether Reinstall can help.
+// Pure functions, no React or I/O.
 
 import type { AddonUpdate } from "../api";
 
-/** Il testo di un progetto bloccato senza un mirror utilizzabile. */
+/** The text of a blocked project without a usable mirror. */
 export const WEBSITE_ONLY_TITLE =
   "The author does not allow downloads from third-party apps: download it from the website, then drop the zip into this window.";
 
-/** L'etichetta accanto al nome del progetto: il testo e il suo suggerimento. */
+/** The label next to the project name: the text and its hint. */
 export type BlockedHint = { label: string; title: string };
 
-/** Il mirror utilizzabile dell'aggiornamento, se il controllo ne ha trovato uno. */
+/** The update's usable mirror, if the check found one. */
 function mirrorOf(update: AddonUpdate) {
   return update.project && !update.project.allowModDistribution
     ? (update.githubMirror ?? null)
@@ -19,9 +19,9 @@ function mirrorOf(update: AddonUpdate) {
 }
 
 /**
- * L'etichetta di un progetto che CurseForge non lascia scaricare (D13): "via GitHub" con il
- * mirror trovato dal controllo, altrimenti "website only" con il motivo del mirror, se c'è.
- * `null` per un progetto scaricabile o senza progetto.
+ * The label of a project CurseForge does not let you download (D13): "via GitHub" with the
+ * mirror found by the check, otherwise "website only" with the mirror's reason, if any.
+ * `null` for a downloadable project or for no project.
  */
 export function blockedHint(update: AddonUpdate | undefined): BlockedHint | null {
   const project = update?.project;
@@ -41,8 +41,8 @@ export function blockedHint(update: AddonUpdate | undefined): BlockedHint | null
 }
 
 /**
- * Un aggiornamento che l'app può installare da sola: un progetto scaricabile, oppure uno
- * bloccato per cui il controllo ha trovato il mirror GitHub (issue #163).
+ * An update the app can install on its own: a downloadable project, or a blocked one for
+ * which the check found the GitHub mirror (issue #163).
  */
 export function isUpdatable(update: AddonUpdate): boolean {
   if (update.status !== "updateAvailable" || !update.project) return false;
@@ -50,13 +50,13 @@ export function isUpdatable(update: AddonUpdate): boolean {
 }
 
 /**
- * Perché Reinstall non può servire per questo progetto; `null` se il backend può provarci.
+ * Why Reinstall cannot help for this project; `null` if the backend can try.
  *
- * Un progetto bloccato si reinstalla solo dal mirror, che il backend cerca al momento della
- * reinstallazione (`update_project` in `updates.rs`): per un progetto aggiornato il controllo
- * non lo calcola, quindi Reinstall resta possibile. Con un aggiornamento disponibile il backend
- * reinstalla quel file, e il controllo ha già detto che il suo mirror non si può usare
- * (`githubMirrorReason`): il backend lo salterebbe, e Reinstall non si offre.
+ * A blocked project is reinstalled only from the mirror, which the backend looks for at
+ * reinstall time (`update_project` in `updates.rs`): for an up-to-date project the check
+ * does not compute it, so Reinstall stays possible. With an update available the backend
+ * reinstalls that file, and the check has already said its mirror cannot be used
+ * (`githubMirrorReason`): the backend would skip it, and Reinstall is not offered.
  */
 export function reinstallBlockedReason(update: AddonUpdate | undefined): string | null {
   const project = update?.project;

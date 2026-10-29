@@ -148,7 +148,7 @@ describe("menuItems", () => {
     assert.equal(/Wait/.test(busy[1].disabledReason ?? ""), true);
     assert.equal(/Wait/.test(busy[3].disabledReason ?? ""), true);
     assert.equal(busy[0].disabledReason, null);
-    // Escludere un addon non tocca il disco: resta possibile durante un aggiornamento.
+    // Excluding an addon does not touch the disk: it stays possible during an update.
     assert.equal(busy[2].disabledReason, null);
   });
 });

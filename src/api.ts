@@ -1,51 +1,51 @@
 import { invoke } from "@tauri-apps/api/core";
 
-// Tipi che rispecchiano quelli serializzati dal backend (camelCase).
+// Types that mirror the ones serialized by the backend (camelCase).
 
 export type AppStatus = {
   version: string;
   curseforgeKeyConfigured: boolean;
 };
 
-/** Il tema dell'interfaccia; `system` segue il sistema operativo. */
+/** The interface theme; `system` follows the operating system. */
 export type Theme = "system" | "light" | "dark";
 
 /**
- * Le impostazioni dell'app come le restituiscono `get_settings` e i comandi `set_*` (il
- * `SettingsView` del backend): quelle salvate in `settings.json` più `trayAvailable`.
+ * The app settings as returned by `get_settings` and the `set_*` commands (the backend's
+ * `SettingsView`): those saved in `settings.json` plus `trayAvailable`.
  */
 export type AppSettings = {
   theme: Theme;
-  /** Installare e aggiornare alla Beta quando la versione non ha una Release (issue #141). */
+  /** Install and update to the Beta when the version has no Release (issue #141). */
   betaWhenNoRelease: boolean;
-  /** Chiudere la finestra la nasconde nella tray invece di chiudere l'app (issue #158). */
+  /** Closing the window hides it in the tray instead of closing the app (issue #158). */
   closeToTray: boolean;
   /**
-   * Non salvato: se adesso l'icona nella tray c'è e qualcuno la mostra. Può cambiare mentre
-   * l'app gira (per esempio un'estensione di GNOME attivata o disattivata).
+   * Not saved: whether the tray icon exists right now and something shows it. It can change
+   * while the app runs (for example a GNOME extension enabled or disabled).
    */
   trayAvailable: boolean;
-  /** L'aggiornamento automatico degli addon (D41, issue #199): niente, solo avviso o installa. */
+  /** Automatic addon updates (D41, issue #199): nothing, notify only, or install. */
   autoUpdate: AutoUpdateMode;
-  /** Le ore tra due giri dell'aggiornamento automatico: una di 1, 3, 6, 12 e 24. */
+  /** The hours between two automatic update rounds: one of 1, 3, 6, 12 and 24. */
   autoUpdateIntervalHours: number;
 };
 
-/** Cosa fa l'aggiornamento automatico (`AutoUpdateMode` del backend, in minuscolo). */
+/** What automatic updating does (the backend's `AutoUpdateMode`, in lowercase). */
 export type AutoUpdateMode = "off" | "notify" | "install";
 
 /**
- * L'aggiornamento automatico di un'installazione (`get_auto_update`, issue #199). Un escluso è
- * `{ source, key }`: si abbina a una riga con `project.source` e `project.key` del suo
- * `AddonUpdate`, mai con `project.id`, che vale `0` fuori da CurseForge.
+ * Automatic updating of an installation (`get_auto_update`, issue #199). An exclusion is
+ * `{ source, key }`: it matches a row through `project.source` and `project.key` of its
+ * `AddonUpdate`, never through `project.id`, which is `0` outside CurseForge.
  */
 export type InstallationAutoUpdate = {
-  /** L'installazione non partecipa per intero. */
+  /** The installation does not take part at all. */
   disabled: boolean;
   excluded: { source: SourceKind; key: string }[];
 };
 
-/** Un progetto con un aggiornamento trovato da un giro automatico (`AvailableUpdate`). */
+/** A project with an update found by an automatic round (`AvailableUpdate`). */
 export type AvailableUpdate = {
   source: SourceKind;
   key: string;
@@ -54,9 +54,9 @@ export type AvailableUpdate = {
 };
 
 /**
- * Un errore di un giro automatico. Con `source` e `key` nulli `name` è una cartella che nessuna
- * fonte ha riconosciuto; con `name` vuoto è la versione precedente che non si è potuta tenere
- * per l'Undo (gli aggiornamenti restano installati).
+ * An error from an automatic round. With `source` and `key` null, `name` is a folder that no
+ * source recognized; with `name` empty, it is the previous version that could not be kept
+ * for Undo (the updates stay installed).
  */
 export type AutoUpdateError = {
   source: SourceKind | null;
@@ -65,58 +65,58 @@ export type AutoUpdateError = {
   message: string;
 };
 
-/** L'esito di un giro automatico su un'installazione (`InstallationReport`, issue #200). */
+/** The outcome of an automatic round on an installation (`InstallationReport`, issue #200). */
 export type InstallationReport = {
   installationId: string;
   installationName: string;
   /** ISO 8601 UTC. */
   checkedAt: string;
   available: AvailableUpdate[];
-  /** Solo in `install`. */
+  /** Only in `install`. */
   updated: UpdateOutcome[];
-  /** I progetti esclusi dall'utente: una scelta, non un problema. */
+  /** The projects excluded by the user: a choice, not a problem. */
   excluded: UpdateOutcome[];
-  /** Solo in `install`: i progetti che la fonte salta, con il motivo. */
+  /** Only in `install`: the projects the source skips, with the reason. */
   skipped: UpdateOutcome[];
   errors: AutoUpdateError[];
-  /** Il controllo dell'installazione è fallito per intero. */
+  /** The check of the installation failed entirely. */
   checkError: string | null;
 };
 
-/** Un giro automatico finito (`RoundReport`): `mode` è `notify` o `install`. */
+/** A finished automatic round (`RoundReport`): `mode` is `notify` or `install`. */
 export type RoundReport = {
   mode: Exclude<AutoUpdateMode, "off">;
   startedAt: string;
   finishedAt: string;
-  /** Un controllo è fallito per la rete: il prossimo giro è anticipato. */
+  /** A check failed because of the network: the next round is brought forward. */
   retrying: boolean;
-  /** Solo le installazioni che partecipano. */
+  /** Only the installations that take part. */
   installations: InstallationReport[];
 };
 
-/** Un giro annullabile con `undo_last_auto_update` (issue #201). */
+/** A round that can be undone with `undo_last_auto_update` (issue #201). */
 export type UndoableRound = {
   installationId: string;
   /** ISO 8601 UTC. */
   roundAt: string;
-  /** Quanti addon l'Undo rimetterebbe. */
+  /** How many addons Undo would put back. */
   addons: number;
 };
 
 /**
- * Lo stato dell'aggiornamento automatico: la risposta di `get_auto_update_status` e il payload
- * dell'evento `auto-update` (emesso alla fine di ogni giro e dopo un Undo).
+ * The automatic update status: the response of `get_auto_update_status` and the payload of
+ * the `auto-update` event (emitted at the end of every round and after an Undo).
  */
 export type AutoUpdateStatus = {
   running: boolean;
-  /** ISO 8601 UTC, o `null` (modalità `off`, giro in corso, primo giro non ancora pianificato). */
+  /** ISO 8601 UTC, or `null` (`off` mode, round in progress, first round not yet scheduled). */
   nextRoundAt: string | null;
-  /** `null` prima del primo giro. */
+  /** `null` before the first round. */
   lastRound: RoundReport | null;
   undoable: UndoableRound[];
 };
 
-/** L'esito dell'Undo di un progetto; `message` spiega `skipped` ed `error`. */
+/** The outcome of a project's Undo; `message` explains `skipped` and `error`. */
 export type UndoOutcome = {
   source: SourceKind;
   key: string;
@@ -133,8 +133,8 @@ export type Installation = {
 };
 
 /**
- * Un'installazione trovata sul computer e non ancora aggiunta (`discover_installations`): gli
- * stessi `path`, `flavor` e `name` di `Installation`, più da dove viene (testo in inglese).
+ * An installation found on the computer and not yet added (`discover_installations`): the
+ * same `path`, `flavor` and `name` as `Installation`, plus where it comes from (English text).
  */
 export type DiscoveredInstallation = {
   path: string;
@@ -154,7 +154,7 @@ export type InstalledAddon = {
   dependencies: string[];
   optionalDeps: string[];
   loadOnDemand: boolean;
-  /** `## Group` del `.toc`: la cartella sotto cui il gioco raggruppa questo addon. */
+  /** `## Group` of the `.toc`: the folder under which the game groups this addon. */
   group: string | null;
   curseProjectId: string | null;
   wagoId: string | null;
@@ -162,78 +162,78 @@ export type InstalledAddon = {
   modifiedMs: number | null;
   fingerprint: number | null;
   error: string | null;
-  /** Il progetto che l'app ha installato in questa cartella (`installed-addons.json`), se c'è. */
+  /** The project the app installed in this folder (`installed-addons.json`), if any. */
   installedProject: InstalledProject | null;
 };
 
 /**
- * Un progetto CurseForge installato dall'app: l'id e le sue cartelle ancora presenti, con il
- * nome che hanno sul disco. Una cartella che compare nei record di più progetti non ne ha.
+ * A CurseForge project installed by the app: the id and its folders still present, with the
+ * name they have on disk. A folder that appears in the records of several projects has none.
  */
 export type InstalledProject = { id: number; folders: string[] };
 
 /**
- * Esito di `install_zip` (D32): le cartelle dello zip ora in `AddOns` e quelle che esistevano
- * già con lo stesso nome e sono state sostituite, con il nome che avevano sul disco.
+ * Outcome of `install_zip` (D32): the zip's folders now in `AddOns` and those that already
+ * existed with the same name and were replaced, with the name they had on disk.
  */
 export type LocalInstall = {
   installed: string[];
   replaced: string[];
-  /** Un avviso su un'installazione riuscita (per esempio record dell'app non aggiornati). */
+  /** A warning about a successful installation (for example app records not updated). */
   warning?: string;
 };
 
 export type FileSummary = { id: number; name: string; date: string };
 
-/** Le fonti degli addon (D12, D31); su disco e nei tipi del backend sono in minuscolo. */
+/** The addon sources (D12, D31); on disk and in the backend types they are lowercase. */
 export type SourceKind = "curseforge" | "github" | "wowinterface" | "tukui";
 
 export type Project = {
-  /** L'id CurseForge; `0` per le altre fonti, dove valgono `source` e `key`. */
+  /** The CurseForge id; `0` for the other sources, where `source` and `key` apply. */
   id: number;
   source: SourceKind;
-  /** L'id del progetto nella fonte, come stringa (`61284`, `owner/repo`, `-2`). */
+  /** The project id in the source, as a string (`61284`, `owner/repo`, `-2`). */
   key: string;
   name: string;
   url: string | null;
   allowModDistribution: boolean;
 };
 
-/** Risultato di `check_updates` per una cartella; `status` dice quale variante è. */
+/** Result of `check_updates` for a folder; `status` says which variant it is. */
 export type AddonUpdate = {
   folder: string;
-  /** La fonte che ha reclamato la cartella, se c'è. */
+  /** The source that claimed the folder, if any. */
   source: SourceKind | null;
   project: Project | null;
   installedFile: FileSummary | null;
-  /** Versione del gioco forzata per il progetto (`gameVersionTypeId`), se c'è. */
+  /** Game version forced for the project (`gameVersionTypeId`), if any. */
   versionOverride: number | null;
-  /** Le cartelle del file riconosciuto per questa cartella; vuoto se non riconosciuta. */
+  /** The folders of the file recognized for this folder; empty if not recognized. */
   projectFolders: string[];
   /**
-   * Il mirror GitHub di un progetto CurseForge bloccato con un aggiornamento (D34, issue #163):
-   * con un mirror Update e Reinstall scaricano da GitHub. `null` quando non è stato calcolato
-   * (progetto non bloccato, aggiornato o di un'altra fonte) o non si può usare.
+   * The GitHub mirror of a blocked CurseForge project with an update (D34, issue #163): with a
+   * mirror, Update and Reinstall download from GitHub. `null` when it was not computed (project
+   * not blocked, up to date or from another source) or cannot be used.
    */
   githubMirror: GithubMirror | null;
-  /** Perché il mirror non si può usare (in inglese); `null` con un mirror o senza calcolo. */
+  /** Why the mirror cannot be used (in English); `null` with a mirror or without computation. */
   githubMirrorReason: string | null;
 } & (
   | { status: "notMatched" }
   | { status: "upToDate" }
   | { status: "updateAvailable"; latest: FileSummary }
-  /** Nessuna Release per la versione, ma una Beta più recente sì, con l'opzione spenta. */
+  /** No Release for the version, but a newer Beta exists, with the option turned off. */
   | { status: "betaOnly"; latest: FileSummary }
   | { status: "error"; message: string }
 );
 
-/** Il mirror GitHub di un progetto CurseForge bloccato: `owner/repo` e il tag della release. */
+/** The GitHub mirror of a blocked CurseForge project: `owner/repo` and the release tag. */
 export type GithubMirror = { repo: string; tag: string };
 
 /**
- * Esito di `github_mirror` (issue #164) per un progetto della Search. `available`: `install_addon`
- * lo installa da GitHub (`repo`, `tag`). Altrimenti `reason` dice perché; `reason` è `null` per
- * un progetto che CurseForge lascia scaricare (nessuna richiesta a GitHub).
+ * Outcome of `github_mirror` (issue #164) for a Search project. `available`: `install_addon`
+ * installs it from GitHub (`repo`, `tag`). Otherwise `reason` says why; `reason` is `null` for
+ * a project that CurseForge lets you download (no request to GitHub).
  */
 export type MirrorAvailability = {
   available: boolean;
@@ -242,58 +242,58 @@ export type MirrorAvailability = {
   reason: string | null;
 };
 
-/** Esito di `update_addons` per un progetto; `message` spiega `skipped` ed `error`. */
+/** Outcome of `update_addons` for a project; `message` explains `skipped` and `error`. */
 export type UpdateOutcome = {
-  /** L'id CurseForge; `0` per le altre fonti. */
+  /** The CurseForge id; `0` for the other sources. */
   modId: number;
   source: SourceKind;
   key: string;
   name: string;
   status: "updated" | "skipped" | "error";
   message?: string;
-  /** Il file installato, solo per `updated`. */
+  /** The installed file, only for `updated`. */
   file?: FileSummary;
 };
 
 /**
- * Anteprima di `resolve_link` (issue #109): il progetto di GitHub, WoWInterface o Tukui indicato
- * da un link. `id` va passato a `install_from_link`; `message` spiega un progetto non
- * scaricabile o avvisa.
+ * Preview of `resolve_link` (issue #109): the GitHub, WoWInterface or Tukui project pointed to
+ * by a link. `id` must be passed to `install_from_link`; `message` explains a project that
+ * cannot be downloaded, or warns.
  */
 export type LinkPreview = {
   source: SourceKind;
   id: string;
   name: string;
   version: string;
-  /** WoW-don lo può scaricare per il gioco dell'installazione. */
+  /** WoW-don can download it for the installation's game. */
   downloadable: boolean;
   message?: string;
-  /** La pagina del progetto sul sito della fonte. */
+  /** The project page on the source's site. */
   url: string;
-  /** L'app l'ha già installato. */
+  /** The app has already installed it. */
   installed: boolean;
 };
 
 /**
- * Esito di `install_addon` per un progetto: il primo è quello scelto, poi le dipendenze
- * obbligatorie in ampiezza. `name` può essere vuoto; `message` spiega `skipped` ed `error` o
- * avvisa su un'installazione riuscita.
+ * Outcome of `install_addon` for a project: the first is the chosen one, then the required
+ * dependencies breadth-first. `name` can be empty; `message` explains `skipped` and `error` or
+ * warns about a successful installation.
  */
 export type InstallOutcome = {
   modId: number;
   name: string;
   status: "installed" | "skipped" | "error";
   message?: string;
-  /** Il file installato, solo per `installed`. */
+  /** The installed file, only for `installed`. */
   file?: FileSummary;
-  /** Per una dipendenza, l'id del progetto che la richiede. */
+  /** For a dependency, the id of the project that requires it. */
   dependencyOf?: number;
 };
 
-/** Un tipo di versione del gioco che si può forzare per un addon (`list_version_types`). */
+/** A game version type that can be forced for an addon (`list_version_types`). */
 export type VersionType = { id: number; name: string };
 
-/** Uno zip di backup di `WTF` e `Interface`. */
+/** A backup zip of `WTF` and `Interface`. */
 export type BackupInfo = {
   name: string;
   path: string;
@@ -301,59 +301,59 @@ export type BackupInfo = {
   modifiedMs: number | null;
 };
 
-/** Una categoria degli addon di WoW su CurseForge (`list_categories`). */
+/** A WoW addon category on CurseForge (`list_categories`). */
 export type CatalogCategory = { id: number; name: string; parentCategoryId: number | null };
 
-/** L'ultimo file Release di un progetto per la versione del gioco della ricerca. */
-/** `releaseType` 1 Release, 2 Beta (solo con l'opzione della Beta, issue #141). */
+/** The latest Release file of a project for the game version of the search. */
+/** `releaseType` 1 Release, 2 Beta (only with the Beta option, issue #141). */
 export type CatalogFile = { id: number; name: string; gameVersion: string; releaseType: number };
 
-/** Un addon del catalogo di CurseForge, come lo restituisce `search_catalog`. */
+/** An addon from the CurseForge catalog, as returned by `search_catalog`. */
 export type CatalogAddon = {
   id: number;
   name: string;
   summary: string;
   authors: string[];
   downloadCount: number;
-  /** Data ISO 8601 dell'ultima modifica del progetto. */
+  /** ISO 8601 date of the project's last modification. */
   dateModified: string;
   categories: CatalogCategory[];
   thumbnailUrl: string | null;
   url: string | null;
-  /** Falso: CurseForge non permette di scaricarlo da un'app di terzi. */
+  /** False: CurseForge does not allow downloading it from a third-party app. */
   allowModDistribution: boolean;
   /**
-   * Il repository GitHub `owner/repo` ricavato da `links.sourceUrl`, senza richieste in più.
-   * Conta solo con `allowModDistribution = false`: `null` vuol dire che il mirror GitHub è
-   * impossibile (si va subito al sito); un valore che è possibile, ma serve `github_mirror` per
-   * sapere se c'è la stessa versione (issue #222, #223).
+   * The GitHub repository `owner/repo` derived from `links.sourceUrl`, with no extra requests.
+   * It counts only with `allowModDistribution = false`: `null` means the GitHub mirror is
+   * impossible (go straight to the site); a value means it is possible, but `github_mirror` is
+   * needed to know whether the same version is there (issue #222, #223).
    */
   githubRepo: string | null;
   latestFile: CatalogFile | null;
-  /** Il progetto è già nell'installazione. */
+  /** The project is already in the installation. */
   installed: boolean;
 };
 
-/** Una pagina di `search_catalog`: `totalCount` conta tutti i risultati della ricerca. */
+/** A page of `search_catalog`: `totalCount` counts all the results of the search. */
 export type CatalogPage = {
   addons: CatalogAddon[];
   index: number;
   pageSize: number;
   totalCount: number;
-  /** Risultati letti dall'API in questa pagina, nascosti compresi: 0 vuol dire che è finita. */
+  /** Results read from the API in this page, hidden ones included: 0 means it is over. */
   fetched: number;
-  /** Risultati tolti perché senza un file Release per la versione del gioco (issue #140). */
+  /** Results removed because they have no Release file for the game version (issue #140). */
   hidden: number;
 };
 
-/** Un file del progetto nel dettaglio; `releaseType` 1 Release, 2 Beta. */
+/** A project file in the detail; `releaseType` 1 Release, 2 Beta. */
 export type DetailFile = { id: number; name: string; date: string; releaseType: number };
 
-/** Una dipendenza obbligatoria; `name` è vuoto se CurseForge non restituisce il progetto. */
+/** A required dependency; `name` is empty if CurseForge does not return the project. */
 export type Dependency = { id: number; name: string };
 
-/** Un'immagine della gallery: URL pubblici del CDN di CurseForge, da caricare con `<img src>`.
- *  Titolo e descrizione sono testo semplice (vuoti se mancano): si mostrano solo come testo. */
+/** A gallery image: public URLs of the CurseForge CDN, to load with `<img src>`.
+ *  Title and description are plain text (empty if missing): they are shown only as text. */
 export type Screenshot = {
   title: string;
   description: string;
@@ -362,16 +362,16 @@ export type Screenshot = {
 };
 
 /**
- * Il dettaglio di un addon (`addon_detail`): i campi di `CatalogAddon` più la versione del
- * gioco usata, la descrizione, la gallery, i file recenti e le dipendenze obbligatorie.
+ * The detail of an addon (`addon_detail`): the fields of `CatalogAddon` plus the game version
+ * used, the description, the gallery, the recent files and the required dependencies.
  */
 export type AddonDetail = CatalogAddon & {
   versionType: number;
-  /** Testo semplice, che può contenere `<` e `>`: si mostra solo come testo, mai come HTML. */
+  /** Plain text, which can contain `<` and `>`: shown only as text, never as HTML. */
   description: string;
-  /** Le immagini della gallery, nell'ordine dell'API. */
+  /** The gallery images, in the API's order. */
   screenshots: Screenshot[];
-  /** I file Release e Beta per la versione, dal più recente, al massimo 20. */
+  /** The Release and Beta files for the version, newest first, at most 20. */
   files: DetailFile[];
   dependencies: Dependency[];
 };
@@ -379,8 +379,8 @@ export type AddonDetail = CatalogAddon & {
 export type CatalogSort = "popularity" | "lastUpdated" | "name" | "totalDownloads";
 export type SortOrder = "asc" | "desc";
 
-/** I parametri di `search_catalog`; `null` lascia decidere al backend (tutte le categorie,
- *  la versione del gioco dell'installazione). */
+/** The parameters of `search_catalog`; `null` lets the backend decide (all categories, the
+ *  installation's game version). */
 export type CatalogSearch = {
   query: string;
   categoryId: number | null;
@@ -389,32 +389,32 @@ export type CatalogSearch = {
   sortOrder: SortOrder;
 };
 
-/** Il risultato di `refresh_addons` (issue #126). */
+/** The result of `refresh_addons` (issue #126). */
 export type Refresh = {
   addons: InstalledAddon[];
   updates: AddonUpdate[];
   checkError: string | null;
 };
 
-/** Un progetto della stringa di import/export (issue #133). */
+/** A project of the import/export string (issue #133). */
 export type ListEntry = {
   source: SourceKind;
   key: string;
   name: string;
-  /** La versione del gioco forzata per il progetto (`gameVersionTypeId`). */
+  /** The game version forced for the project (`gameVersionTypeId`). */
   versionType?: number;
 };
 
-/** Il risultato di `export_addons`: la stringa, i progetti esportati e le cartelle rimaste fuori. */
+/** The result of `export_addons`: the string, the exported projects and the folders left out. */
 export type ExportResult = {
   text: string;
   exported: ListEntry[];
   skipped: string[];
-  /** Il controllo non è riuscito: i progetti vengono solo dai record dell'app. */
+  /** The check did not succeed: the projects come only from the app records. */
   checkError: string | null;
 };
 
-/** Una voce della stringa che non si è potuta leggere: posizione (da 1) e motivo. */
+/** An entry of the string that could not be read: position (from 1) and reason. */
 export type InvalidEntry = { position: number; reason: string };
 
 export type PreviewState = "new" | "installed" | "notDownloadable";
@@ -425,16 +425,16 @@ export type PreviewEntry = {
   name: string;
   state: PreviewState;
   message?: string;
-  /** La pagina dell'addon, per quelli che non si possono scaricare. */
+  /** The addon page, for those that cannot be downloaded. */
   url?: string;
 };
 
-/** L'anteprima di `preview_import` (issue #134): non scrive niente. */
+/** The preview of `preview_import` (issue #134): it writes nothing. */
 export type ImportPreview = {
   flavor: string;
   entries: PreviewEntry[];
   invalid: InvalidEntry[];
-  /** Le cartelle che "Replace all" toglierebbe ora. */
+  /** The folders that "Replace all" would remove now. */
   removals: string[];
   checkError?: string;
   lookupError?: string;
@@ -452,30 +452,30 @@ export type ImportEntryOutcome = {
   message?: string;
 };
 
-/** Il risultato di `import_addons`. */
+/** The result of `import_addons`. */
 export type ImportResult = {
   entries: ImportEntryOutcome[];
   invalid: InvalidEntry[];
   removed: string[];
-  /** Cartelle comparse dopo l'anteprima: non confermate, restano. */
+  /** Folders that appeared after the preview: not confirmed, they stay. */
   notConfirmed: string[];
   removalErrors: { folder: string; message: string }[];
-  /** Perché "Replace all" non ha tolto niente. */
+  /** Why "Replace all" removed nothing. */
   removalSkipped?: string;
   lookupError?: string;
 };
 
-/** L'esito di `remove_addons` per una cartella; `message` spiega `error`. */
+/** The outcome of `remove_addons` for a folder; `message` explains `error`. */
 export type FolderRemoval = {
   folder: string;
   status: "removed" | "error";
   message: string | null;
 };
 
-/** Il risultato di `remove_addons` (issue #147): un esito per cartella, nell'ordine chiesto. */
+/** The result of `remove_addons` (issue #147): one outcome per folder, in the order asked. */
 export type RemoveResult = {
   folders: FolderRemoval[];
-  /** Le cartelle sono tolte ma il registro non si è aggiornato. */
+  /** The folders are removed but the registry was not updated. */
   warning: string | null;
 };
 
@@ -483,20 +483,20 @@ export const api = {
   appStatus: () => invoke<AppStatus>("app_status"),
   listInstallations: () => invoke<Installation[]>("list_installations"),
   addInstallation: (path: string) => invoke<Installation>("add_installation", { path }),
-  /** Le installazioni già aggiunte sono escluse dal backend; nessuna trovata è una lista vuota. */
+  /** Installations already added are excluded by the backend; none found is an empty list. */
   discoverInstallations: () => invoke<DiscoveredInstallation[]>("discover_installations"),
   removeInstallation: (id: string) => invoke<void>("remove_installation", { id }),
-  /** `force` ricalcola tutti i fingerprint invece di prenderli dalla cache del backend. */
+  /** `force` recomputes all fingerprints instead of taking them from the backend cache. */
   listAddons: (installationId: string, force = false) =>
     invoke<InstalledAddon[]>("list_addons", { installationId, force }),
   checkUpdates: (installationId: string) =>
     invoke<AddonUpdate[]>("check_updates", { installationId }),
-  /** Lista e stati da una sola scansione; un controllo fallito arriva in `checkError`. */
+  /** List and statuses from a single scan; a failed check arrives in `checkError`. */
   refreshAddons: (installationId: string, force = false) =>
     invoke<Refresh>("refresh_addons", { installationId, force }),
   /**
-   * `modIds` sono progetti CurseForge, `projects` quelli delle altre fonti. Con `reinstall`
-   * (issue #148) riscarica anche i progetti già aggiornati.
+   * `modIds` are CurseForge projects, `projects` those of the other sources. With `reinstall`
+   * (issue #148) it downloads again even the projects already up to date.
    */
   updateAddons: (
     installationId: string,
@@ -504,7 +504,7 @@ export const api = {
     projects: { source: SourceKind; key: string }[] = [],
     reinstall = false,
   ) => invoke<UpdateOutcome[]>("update_addons", { installationId, modIds, projects, reinstall }),
-  /** Toglie le cartelle da `Interface/AddOns`, senza backup; `WTF` non si tocca (issue #147). */
+  /** Removes the folders from `Interface/AddOns`, no backup; `WTF` is left alone (issue #147). */
   removeAddons: (installationId: string, folders: string[]) =>
     invoke<RemoveResult>("remove_addons", { installationId, folders }),
   listVersionTypes: () => invoke<VersionType[]>("list_version_types"),
@@ -526,46 +526,46 @@ export const api = {
       sortOrder: search.sortOrder,
       index,
     }),
-  /** `versionType` `null`: la versione forzata per il progetto, altrimenti quella
-   *  dell'installazione. */
+  /** `versionType` `null`: the version forced for the project, otherwise the installation's
+   *  one. */
   addonDetail: (installationId: string, modId: number, versionType: number | null) =>
     invoke<AddonDetail>("addon_detail", { installationId, modId, versionType }),
-  /** `fileId` assente: l'ultimo Release per la versione del gioco del progetto. */
+  /** `fileId` absent: the latest Release for the project's game version. */
   installAddon: (installationId: string, modId: number, fileId?: number) =>
     invoke<InstallOutcome[]>("install_addon", { installationId, modId, fileId: fileId ?? null }),
   /**
-   * Il mirror GitHub di un progetto CurseForge bloccato (issue #164), per lo stesso `fileId` di
-   * `installAddon`. Fa richieste a GitHub (60 l'ora): si chiama solo dal dettaglio o da Install,
-   * mai per tutti i risultati della ricerca.
+   * The GitHub mirror of a blocked CurseForge project (issue #164), for the same `fileId` as
+   * `installAddon`. It makes requests to GitHub (60 per hour): it is called only from the detail
+   * or from Install, never for all the search results.
    */
   githubMirror: (installationId: string, modId: number, fileId?: number) =>
     invoke<MirrorAvailability>("github_mirror", { installationId, modId, fileId: fileId ?? null }),
-  /** Un link non riconosciuto o malformato è rifiutato con un messaggio che dice cosa incollare. */
+  /** An unrecognized or malformed link is rejected with a message that says what to paste. */
   resolveLink: (installationId: string, url: string) =>
     invoke<LinkPreview>("resolve_link", { installationId, url }),
-  /** L'esito ha la forma di `UpdateOutcome`: `updated` vuol dire installato. */
+  /** The outcome has the shape of `UpdateOutcome`: `updated` means installed. */
   installFromLink: (installationId: string, source: SourceKind, id: string) =>
     invoke<UpdateOutcome>("install_from_link", { installationId, source, id }),
-  /** `path` è il percorso dello zip trascinato o scelto: il file lo legge il backend. */
+  /** `path` is the path of the dragged or chosen zip: the backend reads the file. */
   installZip: (installationId: string, path: string) =>
     invoke<LocalInstall>("install_zip", { installationId, path }),
   listCategories: () => invoke<CatalogCategory[]>("list_categories"),
   getSettings: () => invoke<AppSettings>("get_settings"),
-  /** Un valore sconosciuto è rifiutato dal backend. */
+  /** An unknown value is rejected by the backend. */
   setTheme: (theme: Theme) => invoke<AppSettings>("set_theme", { theme }),
   setBetaWhenNoRelease: (enabled: boolean) =>
     invoke<AppSettings>("set_beta_when_no_release", { enabled }),
   setCloseToTray: (enabled: boolean) => invoke<AppSettings>("set_close_to_tray", { enabled }),
-  /** Lo stato reale, riletto dal sistema operativo: non sta in `settings.json` (issue #159). */
+  /** The real state, read back from the operating system: not in `settings.json` (issue #159). */
   getAutostart: () => invoke<boolean>("get_autostart"),
-  /** Restituisce lo stato riletto dal sistema operativo dopo la modifica. */
+  /** Returns the state read back from the operating system after the change. */
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
-  /** Un valore sconosciuto (modalità o intervallo) è rifiutato dal backend. */
+  /** An unknown value (mode or interval) is rejected by the backend. */
   setAutoUpdate: (mode: AutoUpdateMode, intervalHours: number) =>
     invoke<AppSettings>("set_auto_update", { mode, intervalHours }),
   getAutoUpdate: (installationId: string) =>
     invoke<InstallationAutoUpdate>("get_auto_update", { installationId }),
-  /** Esclude il progetto (`excluded`) o lo riammette; restituisce lo stato salvato. */
+  /** Excludes the project (`excluded`) or readmits it; returns the saved state. */
   setAutoUpdateExcluded: (
     installationId: string,
     project: { source: SourceKind; key: string },
@@ -578,16 +578,16 @@ export const api = {
     }),
   setInstallationAutoUpdate: (installationId: string, enabled: boolean) =>
     invoke<InstallationAutoUpdate>("set_installation_auto_update", { installationId, enabled }),
-  /** Memoria del backend e il manifesto della versione precedente, nessuna rete. */
+  /** Backend memory and the previous version's manifest, no network. */
   getAutoUpdateStatus: () => invoke<AutoUpdateStatus>("get_auto_update_status"),
-  /** Rifiuta se non c'è niente da annullare; emette `auto-update` con lo stato nuovo. */
+  /** Rejects if there is nothing to undo; emits `auto-update` with the new state. */
   undoLastAutoUpdate: (installationId: string) =>
     invoke<UndoOutcome[]>("undo_last_auto_update", { installationId }),
   exportAddons: (installationId: string) =>
     invoke<ExportResult>("export_addons", { installationId }),
   previewImport: (installationId: string, text: string) =>
     invoke<ImportPreview>("preview_import", { installationId, text }),
-  /** `confirmedRemovals`: le cartelle che l'utente ha visto e confermato per "Replace all". */
+  /** `confirmedRemovals`: the folders the user saw and confirmed for "Replace all". */
   importAddons: (
     installationId: string,
     text: string,
@@ -596,7 +596,7 @@ export const api = {
   ) => invoke<ImportResult>("import_addons", { installationId, text, mode, confirmedRemovals }),
 };
 
-/** I comandi rifiutano con il messaggio del backend; qualunque altra cosa diventa testo. */
+/** Commands reject with the backend's message; anything else becomes text. */
 export function errorMessage(error: unknown): string {
   return typeof error === "string" ? error : String(error);
 }

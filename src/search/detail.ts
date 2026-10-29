@@ -1,14 +1,14 @@
-// Dettaglio di un addon del catalogo: paragrafi della descrizione, file e dipendenze come si
-// mostrano. Funzioni pure, senza React né I/O.
+// Detail of a catalog addon: description paragraphs, files and dependencies as they are
+// shown. Pure functions, no React or I/O.
 
 import type { CatalogCategory, Dependency, DetailFile, VersionType } from "../api";
-// Con l'estensione: `node --test` risolve gli import a runtime senza il bundler.
+// With the extension: `node --test` resolves imports at runtime without the bundler.
 import { formatDate } from "./catalog.ts";
 
 /**
- * I paragrafi della descrizione: il backend separa i paragrafi con una riga vuota e le righe
- * di un elenco con un a capo (anche `\r\n`), che resta dentro il paragrafo. Una descrizione vuota (o di soli
- * spazi) non ha paragrafi.
+ * The description paragraphs: the backend separates paragraphs with an empty line and the lines
+ * of a list with a line break (`\r\n` too), which stays inside the paragraph. An empty (or
+ * whitespace-only) description has no paragraphs.
  */
 export function paragraphs(description: string): string[] {
   return description
@@ -17,7 +17,7 @@ export function paragraphs(description: string): string[] {
     .filter((paragraph) => paragraph !== "");
 }
 
-/** Il tipo di rilascio di un file come etichetta; un valore sconosciuto non ne ha. */
+/** A file's release type as a label; an unknown value has none. */
 export function releaseLabel(file: Pick<DetailFile, "releaseType">): string {
   switch (file.releaseType) {
     case 1:
@@ -29,28 +29,28 @@ export function releaseLabel(file: Pick<DetailFile, "releaseType">): string {
   }
 }
 
-/** Tipo di rilascio e data di un file in una riga, come "Beta · Oct 24, 2026". */
+/** A file's release type and date on one line, like "Beta · Oct 24, 2026". */
 export function fileMeta(file: Pick<DetailFile, "releaseType" | "date">): string {
   return [releaseLabel(file), formatDate(file.date)].filter((part) => part !== "").join(" · ");
 }
 
-/** Il nome di un file; senza nome resta l'id, così la riga non è vuota. */
+/** A file's name; without a name the id remains, so the line is not empty. */
 export function fileName(file: Pick<DetailFile, "id" | "name">): string {
   return file.name.trim() || `File #${file.id}`;
 }
 
-/** Il nome di una dipendenza; CurseForge può non restituire il progetto, e resta l'id. */
+/** A dependency's name; CurseForge may not return the project, and the id remains. */
 export function dependencyName(dependency: Dependency): string {
   return dependency.name.trim() || `Project #${dependency.id}`;
 }
 
-/** Le categorie in una riga, nell'ordine del backend; senza categorie "—". */
+/** The categories on one line, in the backend's order; without categories "—". */
 export function formatCategories(categories: CatalogCategory[]): string {
   const names = categories.map((category) => category.name).filter((name) => name !== "");
   return names.length > 0 ? names.join(", ") : "—";
 }
 
-/** Il nome della versione del gioco del dettaglio; finché l'elenco non è noto, nessuno. */
+/** The name of the detail's game version; until the list is known, none. */
 export function versionName(versionTypes: VersionType[], id: number): string | null {
   return versionTypes.find((type) => type.id === id)?.name ?? null;
 }

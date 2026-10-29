@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 
 import { applyTheme, isTheme, THEMES, themeAttribute } from "./theme.ts";
 
-/** Un `<html>` finto che ricorda solo gli attributi. */
+/** A fake `<html>` that only remembers its attributes. */
 function fakeRoot() {
   const attributes = new Map<string, string>();
   return {

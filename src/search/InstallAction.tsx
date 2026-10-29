@@ -5,9 +5,9 @@ import { ProgressBar } from "../addons/ProgressBar";
 import { ExternalLinkIcon } from "./icons";
 
 /**
- * Un'installazione avviata dalla tab Search: in corso, finita con gli esiti o rifiutata. Per un
- * progetto bloccato da CurseForge senza un mirror GitHub utilizzabile (issue #165) è
- * `unavailable`, con il motivo e la pagina del progetto.
+ * An install started from the Search tab: in progress, finished with the outcomes or rejected.
+ * For a project blocked by CurseForge without a usable GitHub mirror (issue #165) it is
+ * `unavailable`, with the reason and the project page.
  */
 export type InstallRun =
   | { status: "running" }
@@ -18,20 +18,20 @@ export type InstallRun =
 type ActionProps = {
   addon: CatalogAddon;
   run: InstallRun | undefined;
-  /** La barra di un'installazione in corso: percentuale (o `null`) e fase. */
+  /** The bar of an install in progress: percentage (or `null`) and phase. */
   progress?: { value: number | null; label: string };
-  /** `row`: piccolo, nella riga dei risultati; `detail`: nell'intestazione del dettaglio. */
+  /** `row`: small, in the results row; `detail`: in the detail header. */
   variant: "row" | "detail";
-  /** Il controllo del mirror GitHub di un progetto bloccato, se è stato chiesto. */
+  /** The GitHub mirror check of a blocked project, if it was requested. */
   mirror?: MirrorCheck;
   onInstall: (addon: CatalogAddon) => void;
   onOpenPage: (url: string) => void;
 };
 
 /**
- * L'azione di installazione di un addon: Install, la barra di avanzamento, Checking… o il link
- * al sito. Nella riga sta in un'ultima colonna sempre visibile (issue #229); per un addon già
- * installato la riga non ha azioni: lo dice la pastiglia "Installed" sotto il nome.
+ * An addon's install action: Install, the progress bar, Checking… or the link to the
+ * website. In the row it sits in a last column that is always visible (issue #229); for an
+ * addon already installed the row has no actions: the "Installed" pill under the name says so.
  */
 export function InstallAction(props: ActionProps) {
   if (props.variant === "detail") return <ActionContent {...props} />;
@@ -56,7 +56,7 @@ function ActionContent({
   onOpenPage,
 }: ActionProps) {
   const row = variant === "row";
-  // Il segno "Installed" è già sotto il nome (riga) o accanto al nome (dettaglio).
+  // The "Installed" mark is already under the name (row) or next to the name (detail).
   if (addon.installed) return null;
   const running = run?.status === "running";
   if (running) {
@@ -68,9 +68,10 @@ function ActionContent({
       />
     );
   }
-  // Un progetto bloccato si installa dal mirror GitHub: prima il controllo, poi Install; senza
-  // un mirror utilizzabile (o senza repository GitHub) resta il link al sito (issue #165, #223).
-  // Nel dettaglio il link a CurseForge è uno solo, nell'intestazione: qui non si ripete.
+  // A blocked project installs from the GitHub mirror: first the check, then Install; without
+  // a usable mirror (or without a GitHub repository) the link to the website remains
+  // (issue #165, #223).
+  // In the detail there is only one link to CurseForge, in the header: it is not repeated here.
   const blocked = isBlocked(addon);
   const step = blocked ? mirrorStep(mirror) : null;
   if (step?.kind === "website") {
@@ -81,7 +82,7 @@ function ActionContent({
         className="button ghost small"
         title={unavailableText(step.reason)}
         onClick={(event) => {
-          // L'azione non sceglie la riga.
+          // The action does not select the row.
           event.stopPropagation();
           onOpenPage(url);
         }}
@@ -127,8 +128,8 @@ function failureText(run: InstallRun | undefined): string | undefined {
 }
 
 /**
- * L'esito di un'installazione in linea: la frase sul progetto e una riga per dipendenza; per un
- * progetto senza un mirror utilizzabile il motivo e il link alla pagina.
+ * The inline outcome of an install: the sentence on the project and one line per dependency;
+ * for a project without a usable mirror, the reason and the link to the page.
  */
 export function InstallResult({
   run,

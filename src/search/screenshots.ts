@@ -1,36 +1,36 @@
-// Tab e gallery del dettaglio di un addon: etichette, testo alternativo e navigazione tra le
-// immagini. Funzioni pure, senza React né I/O.
+// Tabs and gallery of an addon's detail: labels, alternative text and navigation between
+// images. Pure functions, no React or I/O.
 
 import type { Screenshot } from "../api";
 
-/** L'etichetta della tab Gallery con il numero di immagini, come "Gallery (3)". */
+/** The label of the Gallery tab with the number of images, like "Gallery (3)". */
 export function galleryLabel(count: number): string {
   return `Gallery (${count})`;
 }
 
-/** Il titolo di un'immagine; senza titolo "Screenshot N", contando da 1. */
+/** An image's title; without a title "Screenshot N", counting from 1. */
 export function screenshotTitle(shot: Pick<Screenshot, "title">, index: number): string {
   return shot.title.trim() || `Screenshot ${index + 1}`;
 }
 
-/** L'immagine dopo `index`, ricominciando dalla prima dopo l'ultima. */
+/** The image after `index`, starting over from the first after the last. */
 export function nextIndex(index: number, count: number): number {
   return count > 0 ? (index + 1) % count : 0;
 }
 
-/** L'immagine prima di `index`, passando all'ultima prima della prima. */
+/** The image before `index`, going to the last before the first. */
 export function previousIndex(index: number, count: number): number {
   return count > 0 ? (index - 1 + count) % count : 0;
 }
 
-/** La posizione di un'immagine, come "2 / 5". */
+/** The position of an image, like "2 / 5". */
 export function positionLabel(index: number, count: number): string {
   return `${index + 1} / ${count}`;
 }
 
 /**
- * La tab da attivare per un tasto nella barra di tab (pattern WAI-ARIA, come le tab dell'app):
- * frecce con giro, Home e Fine agli estremi; un altro tasto non sposta niente (`null`).
+ * The tab to activate for a key in the tab bar (WAI-ARIA pattern, like the app's tabs):
+ * arrows that wrap around, Home and End at the ends; any other key moves nothing (`null`).
  */
 export function tabIndexForKey(key: string, index: number, count: number): number | null {
   switch (key) {

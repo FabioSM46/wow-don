@@ -6,13 +6,13 @@ import { describeUndo, statusLine, type StatusProblem } from "./autoUpdateStatus
 type Props = {
   status: AutoUpdateStatus | null;
   installationId: string;
-  /** La modalità salvata; `null` finché non è letta. */
+  /** The saved mode; `null` until it has been read. */
   mode: AutoUpdateMode | null;
-  /** Il `finishedAt` del giro annullato per l'installazione, o `null`: il suo esito si nasconde. */
+  /** The `finishedAt` of the round undone for the installation, or `null`: its outcome is hidden. */
   undoneRound: string | null;
   /**
-   * Un Undo ha cambiato (o può aver cambiato) gli addon sul disco. `undoneRound` è il
-   * `finishedAt` dell'ultimo giro quando l'Undo ha rimesso almeno un addon, altrimenti `null`.
+   * An Undo changed (or may have changed) the addons on disk. `undoneRound` is the
+   * `finishedAt` of the last round when the Undo restored at least one addon, otherwise `null`.
    */
   onUndone: (installationId: string, undoneRound: string | null) => void;
 };
@@ -20,9 +20,9 @@ type Props = {
 type UndoResult = { text: string; problems: StatusProblem[] } | { error: string };
 
 /**
- * La riga dell'aggiornamento automatico sopra la tabella della tab Installed (D41, issue #203):
- * cosa ha fatto l'ultimo giro per l'installazione, i problemi in linea con un clic e "Undo" per
- * un giro annullabile. Lo stato arriva da `get_auto_update_status` e dall'evento `auto-update`.
+ * The automatic update line above the table of the Installed tab (D41, issue #203): what the
+ * last round did for the installation, the problems inline on a click and "Undo" for an
+ * undoable round. The status comes from `get_auto_update_status` and the `auto-update` event.
  */
 export function AutoUpdateLine({ status, installationId, mode, undoneRound, onUndone }: Props) {
   const [expanded, setExpanded] = useState(false);
@@ -31,7 +31,7 @@ export function AutoUpdateLine({ status, installationId, mode, undoneRound, onUn
   const line = statusLine(status, installationId, mode, undefined, undoneRound);
 
   async function undo() {
-    // Il giro di cui si annulla l'esito: quello mostrato adesso.
+    // The round whose outcome is being undone: the one shown now.
     const round = status?.lastRound?.finishedAt ?? null;
     let restored = false;
     setBusy(true);
@@ -44,7 +44,7 @@ export function AutoUpdateLine({ status, installationId, mode, undoneRound, onUn
       setResult({ error: errorMessage(err) });
     } finally {
       setBusy(false);
-      // Anche un Undo fallito può aver rimesso qualche cartella: la lista si rilegge.
+      // Even a failed Undo may have restored some folder: the list is read again.
       onUndone(installationId, restored ? round : null);
     }
   }

@@ -1,6 +1,6 @@
-// La riga di stato dell'aggiornamento automatico sopra la tabella della tab Installed (D41,
-// issue #203): il testo dall'esito dell'ultimo giro, i problemi da mostrare nel dettaglio, l'Undo
-// e quali installazioni rileggere dopo un giro. Funzioni pure, senza React né I/O.
+// The automatic update status line above the table of the Installed tab (D41,
+// issue #203): the text from the outcome of the last round, the problems to show in the detail,
+// Undo and which installations to read again after a round. Pure functions, no React or I/O.
 
 import type {
   AutoUpdateMode,
@@ -10,10 +10,10 @@ import type {
   UndoOutcome,
 } from "../api";
 
-/** Il nome dell'evento Tauri, come `auto_update::EVENT` nel backend. */
+/** The name of the Tauri event, like `auto_update::EVENT` in the backend. */
 export const AUTO_UPDATE_EVENT = "auto-update";
 
-/** Un progetto (o una cartella) da mostrare nel dettaglio, con il motivo. */
+/** A project (or a folder) to show in the detail, with the reason. */
 export type StatusProblem = {
   name: string;
   message: string;
@@ -23,16 +23,16 @@ export type StatusProblem = {
 export type StatusLine = {
   /** "3 updates available · checked 14:05", "Auto-updated 2 addons · 14:05". */
   text: string;
-  /** "2 failed · 1 skipped", o `null` senza problemi. */
+  /** "2 failed · 1 skipped", or `null` without problems. */
   problemText: string | null;
   problems: StatusProblem[];
-  /** Il giro che "Undo" annullerebbe, o `null` se non ce n'è. */
+  /** The round "Undo" would undo, or `null` if there is none. */
   undo: UndoableRound | null;
-  /** C'è almeno un errore: il testo dei problemi prende il colore dell'errore. */
+  /** There is at least one error: the problems text takes the error color. */
   failed: boolean;
 };
 
-/** Formatta un'ora ISO 8601 come la mostra la riga. */
+/** Formats an ISO 8601 time the way the line shows it. */
 export type Clock = (iso: string) => string;
 
 function pad(n: number): string {
@@ -40,8 +40,8 @@ function pad(n: number): string {
 }
 
 /**
- * L'ora locale di `iso`: "14:05" se è dello stesso giorno di `now`, altrimenti con la data
- * ("Oct 26, 14:05"). Un'ora illeggibile resta com'è.
+ * The local time of `iso`: "14:05" if it is on the same day as `now`, otherwise with the date
+ * ("Oct 26, 14:05"). An unreadable time stays as it is.
  */
 export function clockTime(iso: string, now: Date = new Date()): string {
   const date = new Date(iso);
@@ -61,8 +61,8 @@ function plural(n: number, one: string, many: string): string {
 }
 
 /**
- * I problemi di un'installazione nel giro: gli errori, poi i saltati. Gli esclusi dall'utente
- * stanno in `report.excluded` e non sono problemi.
+ * An installation's problems in the round: the errors, then the skipped. Those excluded by the
+ * user are in `report.excluded` and are not problems.
  */
 export function reportProblems(report: InstallationReport): StatusProblem[] {
   const problems: StatusProblem[] = [];
@@ -71,7 +71,7 @@ export function reportProblems(report: InstallationReport): StatusProblem[] {
   }
   for (const error of report.errors) {
     problems.push({
-      // Senza nome è la versione precedente che non si è potuta tenere per l'Undo.
+      // Without a name it is the previous version that could not be kept for the Undo.
       name: error.name === "" ? "Undo" : error.name,
       message: error.message,
       kind: "failed",
@@ -87,7 +87,7 @@ export function reportProblems(report: InstallationReport): StatusProblem[] {
   return problems;
 }
 
-/** "2 failed · 1 skipped", o `null` senza problemi. */
+/** "2 failed · 1 skipped", or `null` without problems. */
 export function problemSummary(problems: readonly StatusProblem[]): string | null {
   const failed = problems.filter((p) => p.kind === "failed").length;
   const skipped = problems.length - failed;
@@ -97,7 +97,7 @@ export function problemSummary(problems: readonly StatusProblem[]): string | nul
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-/** Il testo principale dall'esito del giro, o `null` se il giro non ha niente da dire. */
+/** The main text from the outcome of the round, or `null` if the round has nothing to say. */
 function reportText(
   mode: "notify" | "install",
   report: InstallationReport,
@@ -113,28 +113,28 @@ function reportText(
   return n > 0 ? `Auto-updated ${plural(n, "addon", "addons")} · ${at}` : null;
 }
 
-/** "Auto-updated 3 addons · 14:05": il giro annullabile, senza l'esito in memoria. */
+/** "Auto-updated 3 addons · 14:05": the undoable round, without the outcome in memory. */
 function undoText(undo: UndoableRound, clock: Clock): string {
   return `Auto-updated ${plural(undo.addons, "addon", "addons")} · ${clock(undo.roundAt)}`;
 }
 
-/** La riga fatta solo del giro annullabile, senza problemi. */
+/** The line made only of the undoable round, without problems. */
 function undoLine(undo: UndoableRound, clock: Clock): StatusLine {
   return { text: undoText(undo, clock), problemText: null, problems: [], undo, failed: false };
 }
 
 /**
- * La riga di stato per l'installazione `installationId`, o `null` quando non c'è niente da
- * mostrare: modalità non ancora letta, nessun giro per l'installazione, oppure un giro che non
- * ha trovato niente e niente da annullare. Con `off` la riga c'è solo per un giro annullabile, e
- * dice soltanto quello.
+ * The status line for the installation `installationId`, or `null` when there is nothing to
+ * show: mode not read yet, no round for the installation, or a round that found nothing
+ * and has nothing to undo. With `off` the line exists only for an undoable round, and
+ * says only that.
  *
- * `undoneRound` è il `finishedAt` di un giro che l'utente ha annullato per l'installazione: il
- * suo esito si ignora.
+ * `undoneRound` is the `finishedAt` of a round the user undid for the installation: its
+ * outcome is ignored.
  *
- * Un giro annullabile (`undoable`) vale anche senza l'esito in memoria, per esempio dopo un
- * riavvio o dopo un giro successivo che non ha trovato niente: la riga dice allora quanti addon
- * ha aggiornato quel giro.
+ * An undoable round (`undoable`) holds even without the outcome in memory, for example after a
+ * restart or after a later round that found nothing: the line then says how many addons
+ * that round updated.
  */
 export function statusLine(
   status: AutoUpdateStatus | null,
@@ -145,12 +145,12 @@ export function statusLine(
 ): StatusLine | null {
   if (status === null || mode === null) return null;
   const undo = status.undoable.find((round) => round.installationId === installationId) ?? null;
-  // Spento non controlla più niente, ma un giro di prima resta annullabile (issue #215): la riga
-  // dice solo quello, senza aggiornamenti disponibili né problemi dell'ultimo giro.
+  // Off no longer checks anything, but an earlier round stays undoable (issue #215): the line
+  // says only that, without available updates or problems of the last round.
   if (mode === "off") return undo === null ? null : undoLine(undo, clock);
   const round = status.lastRound;
-  // Dopo un Undo il backend tiene `lastRound` com'era: l'esito di quel giro non descrive più il
-  // disco e non si mostra (`undoneRound` è il suo `finishedAt`).
+  // After an Undo the backend keeps `lastRound` as it was: that round's outcome no longer
+  // describes the disk and is not shown (`undoneRound` is its `finishedAt`).
   const report =
     round && round.finishedAt !== undoneRound
       ? round.installations.find((r) => r.installationId === installationId)
@@ -172,9 +172,9 @@ export function statusLine(
 }
 
 /**
- * Le installazioni da rileggere quando arriva lo stato `next` dopo `previous`: quelle con addon
- * aggiornati (o errori, che possono aver toccato il disco) da un giro `install` nuovo. Lo stesso
- * giro riletto (l'evento dopo un Undo, la lettura all'avvio) non conta due volte.
+ * The installations to read again when the state `next` arrives after `previous`: those with
+ * addons updated (or errors, which may have touched the disk) by a new `install` round. The same
+ * round read again (the event after an Undo, the read at startup) does not count twice.
  */
 export function changedInstallations(
   previous: AutoUpdateStatus | null,
@@ -188,7 +188,7 @@ export function changedInstallations(
     .map((report) => report.installationId);
 }
 
-/** L'esito di un Undo: il riepilogo e i progetti non rimessi, con il motivo. */
+/** The outcome of an Undo: the summary and the projects not restored, with the reason. */
 export function describeUndo(outcomes: readonly UndoOutcome[]): {
   text: string;
   problems: StatusProblem[];

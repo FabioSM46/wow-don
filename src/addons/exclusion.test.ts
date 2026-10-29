@@ -23,7 +23,7 @@ const linked = (folder: string, source: "curseforge" | "github" | "wowinterface"
   ({
     folder,
     status: "upToDate",
-    // `id` vale 0 fuori da CurseForge: l'abbinamento non lo deve usare.
+    // `id` is 0 outside CurseForge: the matching must not use it.
     project: { id: 0, source, key, name: folder, url: null, allowModDistribution: true },
   }) as AddonUpdate;
 
@@ -35,7 +35,7 @@ const updates = new Map<string, AddonUpdate>([
   ["DBM-Core", linked("DBM-Core", "curseforge", "3358")],
   ["DBM-StatusBarTimers", linked("DBM-StatusBarTimers", "curseforge", "3358")],
   ["Details", linked("Details", "github", "Tercioo/Details")],
-  // Lo stesso id su un'altra fonte è un altro progetto.
+  // The same id on another source is another project.
   ["Twin", linked("Twin", "wowinterface", "3358")],
 ]);
 
@@ -87,7 +87,7 @@ describe("the menu item on a selection", () => {
       ["curseforge:3358", "github:Tercioo/Details", "tukui:-2"],
     );
     assert.deepEqual([...excludedAfter(before, projects, false)], ["tukui:-2"]);
-    // L'insieme di partenza non cambia.
+    // The starting set does not change.
     assert.deepEqual([...before], ["curseforge:3358", "tukui:-2"]);
   });
 });
