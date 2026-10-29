@@ -164,9 +164,9 @@ The worktree is `<repo-parent-folder>/wow-don-issue-<number>`:
 From here on every change and every git command runs inside `$WORKTREE_DIR`. If the check
 fails, stop and go back into the worktree: do not modify the main folder.
 
-The worktree needs no environment file: the gates use no key, and the app reaches CurseForge
-through the wow-don-proxy Worker (D44). Agents still never read `.env` files: a leftover one can
-hold a real key.
+The worktree needs no environment file and must not have one: the gates use no key, and the app
+reaches CurseForge through the wow-don-proxy Worker (D44). Agents still never read `.env` files: a
+leftover one can hold a real key.
 
 ### Step 5: decide how many PRs, then implement
 
