@@ -740,7 +740,7 @@ OLD_UBUNTU_GH="gh version 2.4.0+dfsg1 (2022-03-23 Ubuntu 2.4.0+dfsg1-2)"
 
 assert_eq "the minimum is the one the audit set" "2.18.0" "$GH_MIN_VERSION"
 assert_contains "and README's Toolchain row states the same number" \
-  "$(<"${SCRIPT_DIR}/../README.md")" "| gh    | ${GH_MIN_VERSION} o successivo"
+  "$(<"${SCRIPT_DIR}/../README.md")" "| gh    | ${GH_MIN_VERSION} or later"
 
 # The reproduction from the issue, through every subcommand that calls `require_gh`.
 # `is-ready-to-merge` is the one that matters most: it reaches gh inside a subshell

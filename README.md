@@ -1,232 +1,232 @@
 # WoW-don
 
-Gestore di addon per World of Warcraft per **Linux, Windows e macOS**. Su Linux gestisce
-il gioco dentro un prefisso Wine (Lutris, Battle.net), su Windows e su macOS
-l'installazione normale del client nativo. App desktop nativa scritta in Rust con
-interfaccia Tauri, alternativa più leggera e più comoda a WowUp-CF. Si distribuisce come
-pacchetto `.deb` su Linux, come installer su Windows e come `.dmg` universale (Apple
-Silicon e Intel) su macOS.
+Addon manager for World of Warcraft on **Linux, Windows and macOS**. On Linux it manages
+the game inside a Wine prefix (Lutris, Battle.net), on Windows and on macOS
+the normal installation of the native client. A native desktop app written in Rust with a
+Tauri interface, a lighter and more convenient alternative to WowUp-CF. It is distributed as a
+`.deb` package on Linux, as an installer on Windows and as a universal `.dmg` (Apple
+Silicon and Intel) on macOS.
 
-## Stato
+## Status
 
-**Fase M2: CurseForge.** Si aggiungono a mano le installazioni di WoW (cartelle
-`_<flavor>_`, anche dentro prefissi Wine) e si vede la lista degli addon installati,
-letta dai file `.toc`, con ricerca, filtri e ordinamento. Gli addon vengono riconosciuti
-su CurseForge tramite fingerprint e l'app indica quali hanno un aggiornamento (per ora
-Retail e Classic Era). Download e installazione arrivano con M3. Il piano è in [docs/roadmap.md](docs/roadmap.md).
+**Phase M2: CurseForge.** WoW installations are added by hand (`_<flavor>_` folders, also
+inside Wine prefixes) and you see the list of installed addons, read from the `.toc` files,
+with search, filters and sorting. Addons are recognised on CurseForge through fingerprints and
+the app shows which ones have an update (for now Retail and Classic Era). Download and
+installation arrive with M3. The plan is in [docs/roadmap.md](docs/roadmap.md).
 
-## Perché
+## Why
 
-WowUp-CF fa il suo lavoro, ma su Linux ha diversi limiti:
+WowUp-CF does its job, but on Linux it has several limits:
 
-- **interfaccia e filtri scomodi**: cercare, filtrare e ordinare gli addon è lento e
-  poco chiaro;
-- **Electron in AppImage**: serve `--no-sandbox` e l'auto-update rompe il symlink;
-- **prefissi Wine come ripiego**: il percorso del gioco va impostato a mano;
-- **versioni beta coperte male**: per versioni come WoW Forever i metadati delle
-  fonti spesso non indicano la compatibilità.
+- **awkward interface and filters**: searching, filtering and sorting addons is slow and
+  unclear;
+- **Electron in an AppImage**: it needs `--no-sandbox` and auto-update breaks the symlink;
+- **Wine prefixes as a fallback**: the game path has to be set by hand;
+- **beta versions poorly covered**: for versions like WoW Forever the sources' metadata
+  often does not state compatibility.
 
-WoW-don punta su tre cose:
+WoW-don focuses on three things:
 
-1. **Ricerca, filtri e ordinamento** come funzione principale, sia sugli addon
-   installati sia sul catalogo.
-2. **Installazioni di WoW nei prefissi Wine** gestite fin dall'inizio, comprese più
-   versioni del gioco (Retail, Classic, beta) nella stessa cartella.
-3. **App nativa e leggera**: un solo binario Rust con webview di sistema, niente
+1. **Search, filters and sorting** as the main feature, both on installed addons and on the
+   catalogue.
+2. **WoW installations in Wine prefixes** handled from the start, including several
+   versions of the game (Retail, Classic, beta) in the same folder.
+3. **A native, lightweight app**: a single Rust binary with the system webview, no
    Electron.
 
-Il contesto completo è in [docs/context.md](docs/context.md).
+The full context is in [docs/context.md](docs/context.md).
 
-## Funzionalità previste
+## Planned features
 
-- Aggiunta di installazioni di WoW (cartelle `_retail_`, `_classic_era_`, `_forever_`,
-  `_classic_beta_`, ...), anche dentro prefissi Wine.
-- Lettura degli addon installati dai file `.toc`.
-- Riconoscimento degli addon installati tramite fingerprint di CurseForge.
-- Controllo degli aggiornamenti e aggiornamento singolo o di tutti gli addon.
-- Ricerca nel catalogo CurseForge con filtri per categoria, versione del gioco,
-  popolarità e data di aggiornamento.
-- Versione del gioco forzata per singolo addon, utile per le beta.
-- Backup di `WTF` e `Interface`.
-- Più avanti: GitHub releases, WoWInterface e Wago come fonti aggiuntive.
+- Adding WoW installations (`_retail_`, `_classic_era_`, `_forever_`, `_classic_beta_`, ...
+  folders), also inside Wine prefixes.
+- Reading installed addons from the `.toc` files.
+- Recognising installed addons through CurseForge fingerprints.
+- Checking for updates and updating a single addon or all of them.
+- Searching the CurseForge catalogue with filters for category, game version,
+  popularity and update date.
+- Game version forced per addon, useful for betas.
+- Backup of `WTF` and `Interface`.
+- Later on: GitHub releases, WoWInterface and Wago as additional sources.
 
-## Fonti degli addon e API CurseForge
+## Addon sources and the CurseForge API
 
-La fonte principale è l'[API di CurseForge](https://docs.curseforge.com/rest-api).
-L'API richiede una chiave, anche per scaricare i file.
+The main source is the [CurseForge API](https://docs.curseforge.com/rest-api).
+The API requires a key, even to download files.
 
-- **In sviluppo** si usa una chiave personale, generata dal console di CurseForge for
-  Studios (`console.curseforge.com`).
-- **Per distribuire l'app** servirà una chiave per applicazioni di terzi, da
-  richiedere a CurseForge/Overwolf quando il progetto sarà abbastanza avanti.
+- **In development** a personal key is used, generated from the CurseForge for Studios
+  console (`console.curseforge.com`).
+- **To distribute the app** a key for third-party applications will be needed, to be
+  requested from CurseForge/Overwolf once the project is far enough along.
 
-Regole che il progetto rispetta:
+Rules the project follows:
 
-- la chiave resta nel backend Rust: il frontend non la vede e non finisce nei log;
-- niente scraping del sito CurseForge e niente riuso di chiavi di altre app;
-- gli addon con `allowModDistribution = false` non vengono scaricati
-  automaticamente.
+- the key stays in the Rust backend: the frontend does not see it and it does not end up in logs;
+- no scraping of the CurseForge site and no reuse of other apps' keys;
+- addons with `allowModDistribution = false` are not downloaded
+  automatically.
 
 ## Stack
 
-| Parte | Tecnologia |
+| Part | Technology |
 | --- | --- |
 | Backend | Rust (edition 2024) |
-| App desktop | Tauri 2 |
+| Desktop app | Tauri 2 |
 | Frontend | React 19 + TypeScript, Vite |
 | Package manager | pnpm |
 
-Le decisioni e i motivi sono in [docs/decisions.md](docs/decisions.md).
+The decisions and their reasons are in [docs/decisions.md](docs/decisions.md).
 
-## Struttura del repo
+## Repository structure
 
 ```
 wow-don/
-├── src/                    # frontend React
+├── src/                    # React frontend
 │   ├── App.tsx
 │   ├── App.css
 │   └── main.tsx
-├── src-tauri/              # backend Rust e configurazione Tauri
+├── src-tauri/              # Rust backend and Tauri configuration
 │   ├── src/
 │   │   ├── main.rs         # entry point
-│   │   ├── lib.rs          # setup di Tauri e registrazione dei comandi
-│   │   ├── config.rs       # lettura della chiave API da ambiente / .env
-│   │   └── commands.rs     # comandi invocabili dal frontend
-│   ├── capabilities/       # permessi Tauri della finestra
+│   │   ├── lib.rs          # Tauri setup and command registration
+│   │   ├── config.rs       # reading the API key from the environment / .env
+│   │   └── commands.rs     # commands the frontend can invoke
+│   ├── capabilities/       # Tauri window permissions
 │   ├── icons/
 │   ├── Cargo.toml
 │   └── tauri.conf.json
 ├── docs/
-│   ├── context.md          # idea, motivazioni, precedenti, fonti
-│   ├── decisions.md        # registro delle decisioni
-│   ├── architecture.md     # moduli, API usate, sicurezza
-│   └── roadmap.md          # milestone
-├── scripts/                # helper della pipeline e test dell'automazione
-├── .github/                # CI, review DeepSeek, labeler, template delle issue
-├── .claude/skills/         # skill per gli agenti (/dev-issue, /process-pr, /scrum-master)
-├── AGENTS.md               # regole per gli agenti AI e pipeline
-├── .env.example            # modello del file con la chiave API
+│   ├── context.md          # idea, motivation, prior art, sources
+│   ├── decisions.md        # decision log
+│   ├── architecture.md     # modules, APIs used, security
+│   └── roadmap.md          # milestones
+├── scripts/                # pipeline helpers and automation tests
+├── .github/                # CI, DeepSeek review, labeler, issue templates
+├── .claude/skills/         # agent skills (/dev-issue, /process-pr, /scrum-master)
+├── AGENTS.md               # rules for AI agents and the pipeline
+├── .env.example            # template of the file with the API key
 ├── index.html
 ├── package.json
 └── vite.config.ts
 ```
 
-La struttura prevista dei moduli del backend è in
+The planned structure of the backend modules is in
 [docs/architecture.md](docs/architecture.md).
 
-## Sviluppo
+## Development
 
-### Requisiti
+### Requirements
 
-| Strumento | Versione | Serve per |
+| Tool | Version | Needed for |
 | ----- | ------------------------------- | ------------------ |
-| Rust  | fissata in `src-tauri/rust-toolchain.toml` (rustfmt + clippy) | backend |
+| Rust  | pinned in `src-tauri/rust-toolchain.toml` (rustfmt + clippy) | backend |
 | Node  | 22                              | frontend |
 | pnpm  | 10                              | frontend |
-| gh    | 2.18.0 o successivo             | script della pipeline |
-| jq    | qualunque recente               | script della pipeline, `scripts/test/` |
-| python3 | 3.12 consigliato              | test del reviewer DeepSeek |
+| gh    | 2.18.0 or later                 | pipeline scripts |
+| jq    | any recent one                  | pipeline scripts, `scripts/test/` |
+| python3 | 3.12 recommended              | DeepSeek reviewer tests |
 
-Su **Windows** servono Microsoft C++ Build Tools (carico di lavoro "Sviluppo di
-applicazioni desktop con C++") e WebView2, già presente su Windows 10 e 11.
+On **Windows** you need the Microsoft C++ Build Tools (the "Desktop development with C++"
+workload) and WebView2, already present on Windows 10 and 11.
 
-Su **macOS** servono gli strumenti da riga di comando di Xcode (`xcode-select --install`);
-WebKit fa già parte del sistema.
+On **macOS** you need the Xcode command line tools (`xcode-select --install`);
+WebKit is already part of the system.
 
-Su **Linux** servono le librerie di sistema per Tauri. Su Ubuntu/Debian:
+On **Linux** you need the system libraries for Tauri. On Ubuntu/Debian:
 
   ```bash
   sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
     libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
   ```
 
-### Chiave API
+### API key
 
 ```bash
 cp .env.example .env
 chmod 600 .env
-# poi inserisci la chiave in CURSEFORGE_API_KEY, tra apici singoli
+# then put the key in CURSEFORGE_API_KEY, in single quotes
 ```
 
-La chiave va **tra apici singoli**: `CURSEFORGE_API_KEY='$2a$10$...'`. Le chiavi di
-CurseForge contengono `$`, e senza apici (o con apici doppi) il lettore di `.env` li
-tratta come variabili da sostituire: la chiave arriva rovinata e CurseForge la rifiuta.
+The key goes **in single quotes**: `CURSEFORGE_API_KEY='$2a$10$...'`. CurseForge keys
+contain `$`, and without quotes (or with double quotes) the `.env` reader treats them as
+variables to substitute: the key arrives mangled and CurseForge rejects it.
 
-`.env` è in `.gitignore` e non va mai committato. In debug l'app lo legge dalla
-radice del repo; in alternativa puoi esportare la chiave nell'ambiente, sempre tra
-apici singoli perché anche la shell sostituirebbe i `$`:
+`.env` is in `.gitignore` and must never be committed. In debug the app reads it from the
+repository root; alternatively you can export the key in the environment, again in single
+quotes because the shell would also substitute the `$`:
 `export CURSEFORGE_API_KEY='$2a$10$...'`.
 
-### Comandi
+### Commands
 
 ```bash
-pnpm install          # dipendenze del frontend
-pnpm tauri dev        # avvia l'app in sviluppo con hot reload
-pnpm tauri build      # build di release e pacchetto della piattaforma corrente
+pnpm install          # frontend dependencies
+pnpm tauri dev        # starts the app in development with hot reload
+pnpm tauri build      # release build and package for the current platform
 ```
 
-`pnpm tauri build` produce il pacchetto della piattaforma su cui gira: su Linux il
-`.deb` (`wow-don_<versione>_amd64.deb`) in `src-tauri/target/release/bundle/deb/`, su Windows l'installer
-`*-setup.exe` in `src-tauri/target/release/bundle/nsis/`, su macOS il `.dmg` in
-`src-tauri/target/release/bundle/dmg/`. Un pacchetto per Windows si costruisce su Windows
-(o sul runner Windows della CI) e uno per macOS su macOS, non da Linux. Il `.dmg`
-universale della release si ottiene con
-`pnpm tauri build --target universal-apple-darwin --bundles dmg`, dopo aver aggiunto i
-target `aarch64-apple-darwin` e `x86_64-apple-darwin` al toolchain con `rustup target add`;
-finisce in `src-tauri/target/universal-apple-darwin/release/bundle/dmg/`.
+`pnpm tauri build` produces the package for the platform it runs on: on Linux the
+`.deb` (`wow-don_<version>_amd64.deb`) in `src-tauri/target/release/bundle/deb/`, on Windows the
+`*-setup.exe` installer in `src-tauri/target/release/bundle/nsis/`, on macOS the `.dmg` in
+`src-tauri/target/release/bundle/dmg/`. A Windows package is built on Windows
+(or on the CI Windows runner) and a macOS one on macOS, not from Linux. The release's universal
+`.dmg` is obtained with
+`pnpm tauri build --target universal-apple-darwin --bundles dmg`, after adding the
+`aarch64-apple-darwin` and `x86_64-apple-darwin` targets to the toolchain with `rustup target add`;
+it ends up in `src-tauri/target/universal-apple-darwin/release/bundle/dmg/`.
 
-Controlli rapidi:
+Quick checks:
 
 ```bash
-pnpm build                              # type-check e build del frontend
-pnpm test                               # test del frontend (node --test, Node 22.18 o successivo)
+pnpm build                              # frontend type-check and build
+pnpm test                               # frontend tests (node --test, Node 22.18 or later)
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-### Flusso di lavoro
+### Workflow
 
-Il branch di integrazione è `develop` (branch predefinito); `main` riceve solo i rilasci. Il
-lavoro passa da issue → PR verso `develop` → CI e review automatica DeepSeek → merge. Le regole
-per gli agenti AI e i dettagli della pipeline sono in [AGENTS.md](AGENTS.md).
+The integration branch is `develop` (the default branch); `main` receives only releases. Work
+goes issue → PR against `develop` → CI and automated DeepSeek review → merge. The rules
+for AI agents and the pipeline details are in [AGENTS.md](AGENTS.md).
 
-## Rilascio
+## Release
 
-Un tag `v<versione>` su un commit di `main` avvia `.github/workflows/release.yml`, che costruisce il `.deb`,
-l'installer per Windows e il `.dmg` universale per macOS e li allega a una release di GitHub
-in bozza. La release si pubblica a mano dopo averla controllata.
+A `v<version>` tag on a `main` commit starts `.github/workflows/release.yml`, which builds the `.deb`,
+the Windows installer and the universal macOS `.dmg` and attaches them to a draft GitHub
+release. The release is published by hand after checking it.
 
-Ogni pacchetto contiene `THIRD-PARTY-LICENSES`, con le licenze delle crate e dei pacchetti npm
-compilati nell'app. Lo scrive `scripts/third-party-licenses.py` prima di ogni build, e la
-configurazione `src-tauri/tauri.release*.conf.json` lo mette nel pacchetto: su Linux in
-`/usr/share/doc/wow-don/` accanto a `copyright`, su Windows e macOS tra le risorse dell'app, insieme a `LICENSE`.
+Every package contains `THIRD-PARTY-LICENSES`, with the licences of the crates and npm packages
+compiled into the app. `scripts/third-party-licenses.py` writes it before every build, and the
+`src-tauri/tauri.release*.conf.json` configuration puts it in the package: on Linux in
+`/usr/share/doc/wow-don/` next to `copyright`, on Windows and macOS among the app's resources, together with `LICENSE`.
 
-### Installare su macOS
+### Installing on macOS
 
-Apri il `.dmg` e trascina WoW-don in Applicazioni. L'app non è firmata né notarizzata,
-quindi al primo avvio macOS la blocca dicendo che non può verificarne lo sviluppatore. Per
-aprirla la prima volta:
+Open the `.dmg` and drag WoW-don into Applications. The app is neither signed nor notarised,
+so on the first launch macOS blocks it, saying it cannot verify the developer. To
+open it the first time:
 
-- nel Finder, in Applicazioni, fai clic con il tasto destro (o Ctrl-clic) su WoW-don e
-  scegli **Apri**, poi conferma con **Apri** nel dialogo;
-- oppure, dopo il primo tentativo bloccato, vai in **Impostazioni di Sistema → Privacy e
-  sicurezza** e, nella sezione Sicurezza, premi **Apri comunque** accanto al messaggio su
+- in the Finder, in Applications, right-click (or Control-click) WoW-don and
+  choose **Open**, then confirm with **Open** in the dialog;
+- or, after the first blocked attempt, go to **System Settings → Privacy &
+  Security** and, in the Security section, press **Open Anyway** next to the message about
   WoW-don.
 
-Basta farlo una volta: dagli avvii successivi l'app si apre normalmente.
+You only need to do it once: from the following launches the app opens normally.
 
-## Documentazione
+## Documentation
 
-- [Contesto](docs/context.md)
-- [Decisioni](docs/decisions.md)
-- [Architettura](docs/architecture.md)
+- [Context](docs/context.md)
+- [Decisions](docs/decisions.md)
+- [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
 
-## Note
+## Notes
 
-World of Warcraft è un marchio di Blizzard Entertainment. WoW-don è un progetto
-indipendente, non affiliato né approvato da Blizzard, CurseForge o Overwolf.
+World of Warcraft is a trademark of Blizzard Entertainment. WoW-don is an independent
+project, neither affiliated with nor endorsed by Blizzard, CurseForge or Overwolf.
 
-## Licenza
+## Licence
 
-WoW-don è software libero, distribuito con la [GNU General Public License v3.0 o
-successiva](LICENSE) (`GPL-3.0-or-later`).
+WoW-don is free software, distributed under the [GNU General Public License v3.0 or
+later](LICENSE) (`GPL-3.0-or-later`).
