@@ -167,8 +167,9 @@ The worktree is `<repo-parent-folder>/wow-don-issue-<number>`:
 From here on every change and every git command runs inside `$WORKTREE_DIR`. If the check
 fails, stop and go back into the worktree: do not modify the main folder.
 
-The worktree has no `.env` file and must not have one: the gates do not use the CurseForge key,
-and agents never read `.env`.
+The worktree needs no environment file: the gates use no key, and the app reaches CurseForge
+through the wow-don-proxy Worker (D44). Agents still never read `.env` files: a leftover one can
+hold a real key.
 
 ### Step 5: decide how many PRs, then implement
 
@@ -213,9 +214,11 @@ Then implement:
 1. **Respect Out of scope to the letter**: if a change touches something on that list, stop and
    reassess.
 2. Follow the existing patterns.
-3. **Network, disk and API key live in the backend.** The frontend shows data and calls Tauri
-   commands; it does not know the CurseForge key and makes no HTTP requests to the sources.
-4. The key never goes into logs, into errors returned to the frontend or into tests.
+3. **Network and disk live in the backend; the app holds no third-party key.** The frontend
+   shows data and calls Tauri commands and makes no HTTP requests to the sources; the backend
+   reaches CurseForge through the wow-don-proxy Worker.
+4. The CurseForge key never reaches the app (D44): no key in the code, the logs, the errors
+   returned to the frontend or the tests.
 5. No new dependencies (crates or npm packages) without explicit instruction.
 6. No secrets in the code, no debug `dbg!`/`println!`/`console.log` left in production paths.
 7. Surgical changes: modify existing files when you can, create new ones only when needed.
@@ -286,7 +289,7 @@ Formatting is the most often skipped gate and the one that turns CI red most oft
 - [ ] Automation suite green
 - [ ] No debug prints in production code
 - [ ] No secrets, tokens or keys in the code or the tests
-- [ ] API key only in the backend, never in the frontend or the logs
+- [ ] No CurseForge key in the app, the logs or the tests (D44)
 - [ ] Clean publication privacy: `check-publication-privacy.sh` on the index and on every
       commit of the branch, `check-commit-privacy.sh` on author and messages of the branch's
       commits

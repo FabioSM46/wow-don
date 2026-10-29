@@ -208,7 +208,7 @@ Trigger: `/scrum-master feature-spec <feature-description>`
    - **External sources** (if needed): CurseForge endpoints used, limits, fields to verify
      against the official documentation
    - **Data and persistence** (if needed): local state, format, migrations
-   - **Constraints**: API key only in the backend and never in the logs; no scraping and no
+   - **Constraints**: no CurseForge key in the app (D44: the backend calls the proxy); no scraping and no
      keys from other apps; no automatic download with `allowModDistribution = false`; safe zip
      extraction (no path outside `AddOns`); paths inside Wine prefixes with spaces; no new
      dependency without discussing it

@@ -31,17 +31,19 @@ wow-don/
 | `frontend` | `src/`, `public/`, `index.html`, `vite.config.ts`, `tsconfig*.json` | React 19, TypeScript, Vite | Lists, search, filters, sorting, `invoke()` calls |
 | `shared`   | root | — | Changes that touch both areas or the common configuration (`package.json`, `pnpm-lock.yaml`) |
 
-### Network, disk and keys live in the backend — always
+### Network and disk live in the backend; the app holds no third-party key — always
 
-The frontend shows data and calls Tauri commands; it does not know the API key and does not
-talk to the sources. Everything that touches the network, the file system or secrets is in the
-backend. A command that returns the key to the frontend, or a `fetch` to CurseForge from the
-frontend, is a bug even when it "works".
+The frontend shows data and calls Tauri commands; it does not talk to the sources. Everything
+that touches the network or the file system is in the backend. The CurseForge key is not in the
+app at all (D44): the backend reaches CurseForge through the wow-don-proxy Worker, which keeps
+the key in Cloudflare secrets. A `fetch` to the sources from the frontend, or key plumbing in
+the app (a config field, an environment variable, an `x-api-key` header built locally), is a
+bug even when it "works".
 
 ### Source rules
 
-- The CurseForge key stays in the backend: it does not go to the frontend, and it does not end
-  up in logs, in returned errors or in tests.
+- The CurseForge key never reaches the app: it stays in the proxy's Cloudflare secrets, and no
+  key appears in logs, in returned errors or in tests.
 - No scraping of the CurseForge site and no reuse of other apps' keys.
 - Addons with `allowModDistribution = false` are not downloaded automatically.
 - Zips are extracted into a temporary folder, and before they are moved it is checked that no
@@ -469,7 +471,7 @@ resolving a thread).
 - [ ] **Automation** — `scripts/test/*.test.sh` and `python3 .github/scripts/test_deepseek_review.py`
 - [ ] **No debug prints** in production paths
 - [ ] **No secrets** — no keys, tokens, passwords or credentials in code or tests
-- [ ] **API key only in the backend** — never in the frontend or in logs
+- [ ] **No CurseForge key in the app** — not in the frontend, the backend, the logs or the tests (D44)
 - [ ] **Clean publication privacy** — no real email, personal data, machine path, hostname or
       private endpoint; `scripts/check-publication-privacy.sh` passes on the tree and
       `scripts/check-commit-privacy.sh` on the commits the branch adds

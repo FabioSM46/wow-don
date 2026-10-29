@@ -28,6 +28,6 @@ Quick reference — the pipeline skills:
 - `/scrum-master feature-spec | backlog-refine | iteration-plan` — scrum ceremonies
 
 Rules that override everything else: work only in git worktrees, start from `develop`, never
-push or merge to `main`, never read `.env` files, network/disk/API key only in the backend (the
-frontend does not see the key and does not talk to the sources), no new dependency without an
+push or merge to `main`, never read `.env` files, network and disk only in the backend (the
+frontend does not talk to the sources), no CurseForge key in the app (D44), no new dependency without an
 explicit request. A failed privacy check blocks the push even when build and tests are all green.
