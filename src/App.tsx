@@ -391,7 +391,6 @@ function App() {
             <Search
               installation={active}
               active={tab === "search"}
-              keyConfigured={status?.curseforgeKeyConfigured ?? null}
               betaWhenNoRelease={betaWhenNoRelease}
               onInstalled={() => setInstalledStale(true)}
               stale={searchStale}
@@ -459,10 +458,6 @@ function App() {
       {status && (
         <footer className="app-footer">
           <span>v{status.version}</span>
-          <span>
-            CurseForge:{" "}
-            {status.curseforgeKeyConfigured ? "key configured" : "key missing"}
-          </span>
         </footer>
       )}
     </div>

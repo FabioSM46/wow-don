@@ -47,15 +47,12 @@ use crate::updates::{
 #[serde(rename_all = "camelCase")]
 pub struct AppStatus {
     version: &'static str,
-    /// Only if the key is there: the key never leaves the backend.
-    curseforge_key_configured: bool,
 }
 
 #[tauri::command]
-pub fn app_status(config: State<'_, Config>) -> AppStatus {
+pub fn app_status() -> AppStatus {
     AppStatus {
         version: env!("CARGO_PKG_VERSION"),
-        curseforge_key_configured: config.curseforge_api_key.is_some(),
     }
 }
 
@@ -458,7 +455,7 @@ pub async fn refresh_addons(
     installed: Installed<'_>,
     config: State<'_, Config>,
 ) -> Result<updates::Refresh, String> {
-    let key = config.curseforge_api_key.clone();
+    let base = Some(config.curseforge_url.clone());
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
@@ -475,7 +472,7 @@ pub async fn refresh_addons(
         refresh_blocking(
             &installation,
             &cache,
-            key,
+            base,
             &overrides,
             allow_beta,
             &records,
@@ -490,7 +487,7 @@ pub async fn refresh_addons(
 fn refresh_blocking(
     installation: &Installation,
     cache: &FingerprintCache,
-    key: Option<String>,
+    base: Option<String>,
     overrides: &VersionOverrides,
     allow_beta: bool,
     records: &SourceRecords,
@@ -520,7 +517,7 @@ fn refresh_blocking(
             });
         }
     };
-    let client = CurseForgeClient::new(transport, key);
+    let client = CurseForgeClient::new(transport, base);
     let curseforge = CurseForgeSource {
         client: &client,
         overrides,
@@ -549,7 +546,7 @@ pub async fn export_addons(
     installed: Installed<'_>,
     config: State<'_, Config>,
 ) -> Result<addon_list::Export, String> {
-    let key = config.curseforge_api_key.clone();
+    let base = Some(config.curseforge_url.clone());
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let records = records_for_matching(&installed, &installation.id);
@@ -563,7 +560,7 @@ pub async fn export_addons(
         let refresh = refresh_blocking(
             &installation,
             &cache,
-            key,
+            base,
             &overrides,
             allow_beta,
             &records,
@@ -594,7 +591,7 @@ pub async fn preview_import(
     config: State<'_, Config>,
 ) -> Result<addon_import::Preview, String> {
     let decoded = addon_list::decode(&text)?;
-    let key = config.curseforge_api_key.clone();
+    let base = Some(config.curseforge_url.clone());
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let records = records_for_matching(&installed, &installation.id);
@@ -607,18 +604,17 @@ pub async fn preview_import(
         let refresh = refresh_blocking(
             &installation,
             &cache,
-            key.clone(),
+            base.clone(),
             &overrides,
             allow_beta,
             &records,
             &listed_records,
         )?;
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let has_key = key.is_some();
-        let client = CurseForgeClient::new(transport, key);
+        let client = CurseForgeClient::new(transport, base);
         let tukui = tukui_source()?;
         let (availability, lookup_error) =
-            import_availability(&decoded.list.addons, &client, has_key, &tukui);
+            import_availability(&decoded.list.addons, &client, &tukui);
         Ok(addon_import::preview(
             &decoded,
             &refresh,
@@ -648,7 +644,7 @@ pub async fn import_addons(
     config: State<'_, Config>,
 ) -> Result<addon_import::ImportResult, String> {
     let decoded = addon_list::decode(&text)?;
-    let key = config.curseforge_api_key.clone();
+    let base = Some(config.curseforge_url.clone());
     let installation = find_installation(&store, &installation_id)?;
     // The forced versions are reread after writing them: here they only need to be readable.
     overrides_for(&settings, &installation.id)?;
@@ -679,7 +675,7 @@ pub async fn import_addons(
             let refresh = refresh_blocking(
                 &installation,
                 &cache,
-                key.clone(),
+                base.clone(),
                 &overrides,
                 allow_beta,
                 &records,
@@ -689,12 +685,11 @@ pub async fn import_addons(
         };
         let (before, records) = read_state()?;
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let has_key = key.is_some();
-        let client = CurseForgeClient::new(transport, key.clone());
+        let client = CurseForgeClient::new(transport, base.clone());
         let tukui = tukui_source()?;
         let github = github_source()?;
         let (availability, lookup_error) =
-            import_availability(&decoded.list.addons, &client, has_key, &tukui);
+            import_availability(&decoded.list.addons, &client, &tukui);
         let progress = emit_progress(&app, &installation.id);
         let mut installer = CommandInstaller {
             installation: &installation,
@@ -744,7 +739,6 @@ const MODS_PER_REQUEST: usize = 100;
 fn import_availability(
     entries: &[addon_list::ListEntry],
     client: &CurseForgeClient<ReqwestTransport>,
-    has_key: bool,
     tukui: &TukuiSource<PublicReqwestTransport>,
 ) -> (Availabilities, Option<String>) {
     use addon_import::Availability;
@@ -761,11 +755,11 @@ fn import_availability(
         .filter_map(|e| e.key.parse().ok())
         .collect();
     if !mod_ids.is_empty() {
-        if !has_key {
+        if !client.is_configured() {
             for id in &mod_ids {
                 availability.insert(
                     (SourceKind::Curseforge, id.to_string()),
-                    not_downloadable(&CurseForgeError::MissingKey.to_string(), None),
+                    not_downloadable(&CurseForgeError::NotConfigured.to_string(), None),
                 );
             }
         } else {
@@ -1178,15 +1172,15 @@ pub async fn check_updates(
     installed: Installed<'_>,
     config: State<'_, Config>,
 ) -> Result<Vec<AddonUpdate>, String> {
-    // Without a CurseForge key it checks nothing, but the free sources do (D31): the folders
+    // Without a CurseForge address it checks nothing, but the free sources do (D31): the folders
     // that none recognises report the reason.
-    let key = config.curseforge_api_key.clone();
+    let base = Some(config.curseforge_url.clone());
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
     let records = records_for_matching(&installed, &installation.id);
     tauri::async_runtime::spawn_blocking(move || {
-        let sources = LiveSources::new(key)?;
+        let sources = LiveSources::new(base)?;
         let cache = app.state::<FingerprintCache>();
         sources.with(&overrides, allow_beta, |sources| {
             updates::check_updates_with(&installation, Some(&cache), sources, &records)
@@ -1216,9 +1210,9 @@ pub async fn update_addons(
     config: State<'_, Config>,
 ) -> Result<Vec<UpdateOutcome>, String> {
     let reinstall = reinstall.unwrap_or(false);
-    // Without a CurseForge key it checks nothing, but the free sources do (D31): the folders
+    // Without a CurseForge address it checks nothing, but the free sources do (D31): the folders
     // that none recognises report the reason.
-    let key = config.curseforge_api_key.clone();
+    let base = Some(config.curseforge_url.clone());
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
@@ -1234,7 +1228,7 @@ pub async fn update_addons(
     tauri::async_runtime::spawn_blocking(move || {
         let lock = app.state::<InstallLock>();
         let _held = lock.hold();
-        let sources = LiveSources::new(key)?;
+        let sources = LiveSources::new(base)?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         let cache = app.state::<FingerprintCache>();
         let mut record = record_writer(&installed, &cache, &installation);
@@ -1281,10 +1275,10 @@ pub(crate) struct LiveSources {
 }
 
 impl LiveSources {
-    pub(crate) fn new(key: Option<String>) -> Result<Self, String> {
+    pub(crate) fn new(base: Option<String>) -> Result<Self, String> {
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
         Ok(Self {
-            client: CurseForgeClient::new(transport, key),
+            client: CurseForgeClient::new(transport, base),
             tukui: tukui_source()?,
             wowi: wowinterface_source()?,
             github: github_source()?,
@@ -1293,8 +1287,8 @@ impl LiveSources {
 
     /// Whether the CurseForge key is there: without it, the CurseForge check always fails, and not
     /// because of the network.
-    pub(crate) fn has_curseforge_key(&self) -> bool {
-        self.client.has_key()
+    pub(crate) fn curseforge_configured(&self) -> bool {
+        self.client.is_configured()
     }
 
     /// Runs `run` with the sources in D33 order: CurseForge (with the installation's forced
@@ -1393,10 +1387,7 @@ pub async fn install_addon(
     settings: Settings<'_>,
     config: State<'_, Config>,
 ) -> Result<Vec<InstallOutcome>, String> {
-    let key = config
-        .curseforge_api_key
-        .clone()
-        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let base = config.curseforge_url.clone();
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
@@ -1405,7 +1396,7 @@ pub async fn install_addon(
         let _held = lock.hold();
         // reqwest's blocking client must be created and dropped outside the async runtime.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let client = CurseForgeClient::new(transport, Some(key));
+        let client = CurseForgeClient::new(transport, Some(base));
         // The projects CurseForge does not let you download use the GitHub mirror (D34).
         let github = github_source()?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
@@ -1452,17 +1443,14 @@ pub async fn github_mirror(
     settings: Settings<'_>,
     config: State<'_, Config>,
 ) -> Result<MirrorAvailability, String> {
-    let key = config
-        .curseforge_api_key
-        .clone()
-        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let base = config.curseforge_url.clone();
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
     tauri::async_runtime::spawn_blocking(move || {
         // reqwest's blocking client must be created and dropped outside the async runtime.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let client = CurseForgeClient::new(transport, Some(key));
+        let client = CurseForgeClient::new(transport, Some(base));
         let github = github_source()?;
         install_new::github_mirror(
             &installation,
@@ -1645,10 +1633,7 @@ pub async fn search_catalog(
     app_settings: AppSettingsState<'_>,
     config: State<'_, Config>,
 ) -> Result<CatalogPage, String> {
-    let key = config
-        .curseforge_api_key
-        .clone()
-        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let base = config.curseforge_url.clone();
     let installation = find_installation(&store, &installation_id)?;
     // As in `list_addons`: an unreadable registry does not block the search, only the `.toc`
     // counts.
@@ -1667,7 +1652,7 @@ pub async fn search_catalog(
     tauri::async_runtime::spawn_blocking(move || {
         // reqwest's blocking client must be created and dropped outside the async runtime.
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let client = CurseForgeClient::new(transport, Some(key));
+        let client = CurseForgeClient::new(transport, Some(base));
         catalog::search_catalog(&installation, &client, &records, &request)
     })
     .await
@@ -1677,13 +1662,10 @@ pub async fn search_catalog(
 /// The categories of WoW addons on CurseForge, by name, without the classes.
 #[tauri::command]
 pub async fn list_categories(config: State<'_, Config>) -> Result<Vec<CatalogCategory>, String> {
-    let key = config
-        .curseforge_api_key
-        .clone()
-        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let base = config.curseforge_url.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let client = CurseForgeClient::new(transport, Some(key));
+        let client = CurseForgeClient::new(transport, Some(base));
         catalog::list_categories(&client)
     })
     .await
@@ -1706,10 +1688,7 @@ pub async fn addon_detail(
     app_settings: AppSettingsState<'_>,
     config: State<'_, Config>,
 ) -> Result<AddonDetail, String> {
-    let key = config
-        .curseforge_api_key
-        .clone()
-        .ok_or_else(|| CurseForgeError::MissingKey.to_string())?;
+    let base = config.curseforge_url.clone();
     let installation = find_installation(&store, &installation_id)?;
     let overrides = overrides_for(&settings, &installation.id)?;
     let allow_beta = beta_when_no_release(&app_settings);
@@ -1719,7 +1698,7 @@ pub async fn addon_detail(
         .unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || {
         let transport = ReqwestTransport::new().map_err(|e| e.to_string())?;
-        let client = CurseForgeClient::new(transport, Some(key));
+        let client = CurseForgeClient::new(transport, Some(base));
         catalog::addon_detail(
             &installation,
             &client,

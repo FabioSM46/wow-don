@@ -1006,11 +1006,11 @@ mod tests {
 
     use super::*;
     use crate::progress;
-    use crate::sources::curseforge::{ApiKey, BytesResponse, HttpResponse, TransportError};
+    use crate::sources::curseforge::{BytesResponse, HttpResponse, TransportError};
     use crate::test_support::TempDir;
     use crate::updates::{CLASSIC_ERA, RETAIL};
 
-    const API: &str = "https://api.curseforge.com";
+    const API: &str = "https://proxy.example.com";
 
     /// Fake transport that answers by URL and records the requests.
     #[derive(Default)]
@@ -1047,7 +1047,7 @@ mod tests {
     }
 
     impl Transport for Routes {
-        fn get(&self, url: &str, _key: &ApiKey) -> Result<HttpResponse, TransportError> {
+        fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
             self.log.requests.lock().unwrap().push(url.to_owned());
             if self.broken.iter().any(|broken| broken == url) {
                 return Err(TransportError::Connect);
@@ -1055,12 +1055,7 @@ mod tests {
             reply(self.files.get(url))
         }
 
-        fn post_json(
-            &self,
-            url: &str,
-            _key: &ApiKey,
-            body: String,
-        ) -> Result<HttpResponse, TransportError> {
+        fn post_json(&self, url: &str, body: String) -> Result<HttpResponse, TransportError> {
             self.log.requests.lock().unwrap().push(url.to_owned());
             if url == format!("{API}/v1/mods/files") {
                 // The files requested among those of `files`, as `get_file` would give them.
@@ -1235,7 +1230,7 @@ mod tests {
     }
 
     fn client(routes: Routes) -> CurseForgeClient<Routes> {
-        CurseForgeClient::new(routes, Some("test-key".to_owned()))
+        CurseForgeClient::new(routes, Some("https://proxy.example.com".to_owned()))
     }
 
     fn record(file_id: u32, folders: &[&str]) -> InstalledRecord {
@@ -1646,7 +1641,12 @@ mod tests {
             Some(55),
         );
         assert_eq!(outcome.status, InstallStatus::Error);
-        assert!(!outcome.message.unwrap().contains("test-key"));
+        assert!(
+            !outcome
+                .message
+                .unwrap()
+                .contains("https://proxy.example.com")
+        );
     }
 
     const REQUIRED: u8 = RELATION_REQUIRED_DEPENDENCY;
@@ -1863,7 +1863,13 @@ mod tests {
                 (3, Installed, Some(1))
             ]
         );
-        assert!(!outcomes[1].message.as_deref().unwrap().contains("test-key"));
+        assert!(
+            !outcomes[1]
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("https://proxy.example.com")
+        );
         assert_eq!(names(&fx.addons), ["P1", "P3"]);
         assert_eq!(
             written.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
