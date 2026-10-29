@@ -1,4 +1,4 @@
-//! Addon installati: lettura dei `.toc`, fingerprint e scansione di `Interface/AddOns`.
+//! Installed addons: reading `.toc` files, fingerprints and scanning `Interface/AddOns`.
 
 pub mod cache;
 pub mod fingerprint;

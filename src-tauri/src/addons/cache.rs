@@ -1,15 +1,15 @@
-//! Cache in memoria dei fingerprint delle cartelle degli addon (issue #125).
+//! In-memory cache of addon folder fingerprints (issue #125).
 //!
-//! Il fingerprint legge per intero i file di un addon; la scansione gira a ogni apertura della
-//! tab, a ogni controllo e a ogni aggiornamento. Una cartella i cui file hanno ancora gli stessi
-//! percorsi, dimensioni e date di modifica dà lo stesso fingerprint: si riusa senza rileggerli.
-//! La sola data della cartella non basta, perché non cambia quando cambia un file dentro una
-//! sottocartella.
+//! The fingerprint reads an addon's files in full; the scan runs every time the tab opens, on
+//! every check and on every update. A folder whose files still have the same paths, sizes and
+//! modification times gives the same fingerprint: it is reused without reading them again.
+//! The folder's own timestamp is not enough, because it does not change when a file inside a
+//! subfolder changes.
 //!
-//! Un file sostituito con uno della stessa dimensione e della stessa data non si vede: per
-//! questo le scritture dell'app tolgono le loro cartelle ([`FingerprintCache::forget`]) e
-//! "Reload addons" ricalcola tutto ([`FingerprintCache::forget_all`]). Solo memoria: alla
-//! chiusura dell'app la cache si perde.
+//! A file replaced by one with the same size and the same timestamp goes unnoticed: that is
+//! why the app's writes drop their folders ([`FingerprintCache::forget`]) and "Reload addons"
+//! recomputes everything ([`FingerprintCache::forget_all`]). Memory only: the cache is lost
+//! when the app closes.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -22,22 +22,22 @@ struct Entry {
     fingerprint: Option<u32>,
 }
 
-/// Per cartella di addon (il percorso in `AddOns`), i file visti all'ultimo calcolo e il
-/// fingerprint che ne è uscito.
+/// Per addon folder (the path in `AddOns`), the files seen at the last computation and the
+/// fingerprint that came out of it.
 #[derive(Default)]
 pub struct FingerprintCache {
     entries: Mutex<HashMap<PathBuf, Entry>>,
-    /// Quanti fingerprint sono stati calcolati davvero: i test verificano il riuso così, senza
-    /// dipendere dai tempi.
+    /// How many fingerprints were actually computed: the tests check reuse this way, without
+    /// depending on timing.
     #[cfg(test)]
     computed: std::sync::atomic::AtomicUsize,
 }
 
 impl FingerprintCache {
-    /// Il fingerprint di `addon_dir`, dalla cache se i file non sono cambiati. Il lock non resta
-    /// preso durante la lettura dei file: si confronta, si calcola fuori e si scrive dopo. Un file
-    /// cambiato durante il calcolo ha una data più recente di quella salvata, quindi la
-    /// scansione successiva lo ricalcola.
+    /// The fingerprint of `addon_dir`, from the cache if the files have not changed. The lock is
+    /// not held while the files are read: compare, compute outside it and write afterwards. A
+    /// file changed during the computation has a newer timestamp than the stored one, so the
+    /// next scan recomputes it.
     pub fn fingerprint(&self, addon_dir: &Path) -> Option<u32> {
         let files = fingerprint::folder_files(addon_dir)?;
         if let Some(entry) = self.lock().get(addon_dir)
@@ -59,8 +59,8 @@ impl FingerprintCache {
         value
     }
 
-    /// Toglie le cartelle `folders` di `addons_dir`, senza distinguere maiuscole e minuscole come
-    /// il gioco: l'app le ha appena scritte o tolte.
+    /// Drops the `folders` of `addons_dir`, ignoring case like the game does: the app has just
+    /// written or removed them.
     pub fn forget(&self, addons_dir: &Path, folders: &[String]) {
         let names: HashSet<String> = folders.iter().map(|f| f.to_lowercase()).collect();
         self.lock().retain(|dir, _| {
@@ -68,14 +68,14 @@ impl FingerprintCache {
         });
     }
 
-    /// Toglie tutte le cartelle di `addons_dir`: la prossima scansione le ricalcola.
+    /// Drops every folder of `addons_dir`: the next scan recomputes them.
     pub fn forget_all(&self, addons_dir: &Path) {
         self.lock()
             .retain(|dir, _| dir.parent() != Some(addons_dir));
     }
 
-    /// Tiene, di `addons_dir`, solo le cartelle `present`: quelle sparite dal disco escono, così
-    /// la cache non cresce senza limite.
+    /// Keeps, of `addons_dir`, only the `present` folders: those gone from the disk leave, so
+    /// the cache does not grow without bound.
     pub fn retain(&self, addons_dir: &Path, present: &[String]) {
         let names: HashSet<String> = present.iter().map(|f| f.to_lowercase()).collect();
         self.lock().retain(|dir, _| {
@@ -84,7 +84,7 @@ impl FingerprintCache {
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<PathBuf, Entry>> {
-        // Una scansione andata in panic non rende inutilizzabile la cache: al peggio si ricalcola.
+        // A scan that panicked does not make the cache unusable: at worst it is recomputed.
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -136,7 +136,7 @@ mod tests {
         let cache = FingerprintCache::default();
         cache.fingerprint(&dir);
 
-        // Dimensione diversa, in una sottocartella: la data della cartella non cambia.
+        // Different size, in a subfolder: the folder's timestamp does not change.
         fs::write(dir.join("sub").join("core.lua"), "print(12)").unwrap();
         assert_eq!(
             cache.fingerprint(&dir),
@@ -162,7 +162,7 @@ mod tests {
         cache.fingerprint(&foo);
         cache.fingerprint(&bar);
 
-        // Il nome arriva da un record, con le maiuscole che vuole.
+        // The name comes from a record, with whatever case it has.
         cache.forget(tmp.path(), &["FOO".to_owned()]);
         cache.fingerprint(&foo);
         cache.fingerprint(&bar);
@@ -187,16 +187,16 @@ mod tests {
         cache.fingerprint(&elsewhere);
 
         cache.retain(tmp.path(), &["bar".to_owned()]);
-        // Restano Bar e la cartella dell'altra installazione.
+        // Bar and the other installation's folder remain.
         assert_eq!(cache.len(), 2);
         cache.fingerprint(&bar);
         cache.fingerprint(&elsewhere);
         assert_eq!(cache.computed(), 3);
     }
 
-    /// Prima e seconda scansione della cartella vera indicata da `WOWDON_FINGERPRINT_DIR` (la
-    /// cartella dell'installazione): stessi fingerprint, e la seconda non ne calcola nessuno.
-    /// `cargo test -- --ignored second_scan --nocapture` stampa i tempi.
+    /// First and second scan of the real folder named by `WOWDON_FINGERPRINT_DIR` (the
+    /// installation folder): same fingerprints, and the second computes none of them.
+    /// `cargo test -- --ignored second_scan --nocapture` prints the timings.
     #[test]
     #[ignore = "needs a real installation folder"]
     fn second_scan_of_a_real_folder_reuses_every_fingerprint() {

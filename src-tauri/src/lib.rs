@@ -70,8 +70,8 @@ pub fn run() {
             app.manage(Mutex::new(AppSettingsStore::load(
                 config_dir.join(APP_SETTINGS_FILE),
             )));
-            // La versione precedente dell'ultimo giro automatico (issue #201): il manifesto si
-            // rilegge a ogni uso e si scrive solo sotto `InstallLock`, quindi niente `Mutex`.
+            // The previous version from the last automatic run (issue #201): the manifest is
+            // re-read on every use and written only under `InstallLock`, so no `Mutex`.
             app.manage(previous::PreviousManifest::new(
                 config_dir.join(previous::PREVIOUS_FILE),
             ));
@@ -80,8 +80,8 @@ pub fn run() {
             // the window-state plugin above never restores visibility (no `VISIBLE` flag):
             // shown here unless an autostart launch stays in the tray.
             autostart::show_main_window_unless_hidden_start(app.handle());
-            // Il giro automatico degli aggiornamenti (D41, issue #200) parte anche con
-            // `--autostart`: il primo giro aspetta `STARTUP_DELAY`, gli stati sono già registrati.
+            // The automatic update run (D41, issue #200) starts with `--autostart` too: the
+            // first run waits `STARTUP_DELAY`, the states are already registered.
             auto_update::start(app.handle().clone());
             Ok(())
         })

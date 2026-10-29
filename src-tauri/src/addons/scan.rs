@@ -1,4 +1,4 @@
-//! Scansione di `Interface/AddOns` di un'installazione. Solo lettura: non modifica niente.
+//! Scan of an installation's `Interface/AddOns`. Read-only: it changes nothing.
 
 use std::collections::HashMap;
 use std::fs;
@@ -19,25 +19,25 @@ use crate::store::InstalledRecords;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledAddon {
-    /// Nome della cartella in `Interface/AddOns`.
+    /// Name of the folder in `Interface/AddOns`.
     pub folder: String,
-    /// Il `.toc` scelto per il flavor, se ce n'è uno.
+    /// The `.toc` picked for the flavor, if there is one.
     pub toc_file: Option<String>,
-    /// Campi del `.toc`; vuoti se il `.toc` manca o non si legge.
+    /// Fields of the `.toc`; empty if the `.toc` is missing or cannot be read.
     #[serde(flatten)]
     pub toc: TocInfo,
-    /// Data di modifica della cartella, in millisecondi Unix.
+    /// Modification time of the folder, in Unix milliseconds.
     pub modified_ms: Option<u64>,
-    /// Fingerprint di CurseForge della cartella (vedi `addons::fingerprint`).
+    /// CurseForge fingerprint of the folder (see `addons::fingerprint`).
     pub fingerprint: Option<u32>,
-    /// Perché l'addon non si è potuto leggere: l'addon resta in lista invece di sparire.
+    /// Why the addon could not be read: the addon stays in the list instead of disappearing.
     pub error: Option<String>,
 }
 
 impl InstalledAddon {
-    /// Se la cartella non si è potuta elencare. Un fingerprint mancante da solo non lo dice: una
-    /// cartella leggibile può non avere nessun file che il calcolo di CurseForge conta (per
-    /// esempio solo un `.toc` `_Camelot`, issue #212).
+    /// Whether the folder could not be listed. A missing fingerprint alone does not say so: a
+    /// readable folder may have no file that the CurseForge computation counts (for
+    /// example only a `_Camelot` `.toc`, issue #212).
     pub fn is_unreadable(&self) -> bool {
         self.error
             .as_deref()
@@ -45,18 +45,17 @@ impl InstalledAddon {
     }
 }
 
-/// Legge gli addon di `<installazione>/Interface/AddOns`. Se manca `Interface/AddOns` non ci
-/// sono addon; se manca la cartella dell'installazione è un errore, perché "zero addon"
-/// nasconderebbe un gioco spostato o un disco non montato. Una voce che non si legge resta in
-/// lista con un errore. L'ordine è stabile: per nome della cartella, senza distinguere
-/// maiuscole e minuscole.
+/// Reads the addons of `<installation>/Interface/AddOns`. If `Interface/AddOns` is missing there
+/// are no addons; if the installation folder is missing it is an error, because "zero addons"
+/// would hide a moved game or an unmounted disk. An entry that cannot be read stays in the
+/// list with an error. The order is stable: by folder name, ignoring case.
 #[cfg(test)]
 pub fn scan_addons(installation_dir: &Path, flavor: &str) -> Result<Vec<InstalledAddon>, String> {
     scan_addons_with(installation_dir, flavor, None)
 }
 
-/// Come `scan_addons`, con i fingerprint presi da `cache` quando le cartelle non sono
-/// cambiate (issue #125). Le cartelle che non ci sono più escono dalla cache.
+/// Like `scan_addons`, with the fingerprints taken from `cache` when the folders have not
+/// changed (issue #125). Folders that are no longer there leave the cache.
 pub fn scan_addons_with(
     installation_dir: &Path,
     flavor: &str,
@@ -78,14 +77,14 @@ pub fn scan_addons_with(
     };
 
     let mut addons = Vec::new();
-    // Le cartelle da leggere: la lettura (e il fingerprint) si fa dopo, in parallelo.
+    // The folders to read: the reading (and the fingerprint) happens afterwards, in parallel.
     let mut folders = Vec::new();
     let mut unreadable = 0;
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
-                // Senza la voce non si conosce nemmeno il nome: resta un segnaposto visibile.
+                // Without the entry not even the name is known: a visible placeholder remains.
                 unreadable += 1;
                 addons.push(unreadable_entry(
                     format!("(unreadable entry {unreadable})"),
@@ -98,8 +97,8 @@ pub fn scan_addons_with(
         if folder.starts_with('.') {
             continue;
         }
-        // `metadata` segue i link simbolici: un addon collegato da un'altra cartella conta,
-        // e un collegamento rotto resta in lista con il suo errore.
+        // `metadata` follows symbolic links: an addon linked from another folder counts,
+        // and a broken link stays in the list with its error.
         let metadata = match fs::metadata(entry.path()) {
             Ok(metadata) => metadata,
             Err(error) => {
@@ -134,10 +133,10 @@ pub fn scan_addons_with(
     Ok(addons)
 }
 
-/// Legge le cartelle con più thread: il costo è quasi tutto nel fingerprint, che legge per
-/// intero i file dell'addon. Ogni thread prende la prossima cartella libera, così una cartella
-/// molto grande non blocca le altre dietro di sé; ogni risultato resta al posto della sua
-/// cartella, quindi l'ordine non dipende da quale thread finisce prima.
+/// Reads the folders with several threads: almost all the cost is in the fingerprint, which
+/// reads the addon's files in full. Each thread takes the next free folder, so a very large
+/// folder does not block the others behind it; each result stays in its folder's slot, so the
+/// order does not depend on which thread finishes first.
 fn read_addons(
     folders: Vec<Folder>,
     flavor: &str,
@@ -177,16 +176,16 @@ fn read_addons(
         .collect()
 }
 
-/// Thread della scansione al massimo. Il lavoro è soprattutto lettura dal disco, quindi oltre
-/// questa soglia non si guadagna; e ogni thread tiene in memoria il file che sta calcolando
-/// (fino a decine di MB per alcuni `.toc`), quindi la soglia limita anche il picco di memoria.
+/// Maximum number of scan threads. The work is mostly disk reads, so nothing is gained beyond
+/// this threshold; and each thread keeps in memory the file it is computing (up to tens of MB
+/// for some `.toc` files), so the threshold also limits peak memory.
 const MAX_SCAN_THREADS: usize = 8;
 
-/// Una cartella da leggere: percorso, nome e data di modifica in millisecondi.
+/// A folder to read: path, name and modification time in milliseconds.
 type Folder = (PathBuf, String, Option<u64>);
 
-/// L'inizio dell'errore di una cartella che non si è potuta elencare: l'unico caso in cui la
-/// cartella è davvero illeggibile (vedi [`InstalledAddon::is_unreadable`]).
+/// The start of the error of a folder that could not be listed: the only case in which the
+/// folder is really unreadable (see [`InstalledAddon::is_unreadable`]).
 const UNREADABLE_FOLDER: &str = "Unreadable folder (";
 
 pub(crate) fn unreadable_folder(error: &std::io::Error) -> String {
@@ -229,8 +228,8 @@ fn read_addon(
             return addon;
         }
     };
-    // Il fingerprint serve anche quando il `.toc` per questo flavor manca: CurseForge
-    // riconosce la cartella dai suoi file, non dal flavor.
+    // The fingerprint is needed even when the `.toc` for this flavor is missing: CurseForge
+    // recognizes the folder by its files, not by the flavor.
     addon.fingerprint = match cache {
         Some(cache) => cache.fingerprint(dir),
         None => fingerprint::folder_fingerprint(dir),
@@ -240,7 +239,7 @@ fn read_addon(
         return addon;
     };
     match fs::read(dir.join(toc_file)) {
-        // I `.toc` non sono sempre UTF-8: quello che non lo è diventa un carattere sostitutivo.
+        // `.toc` files are not always UTF-8: whatever is not becomes a replacement character.
         Ok(bytes) => addon.toc = toc::parse_toc(&String::from_utf8_lossy(&bytes)),
         Err(error) => {
             addon.error = Some(format!("Unreadable .toc file ({}).", error.kind()));
@@ -250,17 +249,17 @@ fn read_addon(
     addon
 }
 
-/// Il progetto CurseForge che l'app ha installato in una cartella, dal registro
-/// `installed-addons.json` (issue #62).
+/// The CurseForge project the app installed in a folder, from the
+/// `installed-addons.json` registry (issue #62).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledProject {
     pub id: u32,
-    /// Le cartelle del record che esistono ancora, con il nome che hanno sul disco.
+    /// The record's folders that still exist, with the name they have on disk.
     pub folders: Vec<String>,
 }
 
-/// Una cartella di `list_addons`: la scansione più il progetto registrato, se c'è.
+/// A folder of `list_addons`: the scan plus the recorded project, if any.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListedAddon {
@@ -269,11 +268,11 @@ pub struct ListedAddon {
     pub installed_project: Option<InstalledProject>,
 }
 
-/// Unisce la scansione ai record dell'app. Pura: non legge né disco né store. I nomi si
-/// confrontano senza distinguere maiuscole e minuscole, come fa il gioco. Un record conta solo
-/// per le sue cartelle ancora presenti; un record senza cartelle presenti non produce niente.
-/// Una cartella che compare nei record di più progetti (una libreria distribuita da più addon)
-/// non viene attribuita a nessuno: non è la prova di un solo progetto.
+/// Joins the scan with the app's records. Pure: it reads neither disk nor store. Names are
+/// compared ignoring case, as the game does. A record counts only for its folders that are
+/// still present; a record with no present folders produces nothing.
+/// A folder that appears in the records of several projects (a library shipped by several
+/// addons) is attributed to none: it is not evidence of a single project.
 pub fn with_installed_projects(
     addons: Vec<InstalledAddon>,
     records: &InstalledRecords,
@@ -331,16 +330,16 @@ mod tests {
         }
     }
 
-    /// Nomi, dimensioni e date di tutto quello che c'è sotto `root`, per verificare che la
-    /// scansione non abbia cambiato niente.
+    /// Names, sizes and timestamps of everything under `root`, to check that the
+    /// scan changed nothing.
     fn snapshot(root: &Path) -> Vec<(String, u64, Option<std::time::SystemTime>)> {
         let mut out = Vec::new();
         let mut stack = vec![root.to_path_buf()];
         while let Some(dir) = stack.pop() {
             for entry in fs::read_dir(&dir).unwrap().flatten() {
-                // `fs::metadata` e non `DirEntry::metadata`: su Windows la seconda restituisce
-                // i dati memorizzati quando si è letta la cartella padre, che possono essere
-                // vecchi, e il confronto fallirebbe senza che niente sia cambiato.
+                // `fs::metadata` and not `DirEntry::metadata`: on Windows the latter returns
+                // the data stored when the parent folder was read, which can be
+                // stale, and the comparison would fail without anything having changed.
                 let meta = fs::metadata(entry.path()).unwrap();
                 out.push((
                     entry.path().to_string_lossy().into_owned(),
@@ -392,9 +391,9 @@ mod tests {
         }
     }
 
-    /// Fingerprint della cartella AddOns vera indicata da `WOWDON_FINGERPRINT_DIR` (la cartella
-    /// dell'installazione, `_<flavor>_`): ogni cartella deve dare lo stesso valore del calcolo
-    /// di riferimento, e il tempo della scansione si stampa. `cargo test --release -- --ignored
+    /// Fingerprints of the real AddOns folder named by `WOWDON_FINGERPRINT_DIR` (the
+    /// installation folder, `_<flavor>_`): every folder must give the same value as the
+    /// reference computation, and the scan time is printed. `cargo test --release -- --ignored
     /// real_folder_fingerprints --nocapture`.
     #[test]
     #[ignore = "needs a real installation folder"]
@@ -446,13 +445,13 @@ mod tests {
         assert!(addons[0].is_unreadable());
     }
 
-    /// Solo l'errore di una cartella che non si è potuta elencare la rende illeggibile: gli altri
-    /// errori della scansione nascono dopo un `read_dir` riuscito (issue #212).
+    /// Only the error of a folder that could not be listed makes it unreadable: the scan's other
+    /// errors arise after a successful `read_dir` (issue #212).
     #[test]
     fn only_a_folder_that_cannot_be_listed_is_unreadable() {
         let tmp = TempDir::new();
         let addons_dir = tmp.path().join("Interface").join("AddOns");
-        // Una cartella leggibile senza `.toc` per il flavor: ha un errore, ma si legge.
+        // A readable folder without a `.toc` for the flavor: it has an error, but it can be read.
         fs::create_dir_all(addons_dir.join("NoToc")).unwrap();
         fs::write(addons_dir.join("NoToc").join("core.lua"), "-- x\n").unwrap();
         let addons = scan_addons(tmp.path(), "retail").unwrap();
@@ -503,7 +502,7 @@ mod tests {
         ] {
             assert!(keys.contains(&key.to_owned()), "missing {key} in {keys:?}");
         }
-        // `json["group"]` vale `Null` anche per una chiave assente: prima la presenza.
+        // `json["group"]` is `Null` even for a missing key: check presence first.
         assert!(json.as_object().unwrap().contains_key("group"));
         assert_eq!(json["group"], serde_json::Value::Null);
         let grouped = InstalledAddon {
@@ -546,7 +545,7 @@ mod tests {
             .collect()
     }
 
-    /// La cartella e, se c'è, il progetto registrato con le sue cartelle.
+    /// The folder and, if any, the recorded project with its folders.
     type Attributed<'a> = (&'a str, Option<(u32, Vec<&'a str>)>);
 
     fn projects(listed: &[ListedAddon]) -> Vec<Attributed<'_>> {
@@ -566,8 +565,8 @@ mod tests {
     #[test]
     fn recorded_folders_carry_their_project() {
         let addons = listed(&["Details", "details_compare2", "Other"]);
-        // Il record usa i nomi dello zip; sul disco una cartella ha un'altra capitalizzazione,
-        // e una cartella del record non c'è più.
+        // The record uses the zip's names; on disk one folder has different capitalization,
+        // and one of the record's folders is gone.
         let records = records(&[(7, &["Details", "Details_Compare2", "Details_Gone"])]);
         let result = with_installed_projects(addons, &records);
         let both = Some((7, vec!["Details", "details_compare2"]));
@@ -723,9 +722,9 @@ mod tests {
         assert_eq!(folders(tmp.path()), ["Alpha", "beta", "Gamma", "zeta"]);
     }
 
-    /// Due cartelle che differiscono solo per le maiuscole possono esistere solo dove il file
-    /// system le distingue: su Windows (NTFS) e su macOS (APFS, che di norma non distingue le
-    /// maiuscole) sarebbero la stessa cartella. Per questo il test gira solo su Linux.
+    /// Two folders that differ only by case can exist only where the file system tells them
+    /// apart: on Windows (NTFS) and on macOS (APFS, which is normally case-insensitive) they
+    /// would be the same folder. That is why the test runs only on Linux.
     #[cfg(target_os = "linux")]
     #[test]
     fn names_differing_only_by_case_have_a_stable_order() {

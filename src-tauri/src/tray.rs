@@ -1,17 +1,17 @@
-//! Icona nella tray e opzione "Close to tray" (issue #158, D35).
+//! Tray icon and the "Close to tray" option (issue #158, D35).
 //!
-//! All'avvio [`create`] costruisce l'icona con il menu "Show WoW-don" / "Quit". Se la creazione
-//! fallisce (su Linux, per esempio, senza la libreria AppIndicator) l'errore si scrive su stderr
-//! e [`TrayStatus`] resta spento; su Linux l'icona conta come disponibile solo se sul bus di
-//! sessione c'è chi la mostra. Senza icona visibile la X chiude l'app anche con `closeToTray`
-//! attiva, così l'utente non resta mai con una finestra nascosta e nessuna icona per riaprirla.
+//! At startup [`create`] builds the icon with the "Show WoW-don" / "Quit" menu. If creation
+//! fails (on Linux, for example, without the AppIndicator library) the error is written to stderr
+//! and [`TrayStatus`] stays off; on Linux the icon counts as available only if something on the
+//! session bus shows it. Without a visible icon the X quits the app even with `closeToTray`
+//! on, so the user is never left with a hidden window and no icon to reopen it.
 //!
-//! [`on_window_event`] intercetta la chiusura della finestra principale; [`on_run_event`]
-//! riapre la finestra su macOS dal clic sull'icona nel Dock.
+//! [`on_window_event`] intercepts the closing of the main window; [`on_run_event`]
+//! reopens the window on macOS from a click on the Dock icon.
 //!
-//! Dopo ogni giro automatico (D41, issue #202) [`show_round`] mette sopra "Show WoW-don" una voce
-//! non cliccabile "N updates available" e la ripete nel tooltip; testo e tooltip vengono dalla
-//! funzione pura [`round_summary`]. Senza icona non succede niente.
+//! After every automatic round (D41, issue #202) [`show_round`] puts a non-clickable
+//! "N updates available" item above "Show WoW-don" and repeats it in the tooltip; text and tooltip
+//! come from the pure function [`round_summary`]. Without an icon nothing happens.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,7 +23,7 @@ use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
 use crate::auto_update::RoundReport;
 use crate::store::AppSettingsStore;
 
-/// L'etichetta della finestra principale (quella di `tauri.conf.json`, senza `label`).
+/// The label of the main window (the one in `tauri.conf.json`, without `label`).
 const MAIN_WINDOW: &str = "main";
 const TRAY_ID: &str = "main";
 const MENU_SHOW: &str = "show";
@@ -31,13 +31,13 @@ const MENU_QUIT: &str = "quit";
 const MENU_UPDATES: &str = "updates";
 const TOOLTIP: &str = "WoW-don";
 
-/// Se l'icona nella tray è stata creata. Stato gestito da Tauri, letto da `get_settings`
-/// (`trayAvailable`) e dalla gestione della chiusura.
+/// Whether the tray icon was created. State managed by Tauri, read by `get_settings`
+/// (`trayAvailable`) and by the close handling.
 #[derive(Debug, Default)]
 pub struct TrayStatus(AtomicBool);
 
 impl TrayStatus {
-    /// Se l'icona c'è e qualcuno la mostra adesso: solo allora la finestra si può nascondere.
+    /// Whether the icon exists and something shows it right now: only then can the window hide.
     pub fn available(&self) -> bool {
         self.created() && host_shows_tray_icons()
     }
@@ -51,8 +51,8 @@ impl TrayStatus {
     }
 }
 
-/// Crea l'icona nella tray e registra in [`TrayStatus`] se c'è. Non fallisce mai: senza icona
-/// l'app funziona come prima, con la X che chiude.
+/// Creates the tray icon and records in [`TrayStatus`] whether it exists. It never fails: without
+/// an icon the app works as before, with the X quitting.
 pub fn create<R: Runtime>(app: &AppHandle<R>) {
     let available = match build(app) {
         Ok(()) => true,
@@ -91,8 +91,8 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
-/// Il menu della tray: "Show WoW-don" e "Quit", con sopra la voce non cliccabile `updates`
-/// quando c'è.
+/// The tray menu: "Show WoW-don" and "Quit", with the non-clickable `updates` item above them
+/// when there is one.
 fn menu<R: Runtime>(app: &AppHandle<R>, updates: Option<&str>) -> tauri::Result<Menu<R>> {
     let mut builder = MenuBuilder::new(app);
     if let Some(text) = updates {
@@ -108,20 +108,21 @@ fn menu<R: Runtime>(app: &AppHandle<R>, updates: Option<&str>) -> tauri::Result<
         .build()
 }
 
-/// Testo della voce del menu e tooltip dopo un giro automatico.
+/// Text of the menu item and tooltip after an automatic round.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoundSummary {
-    /// La voce non cliccabile sopra "Show WoW-don"; `None` senza aggiornamenti.
+    /// The non-clickable item above "Show WoW-don"; `None` without updates.
     pub menu_item: Option<String>,
     pub tooltip: String,
 }
 
-/// Quanti aggiornamenti restano da fare dopo il giro, sommati su tutte le installazioni che
-/// partecipano: in `notify` quelli disponibili; in `install` quelli che il giro ha provato a
-/// installare e non ha installato (saltati dalla fonte o falliti). In `notify` `updated` è vuoto,
-/// quindi la stessa sottrazione vale per entrambe le modalità. Si contano i progetti e non le
-/// chiavi: un aggiornamento installato dal mirror GitHub (issue #162) può tornare con una fonte
-/// diversa da quella del controllo. Gli esclusi dall'utente non contano: non sono in `available`.
+/// How many updates are left to do after the round, summed over all the participating
+/// installations: in `notify` the available ones; in `install` those the round tried to
+/// install and did not install (skipped by the source or failed). In `notify` `updated` is empty,
+/// so the same subtraction works for both modes. Projects are counted, not
+/// keys: an update installed from the GitHub mirror (issue #162) can come back with a source
+/// other than the one of the check. Those excluded by the user do not count: they are not in
+/// `available`.
 pub fn pending_updates(round: &RoundReport) -> usize {
     round
         .installations
@@ -130,7 +131,7 @@ pub fn pending_updates(round: &RoundReport) -> usize {
         .sum()
 }
 
-/// Testo della voce e tooltip per l'esito di un giro (o per nessun giro).
+/// Text of the item and tooltip for the outcome of a round (or for no round).
 pub fn round_summary(round: Option<&RoundReport>) -> RoundSummary {
     let pending = round.map_or(0, pending_updates);
     let menu_item = match pending {
@@ -145,9 +146,9 @@ pub fn round_summary(round: Option<&RoundReport>) -> RoundSummary {
     RoundSummary { menu_item, tooltip }
 }
 
-/// Aggiorna menu e tooltip della tray con l'esito di un giro. Senza icona (creazione fallita o
-/// mai avvenuta) non fa niente; gli errori si ignorano, come in [`show_main_window`]: il menu
-/// resta quello di prima e l'esito si legge comunque nell'app.
+/// Updates the tray menu and tooltip with the outcome of a round. Without an icon (creation failed
+/// or never happened) it does nothing; errors are ignored, as in [`show_main_window`]: the menu
+/// stays as it was and the outcome can still be read in the app.
 pub fn show_round<R: Runtime>(app: &AppHandle<R>, round: Option<&RoundReport>) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
@@ -180,8 +181,8 @@ fn on_tray_icon_event<R: Runtime>(tray: &TrayIcon<R>, event: TrayIconEvent) {
     }
 }
 
-/// Mostra, de-minimizza e mette a fuoco la finestra principale. Gli errori si ignorano: non c'è
-/// nessuno a cui riportarli e la finestra resta com'era.
+/// Shows, unminimizes and focuses the main window. Errors are ignored: there is nobody
+/// to report them to and the window stays as it was.
 pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.show();
@@ -190,8 +191,8 @@ pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Gestore degli eventi delle finestre (`Builder::on_window_event`): con `closeToTray` attiva e
-/// l'icona presente, la chiusura della finestra principale la nasconde.
+/// Window event handler (`Builder::on_window_event`): with `closeToTray` on and
+/// the icon present, closing the main window hides it.
 pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
     let WindowEvent::CloseRequested { api, .. } = event else {
         return;
@@ -210,23 +211,23 @@ pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
     }
 }
 
-/// L'opzione `closeToTray` salvata, o `None` se non si legge (store assente, lock avvelenato,
-/// `settings.json` danneggiato). Usata dalla chiusura e dalla partenza nascosta (issue #159).
+/// The saved `closeToTray` option, or `None` if it cannot be read (store missing, poisoned lock,
+/// corrupted `settings.json`). Used by the close handling and by the hidden start (issue #159).
 pub fn close_to_tray_setting<R: Runtime>(app: &AppHandle<R>) -> Option<bool> {
     let settings = app.try_state::<Mutex<AppSettingsStore>>()?;
     let store = settings.lock().ok()?;
     store.get().ok().map(|settings| settings.close_to_tray)
 }
 
-/// Se la chiusura della finestra principale va intercettata. `close_to_tray` è `None` quando
-/// l'impostazione non si legge (lock avvelenato, `settings.json` danneggiato): allora si chiude,
-/// come senza l'opzione. Senza icona nella tray si chiude sempre.
+/// Whether closing the main window must be intercepted. `close_to_tray` is `None` when
+/// the setting cannot be read (poisoned lock, corrupted `settings.json`): then it closes,
+/// as without the option. Without a tray icon it always closes.
 pub fn hide_on_close(close_to_tray: Option<bool>, tray_available: bool) -> bool {
     tray_available && close_to_tray == Some(true)
 }
 
-/// Gestore degli eventi dell'app (`App::run`): su macOS il clic sull'icona nel Dock riapre la
-/// finestra nascosta. Sulle altre piattaforme non c'è un evento equivalente: si riapre dalla
+/// App event handler (`App::run`): on macOS a click on the Dock icon reopens the
+/// hidden window. On the other platforms there is no equivalent event: it is reopened from the
 /// tray.
 pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
     #[cfg(target_os = "macos")]
@@ -237,47 +238,47 @@ pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
     let _ = (app, event);
 }
 
-/// Su Linux l'icona usa libayatana-appindicator (o libappindicator), caricata a runtime da
-/// tray-icon: senza la libreria la creazione va in panic, e con `panic = "abort"` chiuderebbe
-/// l'app all'avvio. Si chiede prima allo stesso loader dinamico se la libreria si carica.
+/// On Linux the icon uses libayatana-appindicator (or libappindicator), loaded at runtime by
+/// tray-icon: without the library creation panics, and with `panic = "abort"` it would quit
+/// the app at startup. The same dynamic loader is asked first whether the library loads.
 #[cfg(target_os = "linux")]
 fn platform_supports_tray() -> bool {
     linux::appindicator_loads()
 }
 
-/// Su Windows e macOS l'icona usa le API del sistema: non manca niente.
+/// On Windows and macOS the icon uses the system APIs: nothing is missing.
 #[cfg(not(target_os = "linux"))]
 fn platform_supports_tray() -> bool {
     true
 }
 
-/// Se in questo momento c'è qualcuno che mostra l'icona. Su Linux AppIndicator la pubblica come
-/// StatusNotifierItem: senza un `org.kde.StatusNotifierWatcher` con un host registrato sul bus
-/// di sessione (GNOME senza l'estensione AppIndicator) l'icona esiste ma nessuno la disegna, e nascondere la
-/// finestra la renderebbe irraggiungibile. Si chiede a ogni uso e non all'avvio: con l'avvio
-/// automatico l'app può partire prima che la shell registri il watcher.
+/// Whether something is showing the icon right now. On Linux AppIndicator publishes it as a
+/// StatusNotifierItem: without an `org.kde.StatusNotifierWatcher` with a host registered on the
+/// session bus (GNOME without the AppIndicator extension) the icon exists but nobody draws it, and
+/// hiding the window would make it unreachable. It is asked on every use and not at startup: with
+/// autostart the app can start before the shell registers the watcher.
 #[cfg(target_os = "linux")]
 fn host_shows_tray_icons() -> bool {
     linux::status_notifier_host_present()
 }
 
-/// Su Windows e macOS l'area di notifica e la barra dei menu ci sono sempre.
+/// On Windows and macOS the notification area and the menu bar are always there.
 #[cfg(not(target_os = "linux"))]
 fn host_shows_tray_icons() -> bool {
     true
 }
 
-/// Le chiamate alle librerie di sistema che il processo carica già: `dlopen` (glibc, usata
-/// anche da tray-icon per AppIndicator) e GIO/GLib (collegate da GTK). Nessuna crate in più.
+/// The calls to the system libraries the process already loads: `dlopen` (glibc, also used
+/// by tray-icon for AppIndicator) and GIO/GLib (linked by GTK). No extra crate.
 #[cfg(target_os = "linux")]
 mod linux {
     use std::ffi::{CStr, c_char, c_int, c_void};
     use std::ptr;
 
-    /// Gli stessi nomi, nello stesso ordine, che prova `libappindicator-sys`.
+    /// The same names, in the same order, that `libappindicator-sys` tries.
     const APPINDICATOR_LIBRARIES: [&CStr; 2] =
         [c"libayatana-appindicator3.so.1", c"libappindicator3.so.1"];
-    /// `RTLD_LAZY | RTLD_LOCAL` (= 1, perché `RTLD_LOCAL` vale 0), come
+    /// `RTLD_LAZY | RTLD_LOCAL` (= 1, because `RTLD_LOCAL` is 0), like
     /// `libloading::Library::new`.
     const DLOPEN_FLAGS: c_int = 1;
     const G_BUS_TYPE_SESSION: c_int = 2;
@@ -315,9 +316,9 @@ mod linux {
         fn g_object_unref(object: *mut c_void);
     }
 
-    /// Se una delle librerie AppIndicator si carica davvero: un file presente ma con una
-    /// dipendenza mancante o di un'altra architettura risponde no, come risponderebbe a
-    /// tray-icon. La libreria caricata resta in memoria: tray-icon la riapre subito dopo.
+    /// Whether one of the AppIndicator libraries actually loads: a file that is present but has a
+    /// missing dependency or is for another architecture answers no, as it would answer
+    /// tray-icon. The loaded library stays in memory: tray-icon reopens it right after.
     pub fn appindicator_loads() -> bool {
         APPINDICATOR_LIBRARIES.iter().any(|name| {
             // SAFETY: `name` is a NUL-terminated string; a null handle means "not loadable".
@@ -325,14 +326,14 @@ mod linux {
         })
     }
 
-    /// `Properties.Get("org.kde.StatusNotifierWatcher", "IsStatusNotifierHostRegistered")` sul
-    /// bus di sessione: un watcher senza host registrato possiede il nome ma non mostra niente, e
-    /// senza watcher la chiamata fallisce, quindi una chiamata risponde a entrambe le domande.
-    /// Ogni errore (nessun bus, timeout, risposta inattesa) vale "no": la X chiude.
-    /// Non si scorcia su `DBUS_SESSION_BUS_ADDRESS`: se manca, GIO prova `$XDG_RUNTIME_DIR/bus`
-    /// e solo dopo l'autolaunch X11, che senza `DISPLAY` fallisce subito. La variabile assente
-    /// non vuol dire "nessun bus": un controllo lì darebbe falsi negativi (avvio automatico e
-    /// launcher che la tolgono).
+    /// `Properties.Get("org.kde.StatusNotifierWatcher", "IsStatusNotifierHostRegistered")` on the
+    /// session bus: a watcher with no registered host owns the name but shows nothing, and
+    /// without a watcher the call fails, so one call answers both questions.
+    /// Every error (no bus, timeout, unexpected reply) counts as "no": the X quits.
+    /// There is no shortcut on `DBUS_SESSION_BUS_ADDRESS`: if it is missing, GIO tries
+    /// `$XDG_RUNTIME_DIR/bus` and only then X11 autolaunch, which fails at once without `DISPLAY`.
+    /// The missing variable does not mean "no bus": a check there would give false negatives
+    /// (autostart and launchers that remove it).
     pub fn status_notifier_host_present() -> bool {
         // SAFETY: plain GIO calls with valid NUL-terminated strings. `g_variant_new_tuple`
         // sinks the floating strings, `g_dbus_connection_call_sync` sinks the floating tuple,

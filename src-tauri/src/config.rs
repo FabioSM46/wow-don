@@ -1,7 +1,7 @@
-//! Configurazione dell'app letta dall'ambiente.
+//! App configuration read from the environment.
 //!
-//! La chiave API di CurseForge arriva da `CURSEFORGE_API_KEY`. In sviluppo viene
-//! caricata dal file `.env` nella radice del repo (gitignored).
+//! The CurseForge API key comes from `CURSEFORGE_API_KEY`. In development it is
+//! loaded from the `.env` file at the repo root (gitignored).
 
 use std::path::Path;
 
@@ -13,7 +13,7 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Self {
-        // In debug il .env sta una cartella sopra src-tauri.
+        // In debug builds the .env sits one folder above src-tauri.
         if cfg!(debug_assertions) {
             let dev_env = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.env");
             let _ = dotenvy::from_path(dev_env);

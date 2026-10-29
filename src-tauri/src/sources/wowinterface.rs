@@ -1,18 +1,18 @@
-//! WoWInterface come fonte (D31): l'API pubblica MMOUI, senza chiave.
+//! WoWInterface as a source (D31): the public MMOUI API, without a key.
 //!
-//! `GET https://api.mmoui.com/v4/game/WOW/filedetails/{id}.json` risponde con un array di file;
-//! verificato il 2026-10-26 per l'id 5108 (Clique): `id`, `version` (`v5.0.15-release`),
-//! `lastUpdate` (millisecondi Unix), `fileName`, `downloadUri` (su `cdn.wowinterface.com`),
-//! `title`, `author`, `checksum`. La stessa richiesta accetta più id separati da virgola
-//! (`5108,23056.json`) e restituisce solo quelli che esistono; se non ne esiste nessuno risponde
-//! `404` con `{"ERROR":"No AddOn found."}`. Il `filelist.json` completo (circa 2,7 MB) non si
-//! scarica mai: il controllo chiede solo gli id installati.
+//! `GET https://api.mmoui.com/v4/game/WOW/filedetails/{id}.json` answers with an array of files;
+//! verified on 2026-10-26 for id 5108 (Clique): `id`, `version` (`v5.0.15-release`),
+//! `lastUpdate` (Unix milliseconds), `fileName`, `downloadUri` (on `cdn.wowinterface.com`),
+//! `title`, `author`, `checksum`. The same request accepts several comma-separated ids
+//! (`5108,23056.json`) and returns only those that exist; if none exists it answers
+//! `404` with `{"ERROR":"No AddOn found."}`. The full `filelist.json` (about 2.7 MB) is never
+//! downloaded: the check asks only for the installed ids.
 //!
-//! Una cartella appartiene a un progetto WoWInterface se un record della fonte la nomina,
-//! oppure se il `.toc` del flavor dichiara `## X-WoWI-ID`; più cartelle con lo stesso id sono un
-//! solo progetto. Le cartelle già reclamate da CurseForge non arrivano qui (D33). La versione
-//! installata è quella del record, altrimenti `## Version` del `.toc`; c'è un aggiornamento
-//! quando è diversa da `version`, senza contare una `v` iniziale.
+//! A folder belongs to a WoWInterface project if one of the source's records names it,
+//! or if the flavor's `.toc` declares `## X-WoWI-ID`; several folders with the same id are a
+//! single project. Folders already claimed by CurseForge do not get here (D33). The installed
+//! version is the record's, otherwise `## Version` from the `.toc`; there is an update
+//! when it differs from `version`, ignoring a leading `v`.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Mutex;
@@ -31,9 +31,9 @@ use crate::store::{ProjectRecords, SourceRecord};
 use crate::updates::{self, AddonUpdate, FileSummary, Project, UpdateOutcome, UpdateStatus};
 
 pub const DETAILS_URL: &str = "https://api.mmoui.com/v4/game/WOW/filedetails/";
-/// I domini dell'API e degli zip, con i loro sottodomini.
+/// The domains of the API and of the zips, with their subdomains.
 pub const DOMAINS: [&str; 2] = ["mmoui.com", "wowinterface.com"];
-/// Gli id chiesti in una sola richiesta: l'URL resta corto anche con molti addon.
+/// The ids asked in a single request: the URL stays short even with many addons.
 const IDS_PER_REQUEST: usize = 50;
 
 const WOWI: SourceKind = SourceKind::Wowinterface;
@@ -49,13 +49,13 @@ pub struct WowiFile {
     pub last_update: Option<i64>,
 }
 
-/// La pagina del progetto sul sito.
+/// The project's page on the site.
 fn page_url(key: &str) -> String {
     format!("https://www.wowinterface.com/downloads/info{key}")
 }
 
-/// La fonte WoWInterface. Le risposte del controllo restano per l'aggiornamento che lo segue
-/// (`update_addons` rifà il controllo e poi aggiorna).
+/// The WoWInterface source. The check's responses are kept for the update that follows it
+/// (`update_addons` redoes the check and then updates).
 pub struct WowInterfaceSource<T: PublicTransport> {
     transport: T,
     files: Mutex<HashMap<String, WowiFile>>,
@@ -69,8 +69,8 @@ impl<T: PublicTransport> WowInterfaceSource<T> {
         }
     }
 
-    /// Chiede i file degli id `ids`, a gruppi di [`IDS_PER_REQUEST`]. Gli id che WoWInterface
-    /// non conosce mancano dal risultato.
+    /// Asks for the files of the ids `ids`, in groups of [`IDS_PER_REQUEST`]. The ids WoWInterface
+    /// does not know are missing from the result.
     fn fetch(&self, ids: &[String]) -> Result<HashMap<String, WowiFile>, String> {
         let mut found = HashMap::new();
         for chunk in ids.chunks(IDS_PER_REQUEST) {
@@ -90,8 +90,8 @@ impl<T: PublicTransport> WowInterfaceSource<T> {
                     response.status
                 ));
             }
-            // Una voce che non si legge si salta: non deve togliere gli altri progetti. Una
-            // risposta che non è un elenco resta un errore.
+            // An entry that cannot be read is skipped: it must not take down the other projects. A
+            // response that is not a list stays an error.
             let entries: Vec<serde_json::Value> = serde_json::from_str(&response.body)
                 .map_err(|_| "Unrecognized response from WoWInterface.".to_owned())?;
             for file in entries
@@ -108,7 +108,7 @@ impl<T: PublicTransport> WowInterfaceSource<T> {
         Ok(found)
     }
 
-    /// Il file del progetto `key`: quello del controllo, altrimenti una richiesta nuova.
+    /// The file of project `key`: the one from the check, otherwise a new request.
     fn file(&self, key: &str) -> Result<Option<WowiFile>, String> {
         let cached = self
             .files
@@ -155,9 +155,9 @@ impl<T: PublicTransport> WowInterfaceSource<T> {
 }
 
 impl<T: PublicTransport> WowInterfaceSource<T> {
-    /// L'anteprima di un link (issue #109): titolo, versione e pagina del progetto, con una
-    /// sola richiesta. L'API non dice per quale gioco è il file: ogni progetto elencato vale
-    /// come scaricabile. `Err` se WoWInterface non risponde o non conosce l'id.
+    /// The preview of a link (issue #109): title, version and page of the project, with a
+    /// single request. The API does not say which game the file is for: every listed project counts
+    /// as downloadable. `Err` if WoWInterface does not answer or does not know the id.
     pub fn preview(&self, key: &str) -> Result<LinkInfo, String> {
         let file = self.file(key)?.ok_or_else(|| not_listed(key))?;
         Ok(LinkInfo {
@@ -169,9 +169,9 @@ impl<T: PublicTransport> WowInterfaceSource<T> {
         })
     }
 
-    /// Installa un progetto WoWInterface che non c'è ancora (un link, issue #109). `check` può
-    /// rifiutare le cartelle dello zip prima che tocchino il disco. L'esito usa la forma di un
-    /// aggiornamento: `updated` vuol dire installato.
+    /// Installs a WoWInterface project that is not there yet (a link, issue #109). `check` can
+    /// reject the zip's folders before they touch the disk. The outcome uses the shape of an
+    /// update: `updated` means installed.
     pub fn install_new(
         &self,
         installation: &Installation,
@@ -224,7 +224,7 @@ fn not_listed(key: &str) -> String {
     format!("WoWInterface does not list the addon with id {key}.")
 }
 
-/// La risposta di un id che non esiste: `404` con un oggetto `ERROR`.
+/// The response for an id that does not exist: `404` with an `ERROR` object.
 fn is_not_found(body: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(body)
         .is_ok_and(|value| value.get("ERROR").is_some_and(|e| e.is_string()))
@@ -237,7 +237,7 @@ fn network_error(error: TransportError) -> String {
     }
 }
 
-/// Un id WoWInterface valido: un numero positivo, senza spazi intorno.
+/// A valid WoWInterface id: a positive number, without surrounding spaces.
 fn project_id(text: &str) -> Option<String> {
     text.trim()
         .parse::<u64>()
@@ -246,7 +246,7 @@ fn project_id(text: &str) -> Option<String> {
         .map(|id| id.to_string())
 }
 
-/// La versione senza spazi e senza una `v` iniziale: `v5.0.15` e `5.0.15` sono la stessa.
+/// The version without spaces and without a leading `v`: `v5.0.15` and `5.0.15` are the same.
 fn normalized(version: &str) -> &str {
     let version = version.trim();
     version
@@ -255,8 +255,8 @@ fn normalized(version: &str) -> &str {
         .unwrap_or(version)
 }
 
-/// Un file WoWInterface: nessun id numerico, la versione come nome (vedi `FileSummary`), la
-/// data da `lastUpdate` in UTC.
+/// A WoWInterface file: no numeric id, the version as the name (see `FileSummary`), the
+/// date from `lastUpdate` in UTC.
 fn summary(version: &str, last_update: Option<i64>) -> FileSummary {
     let date = last_update
         .and_then(|ms| u64::try_from(ms).ok())
@@ -270,8 +270,8 @@ fn summary(version: &str, last_update: Option<i64>) -> FileSummary {
     }
 }
 
-/// Il progetto di ogni cartella offerta: quello del record che la nomina, altrimenti
-/// `## X-WoWI-ID` del suo `.toc`.
+/// The project of each offered folder: the one of the record that names it, otherwise
+/// `## X-WoWI-ID` from its `.toc`.
 fn assign(offered: &[InstalledAddon], records: &ProjectRecords) -> Vec<Option<String>> {
     offered
         .iter()
@@ -313,7 +313,7 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
             return Ok(Vec::new());
         }
         let files = self.fetch(&ids)?;
-        // Id → le cartelle offerte del progetto, nell'ordine della scansione.
+        // Id → the project's offered folders, in scan order.
         let mut groups: HashMap<&str, Vec<&InstalledAddon>> = HashMap::new();
         for (addon, key) in offered.iter().zip(&keys) {
             if let Some(key) = key {
@@ -324,8 +324,8 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
         for (addon, key) in offered.iter().zip(&keys) {
             let Some(key) = key else { continue };
             let Some(file) = files.get(key) else {
-                // Non reclama la cartella: resta alle altre fonti, e l'errore si vede solo se
-                // nessuna la riconosce.
+                // It does not claim the folder: it stays with the other sources; the error shows
+                // only if none recognises it.
                 updates.push(AddonUpdate {
                     folder: addon.folder.clone(),
                     source: None,
@@ -344,10 +344,10 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
             };
             let group = &groups[key.as_str()];
             let record = records.get(key);
-            // Senza record conta il `.toc` di qualunque cartella del progetto che ha già la
-            // versione della risposta: un modulo con una `## Version` propria non deve
-            // proporre per sempre un aggiornamento. Altrimenti la prima versione dichiarata,
-            // prima quelle delle cartelle con il tag.
+            // Without a record, the `.toc` of any folder of the project that already has the
+            // response's version counts: a module with its own `## Version` must not offer an
+            // update forever. Otherwise the first declared version,
+            // those of the tagged folders first.
             let installed_version = record.map(|r| r.file.clone()).or_else(|| {
                 let versions = || group.iter().filter_map(|a| a.toc.version.as_deref());
                 versions()
@@ -415,8 +415,8 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
             return target.not_found(WOWI);
         };
         let name = project.name.as_str();
-        // Con `reinstall` (issue #148) un addon aggiornato si riscarica comunque: WoWInterface dà
-        // un solo file, quello installato.
+        // With `reinstall` (issue #148) an up-to-date addon is downloaded again anyway:
+        // WoWInterface gives a single file, the installed one.
         let wanted = |status: &UpdateStatus| match status {
             UpdateStatus::UpdateAvailable { .. } => true,
             UpdateStatus::UpToDate => target.reinstall,
@@ -445,8 +445,8 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
             Ok(bytes) => bytes,
             Err(error) => return UpdateOutcome::error(WOWI, key, name, error),
         };
-        // Le cartelle del progetto sul disco: quelle che il nuovo zip non ha più si tolgono,
-        // come per le altre fonti, invece di restare come addon sconosciuti.
+        // The project's folders on disk: those the new zip no longer has are removed,
+        // as for the other sources, instead of staying behind as unknown addons.
         let old_folders: Vec<String> = folders.iter().map(|u| u.folder.clone()).collect();
         reporter.downloaded(bytes.len() as u64);
         let installed = match updates::install_bytes(
@@ -459,8 +459,8 @@ impl<T: PublicTransport> Source for WowInterfaceSource<T> {
             Ok(folders) => folders,
             Err(error) => return UpdateOutcome::error(WOWI, key, name, error),
         };
-        // Le cartelle sono già sostituite: se il registro non si salva l'aggiornamento resta
-        // riuscito, e il messaggio lo dice.
+        // The folders are already replaced: if the registry is not saved the update still
+        // succeeded, and the message says so.
         let message = record(
             WOWI,
             key,
@@ -500,8 +500,8 @@ mod tests {
     const DOWNLOAD: &str =
         "https://cdn.wowinterface.com/downloads/getfile.php?id=5108&d=1792849912&minion";
 
-    /// Una voce della risposta reale del 2026-10-26 (id 5108), ridotta: senza `description`,
-    /// `changeLog` e immagini.
+    /// An entry of the real response of 2026-10-26 (id 5108), reduced: without `description`,
+    /// `changeLog` and images.
     fn clique(version: &str) -> serde_json::Value {
         serde_json::json!({
             "id": 5108, "categoryId": 21, "version": version, "lastUpdate": 1792849912000_i64,
@@ -517,7 +517,7 @@ mod tests {
 
     #[derive(Default)]
     struct Fake {
-        /// La risposta per ogni URL JSON; un URL non previsto non ha connessione.
+        /// The response for each JSON URL; an unexpected URL has no connection.
         json: HashMap<String, Result<HttpResponse, TransportError>>,
         zip: Option<Vec<u8>>,
         calls: Arc<Mutex<Vec<String>>>,
@@ -696,7 +696,7 @@ mod tests {
             updates[0].status,
             UpdateStatus::UpdateAvailable { .. }
         ));
-        // La cartella senza `## Version` prende quella del progetto.
+        // The folder without `## Version` takes the project's.
         assert_eq!(updates[2].status, updates[0].status);
         assert_eq!(updates[2].installed_file, Some(summary("8.2.4", None)));
         assert_eq!(updates[0].project_folders, ["Details", "Details_Compare2"]);
@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn a_module_with_its_own_version_does_not_hide_an_up_to_date_project() {
-        // Il modulo viene prima nella scansione e dichiara una `## Version` sua.
+        // The module comes first in the scan and declares its own `## Version`.
         let offered = [
             addon("Clique_Module", Some("1.0"), Some("5108")),
             addon("Clique", Some("v5.0.15"), Some("5108")),
@@ -716,7 +716,7 @@ mod tests {
             .unwrap();
         assert_eq!(updates[0].status, UpdateStatus::UpToDate);
         assert_eq!(updates[0].installed_file, Some(summary("v5.0.15", None)));
-        // Se nessuna cartella ha la versione nuova, c'è un aggiornamento.
+        // If no folder has the new version, there is an update.
         let updates = clique_source("v5.0.16")
             .check(&installation(), &offered, &ProjectRecords::new())
             .unwrap();
@@ -756,7 +756,7 @@ mod tests {
                 folders: vec!["Clique".to_owned(), "Clique_Options".to_owned()],
             },
         )]);
-        // Nessun tag e un `.toc` con un'altra versione: decide il record.
+        // No tag and a `.toc` with another version: the record decides.
         let offered = [
             addon("clique", Some("old"), None),
             addon("Clique_Options", None, None),
@@ -813,7 +813,7 @@ mod tests {
                 }
             )]
         );
-        // Un array vuoto vale lo stesso.
+        // An empty array counts the same.
         let updates = source(&[("999999999", ok("[]".to_owned()))])
             .check(&installation(), &offered, &ProjectRecords::new())
             .unwrap();
@@ -822,7 +822,7 @@ mod tests {
 
     #[test]
     fn a_folder_claimed_by_curseforge_is_not_offered_again() {
-        // `check_updates` offre a WoWInterface solo quello che CurseForge non ha reclamato.
+        // `check_updates` offers WoWInterface only what CurseForge has not claimed.
         struct Claims;
         impl Source for Claims {
             fn kind(&self) -> SourceKind {
@@ -908,7 +908,7 @@ mod tests {
             })),
             Err("WoWInterface responded with an error (HTTP 503).".to_owned())
         );
-        // Un 404 che non è "nessun addon" resta un errore.
+        // A 404 that is not "no addon" stays an error.
         assert_eq!(
             check(Ok(HttpResponse {
                 status: 404,
@@ -982,7 +982,7 @@ mod tests {
         assert!(updates[1].project.is_none());
     }
 
-    // ── Aggiornamento ──
+    // ── Update ──
 
     fn zip_of(files: &[(&str, &str)]) -> Vec<u8> {
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
@@ -1070,7 +1070,7 @@ mod tests {
                 .unwrap()
                 .contains("v5.0.15-release")
         );
-        // La cartella del progetto che il nuovo zip non ha più si toglie; le altre restano.
+        // The project's folder that the new zip no longer has is removed; the others stay.
         let mut names: Vec<String> = fs::read_dir(&addons)
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
@@ -1088,7 +1088,7 @@ mod tests {
                 }
             )]
         );
-        // I dettagli si leggono una volta: l'aggiornamento riusa quelli del controllo.
+        // The details are read once: the update reuses those from the check.
         assert_eq!(*calls.lock().unwrap(), [url("5108"), DOWNLOAD.to_owned()]);
     }
 
@@ -1121,7 +1121,7 @@ mod tests {
         assert_eq!(outcomes[0].message.as_deref(), Some("Already up to date."));
     }
 
-    /// Issue #148: con `reinstall` un progetto aggiornato si riscarica.
+    /// Issue #148: with `reinstall` an up-to-date project is downloaded again.
     #[test]
     fn reinstall_downloads_an_up_to_date_project_again() {
         let tmp = TempDir::new();
@@ -1194,7 +1194,7 @@ mod tests {
         assert!(clique_source("1").download(&file, &mut |_, _| {}).is_err());
     }
 
-    /// Legge l'API vera: `cargo test --locked live_wowinterface_details -- --ignored`.
+    /// Reads the real API: `cargo test --locked live_wowinterface_details -- --ignored`.
     #[test]
     #[ignore = "needs the network"]
     fn live_wowinterface_details() {

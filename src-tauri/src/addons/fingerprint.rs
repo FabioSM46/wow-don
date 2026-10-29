@@ -1,16 +1,16 @@
-//! Fingerprint di un addon, calcolato come lo calcola CurseForge per riconoscerlo.
+//! An addon's fingerprint, computed the way CurseForge computes it to recognize the addon.
 //!
-//! L'algoritmo, descritto pubblicamente e usato dai client di CurseForge:
+//! The algorithm, publicly described and used by CurseForge clients:
 //!
-//! 1. si scelgono i file della cartella: i `.toc` riconosciuti, i `.lua`/`.xml` che
-//!    elencano, gli `<Include file=…/>` e `<Script file=…/>` degli `.xml` in modo ricorsivo,
-//!    e `Bindings.xml` nella radice della cartella;
-//! 2. ogni file si riduce a un hash MurmurHash2 a 32 bit con seme 1, calcolato saltando i
-//!    byte di spaziatura (tab, a capo, ritorno carrello, spazio);
-//! 3. gli hash si ordinano in modo crescente, si concatenano in decimale e la stringa
-//!    ottenuta si riduce di nuovo con lo stesso hash.
+//! 1. pick the folder's files: the recognized `.toc` files, the `.lua`/`.xml` files they
+//!    list, the `<Include file=…/>` and `<Script file=…/>` of the `.xml` files recursively,
+//!    and `Bindings.xml` at the root of the folder;
+//! 2. each file is reduced to a 32-bit MurmurHash2 with seed 1, computed skipping the
+//!    whitespace bytes (tab, line feed, carriage return, space);
+//! 3. the hashes are sorted in ascending order, concatenated in decimal and the resulting
+//!    string is reduced again with the same hash.
 //!
-//! Scritto da zero da questa descrizione, senza codice di altri progetti.
+//! Written from scratch from this description, without code from other projects.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -19,13 +19,13 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::SystemTime;
 
-/// Byte che il calcolo salta: tab, a capo, ritorno carrello, spazio.
+/// Bytes the computation skips: tab, line feed, carriage return, space.
 fn is_skipped(byte: u8) -> bool {
     matches!(byte, 9 | 10 | 13 | 32)
 }
 
-/// MurmurHash2 a 32 bit (Austin Appleby), su un buffer intero. Resta come riferimento dei
-/// test: `curse_hash` fa lo stesso calcolo in streaming.
+/// 32-bit MurmurHash2 (Austin Appleby), over a whole buffer. It stays as the tests'
+/// reference: `curse_hash` does the same computation in streaming.
 #[cfg(test)]
 pub fn murmur2(data: &[u8], seed: u32) -> u32 {
     const M: u32 = 0x5bd1_e995;
@@ -55,11 +55,11 @@ pub fn murmur2(data: &[u8], seed: u32) -> u32 {
     h ^ (h >> 15)
 }
 
-/// L'hash di CurseForge: MurmurHash2 con seme 1 sui soli byte che non sono spaziatura.
+/// The CurseForge hash: MurmurHash2 with seed 1 over only the bytes that are not whitespace.
 ///
-/// Calcolato senza copiare i byte tenuti: la lunghezza filtrata entra nel valore iniziale, quindi
-/// una prima passata la conta e la seconda forma le parole da 4 byte saltando la spaziatura. Il
-/// risultato è quello di `murmur2` sui byte filtrati (lo verificano i test).
+/// Computed without copying the kept bytes: the filtered length goes into the initial value, so
+/// a first pass counts it and the second builds the 4-byte words skipping the whitespace. The
+/// result is that of `murmur2` over the filtered bytes (the tests check it).
 pub fn curse_hash(data: &[u8]) -> u32 {
     const M: u32 = 0x5bd1_e995;
     const R: u32 = 24;
@@ -82,7 +82,7 @@ pub fn curse_hash(data: &[u8]) -> u32 {
             filled = 0;
         }
     }
-    // La coda (1-3 byte) è già in `word` nell'ordine di `murmur2`.
+    // The tail (1-3 bytes) is already in `word` in `murmur2`'s order.
     if filled > 0 {
         h ^= word;
         h = h.wrapping_mul(M);
@@ -92,28 +92,28 @@ pub fn curse_hash(data: &[u8]) -> u32 {
     h ^ (h >> 15)
 }
 
-/// Combina gli hash dei file nel fingerprint della cartella.
+/// Combines the file hashes into the folder's fingerprint.
 pub fn combine(mut file_hashes: Vec<u32>) -> u32 {
     file_hashes.sort_unstable();
     let joined: String = file_hashes.iter().map(u32::to_string).collect();
     curse_hash(joined.as_bytes())
 }
 
-/// I suffissi dei `.toc` che entrano nel calcolo, dopo `_` o `-`. Sono quelli del calcolo
-/// di CurseForge, non tutti quelli che il gioco riconosce (vedi `toc::toc_suffixes`): una
-/// variante che il calcolo non conosce non deve cambiare il fingerprint.
+/// The `.toc` suffixes that go into the computation, after `_` or `-`. They are those of the
+/// CurseForge computation, not all those the game recognizes (see `toc::toc_suffixes`): a
+/// variant the computation does not know must not change the fingerprint.
 const TOC_SUFFIXES: &[&str] = &[
     "mainline", "bcc", "tbc", "classic", "vanilla", "wrath", "wotlkc", "cata", "mists",
 ];
 
-/// I file di un addon, per percorso relativo con `/` e con la cartella dell'addon come primo
-/// elemento (`Foo/core.lua`), indicizzati dal percorso in minuscolo. Il gioco su Windows, sotto
-/// Wine e su macOS non distingue maiuscole e minuscole, e gli addon contano su questo.
+/// An addon's files, by relative path with `/` and with the addon's folder as the first
+/// element (`Foo/core.lua`), indexed by the lowercase path. The game on Windows, under
+/// Wine and on macOS ignores case, and addons rely on this.
 pub type FileIndex = BTreeMap<String, String>;
 
-/// Sceglie i file che entrano nel fingerprint. `read` restituisce il contenuto di un file dato
-/// il suo percorso reale (relativo, come nell'indice); il testo si ricava senza copia quando è
-/// UTF-8 valido. Restituisce percorsi reali, ordinati per percorso in minuscolo.
+/// Picks the files that go into the fingerprint. `read` returns a file's content given its
+/// real path (relative, as in the index); the text is derived without a copy when it is
+/// valid UTF-8. Returns real paths, sorted by lowercase path.
 pub fn select_files<T: AsRef<[u8]>>(
     folder: &str,
     files: &FileIndex,
@@ -155,11 +155,11 @@ fn is_counted_toc(folder_lower: &str, name: &str) -> bool {
     }
     let mut chars = rest.chars();
     let separator = chars.next();
-    // Il calcolo accetta come separatore anche `|`, che in un nome di file non si incontra.
+    // The computation also accepts `|` as a separator, which never appears in a file name.
     matches!(separator, Some('_' | '-' | '|')) && TOC_SUFFIXES.contains(&chars.as_str())
 }
 
-/// Aggiunge `path` e, ricorsivamente, i file che include.
+/// Adds `path` and, recursively, the files it includes.
 fn include<T: AsRef<[u8]>>(
     path: &str,
     files: &FileIndex,
@@ -171,7 +171,7 @@ fn include<T: AsRef<[u8]>>(
     }
     selected.push(path.to_owned());
     let lower = path.to_lowercase();
-    // I file non sono sempre UTF-8: quello che non lo è diventa un carattere sostitutivo.
+    // Files are not always UTF-8: whatever is not becomes a replacement character.
     let includes = if lower.ends_with(".toc") {
         read(path).map(|bytes| toc_includes(&String::from_utf8_lossy(bytes.as_ref())))
     } else if lower.ends_with(".xml") {
@@ -184,8 +184,8 @@ fn include<T: AsRef<[u8]>>(
         None => "",
     };
     for name in includes.unwrap_or_default() {
-        // Un nome con caratteri non validi interrompe la lettura delle inclusioni del file,
-        // come nel calcolo di CurseForge.
+        // A name with invalid characters stops reading the file's includes,
+        // as in the CurseForge computation.
         if name.chars().any(|c| c == '|' || c.is_control()) {
             break;
         }
@@ -195,8 +195,8 @@ fn include<T: AsRef<[u8]>>(
     }
 }
 
-/// Le inclusioni di un `.toc`: righe che sono un percorso `.lua` o `.xml`, dopo aver tolto i
-/// commenti (`#` fino a fine riga).
+/// The includes of a `.toc`: lines that are a `.lua` or `.xml` path, after removing the
+/// comments (`#` to the end of the line).
 fn toc_includes(text: &str) -> Vec<String> {
     text.lines()
         .filter_map(|line| {
@@ -205,8 +205,8 @@ fn toc_includes(text: &str) -> Vec<String> {
                 None => line,
             }
             .trim();
-            // Confronto ASCII al posto di `to_lowercase`, senza un'allocazione per riga: nessun
-            // carattere non ASCII diventa `.`, `l`, `u`, `a`, `x` o `m` in minuscolo.
+            // ASCII comparison instead of `to_lowercase`, without one allocation per line: no
+            // non-ASCII character becomes `.`, `l`, `u`, `a`, `x` or `m` in lowercase.
             let wanted = ends_with_ignore_case(line, ".lua") || ends_with_ignore_case(line, ".xml");
             (wanted && !line.contains("..")).then(|| line.to_owned())
         })
@@ -218,8 +218,8 @@ fn ends_with_ignore_case(text: &str, suffix: &str) -> bool {
         && text.as_bytes()[text.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
 }
 
-/// Le inclusioni di un `.xml`: il primo `<Include file="…"/>` o `<Script file="…"/>` di ogni
-/// riga, dopo aver tolto i commenti `<!-- … -->`.
+/// The includes of an `.xml`: the first `<Include file="…"/>` or `<Script file="…"/>` of each
+/// line, after removing the `<!-- … -->` comments.
 fn xml_includes(text: &str) -> Vec<String> {
     let mut without_comments = String::with_capacity(text.len());
     let mut rest = text;
@@ -241,10 +241,10 @@ fn xml_includes(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Il primo `<Include file=…/>` o `<Script file=…/>` della riga, letto come lo legge il calcolo
-/// di CurseForge: il valore va dalla virgoletta di apertura all'**ultima** virgoletta seguita da
-/// `/>` sulla riga (se il valore più lungo non è valido si prova il più corto), e non può avere
-/// un carattere subito dopo `..`.
+/// The first `<Include file=…/>` or `<Script file=…/>` of the line, read the way the CurseForge
+/// computation reads it: the value runs from the opening quote to the **last** quote followed by
+/// `/>` on the line (if the longest value is not valid the shorter one is tried), and it cannot
+/// have a character right after `..`.
 fn xml_include_in_line(line: &str) -> Option<String> {
     let lower = line.to_ascii_lowercase();
     let bytes = line.as_bytes();
@@ -267,7 +267,7 @@ fn xml_include_in_line(line: &str) -> Option<String> {
             continue;
         }
         let value_start = index + 1;
-        // Candidati per la virgoletta di chiusura, dal più lontano al più vicino.
+        // Candidates for the closing quote, from the farthest to the nearest.
         let mut ends: Vec<usize> = (value_start + 1..line.len())
             .filter(|&i| matches!(bytes[i], b'"' | b'\''))
             .filter(|&i| line[i + 1..].trim_start().starts_with("/>"))
@@ -283,14 +283,14 @@ fn xml_include_in_line(line: &str) -> Option<String> {
     None
 }
 
-/// Vero se nel nome c'è un carattere subito dopo `..` (`..` alla fine è ammesso).
+/// True if the name has a character right after `..` (`..` at the end is allowed).
 fn char_after_dotdot(name: &str) -> bool {
     name.as_bytes()
         .windows(3)
         .any(|w| w[0] == b'.' && w[1] == b'.')
 }
 
-/// Risolve un'inclusione relativa a `dir` nel percorso reale di un file dell'addon.
+/// Resolves an include relative to `dir` to the real path of a file of the addon.
 fn resolve(dir: &str, name: &str, files: &FileIndex) -> Option<String> {
     let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
     for part in name.split(['/', '\\']) {
@@ -303,24 +303,24 @@ fn resolve(dir: &str, name: &str, files: &FileIndex) -> Option<String> {
     files.get(&parts.join("/").to_lowercase()).cloned()
 }
 
-/// Indice di tutti i file sotto `addon_dir`, con percorsi relativi alla cartella `AddOns`.
+/// Index of every file under `addon_dir`, with paths relative to the `AddOns` folder.
 ///
-/// I link simbolici a cartelle **non** si seguono: un ciclo (`Foo/loop -> Foo`) bloccherebbe
-/// la scansione e un link verso l'esterno farebbe leggere file fuori dall'addon. La cartella
-/// dell'addon stessa può essere un link (addon in sviluppo collegati in `AddOns`): si parte
-/// da lì. Un link a un file conta come il file.
+/// Symbolic links to folders are **not** followed: a cycle (`Foo/loop -> Foo`) would block
+/// the scan and a link pointing outside would read files outside the addon. The addon's
+/// folder itself can be a link (addons in development linked into `AddOns`): the walk starts
+/// from there. A link to a file counts as the file.
 #[cfg(test)]
 fn index_files(addon_dir: &Path, folder: &str) -> FileIndex {
     index_files_stamped(addon_dir, folder).0
 }
 
-/// Un file dell'addon com'è sul disco: percorso reale (come nell'indice), dimensione e data di
-/// modifica. Due elenchi uguali dicono che il fingerprint non può essere cambiato, senza
-/// rileggere i file (vedi `addons::cache`).
+/// A file of the addon as it is on disk: real path (as in the index), size and modification
+/// time. Two equal lists say the fingerprint cannot have changed, without reading the files
+/// again (see `addons::cache`).
 pub type FileStamp = (String, u64, Option<SystemTime>);
 
-/// Come `index_files`, con la dimensione e la data di modifica di ogni file, ordinate per
-/// percorso. Per un link a un file valgono quelle del file a cui punta.
+/// Like `index_files`, with each file's size and modification time, sorted by path. For a
+/// link to a file, those of the file it points to apply.
 fn index_files_stamped(addon_dir: &Path, folder: &str) -> (FileIndex, Vec<FileStamp>) {
     let mut index = FileIndex::new();
     let mut stamps = Vec::new();
@@ -356,16 +356,16 @@ fn index_files_stamped(addon_dir: &Path, folder: &str) -> (FileIndex, Vec<FileSt
     (index, stamps)
 }
 
-/// I file della cartella di un addon, letti una volta: servono sia a decidere se un fingerprint
-/// già calcolato vale ancora, sia a calcolarlo.
+/// The files of an addon's folder, read once: they serve both to decide whether an already
+/// computed fingerprint still holds and to compute it.
 pub struct FolderFiles {
     folder: String,
     index: FileIndex,
     pub stamps: Vec<FileStamp>,
 }
 
-/// I file della cartella `addon_dir` in `AddOns`; `None` se il nome non è un percorso valido
-/// (come per [`folder_fingerprint`]).
+/// The files of the `addon_dir` folder in `AddOns`; `None` if the name is not a valid path
+/// (as for [`folder_fingerprint`]).
 pub fn folder_files(addon_dir: &Path) -> Option<FolderFiles> {
     let folder = addon_dir.file_name()?.to_str()?.to_owned();
     let (index, stamps) = index_files_stamped(addon_dir, &folder);
@@ -376,26 +376,26 @@ pub fn folder_files(addon_dir: &Path) -> Option<FolderFiles> {
     })
 }
 
-/// Il fingerprint della cartella di un addon. `addon_dir` è la cartella in `AddOns`; il suo
-/// nome è quello dell'addon. Solo lettura.
+/// The fingerprint of an addon's folder. `addon_dir` is the folder in `AddOns`; its name is
+/// the addon's. Read-only.
 ///
-/// `None` se nessun file entra nel calcolo (cartella vuota, o solo file che il calcolo non
-/// conosce): l'hash di un insieme vuoto sarebbe la stessa costante per tutte queste cartelle e
-/// potrebbe corrispondere per sbaglio a qualcosa su CurseForge.
+/// `None` if no file goes into the computation (empty folder, or only files the computation
+/// does not know): the hash of an empty set would be the same constant for all these folders
+/// and could match something on CurseForge by mistake.
 ///
-/// Costo: legge per intero ogni file che entra nel calcolo, una volta sola. La scansione
-/// dell'app passa da `addons::cache`, che lo evita quando la cartella non è cambiata.
+/// Cost: reads every file that goes into the computation in full, only once. The app's scan
+/// goes through `addons::cache`, which avoids this when the folder has not changed.
 pub fn folder_fingerprint(addon_dir: &Path) -> Option<u32> {
     fingerprint_of(addon_dir, &folder_files(addon_dir)?)
 }
 
-/// Il fingerprint di `addon_dir` dai suoi file già elencati.
+/// The fingerprint of `addon_dir` from its already listed files.
 pub fn fingerprint_of(addon_dir: &Path, folder_files: &FolderFiles) -> Option<u32> {
     let folder = folder_files.folder.as_str();
     let files = &folder_files.index;
     let addons_dir = addon_dir.parent()?;
-    // I `.toc` e gli `.xml` si leggono per trovare le inclusioni e di nuovo per l'hash: i byte
-    // letti la prima volta si riusano, condivisi e non copiati (alcuni `.toc` superano i 50 MB).
+    // The `.toc` and `.xml` files are read to find the includes and again for the hash: the
+    // bytes read the first time are reused, shared and not copied (some `.toc` exceed 50 MB).
     let cache: RefCell<HashMap<String, Option<Rc<[u8]>>>> = RefCell::new(HashMap::new());
     let bytes_of = |relative: &str| {
         cache
@@ -405,9 +405,9 @@ pub fn fingerprint_of(addon_dir: &Path, folder_files: &FolderFiles) -> Option<u3
             .clone()
     };
     let selected = select_files(folder, files, bytes_of);
-    // Ogni file si calcola e si lascia andare: i `.toc` e gli `.xml` letti per le inclusioni
-    // escono dalla cache, i `.lua` si leggono qui e non ci entrano. In memoria resta un file
-    // alla volta, non l'addon intero (la scansione calcola più cartelle in parallelo).
+    // Each file is computed and let go: the `.toc` and `.xml` files read for the includes
+    // leave the cache, the `.lua` files are read here and never enter it. One file at a time
+    // stays in memory, not the whole addon (the scan computes several folders in parallel).
     let hashes: Vec<u32> = selected
         .iter()
         .filter_map(|relative| match cache.borrow_mut().remove(relative) {
@@ -422,8 +422,8 @@ pub fn fingerprint_of(addon_dir: &Path, folder_files: &FolderFiles) -> Option<u3
     Some(combine(hashes))
 }
 
-/// Il calcolo di prima, che copiava i byte e convertiva i file in `String`: il riferimento dei
-/// test di parità sulle cartelle vere.
+/// The previous computation, which copied the bytes and converted the files to `String`: the
+/// reference for the parity tests on real folders.
 #[cfg(test)]
 pub fn reference_fingerprint(addon_dir: &Path) -> Option<u32> {
     let folder = addon_dir.file_name()?.to_str()?;
@@ -452,8 +452,8 @@ mod tests {
     use super::*;
     use crate::test_support::TempDir;
 
-    // Valori attesi calcolati con un'implementazione di riferimento separata di MurmurHash2,
-    // scritta in Python dall'algoritmo pubblico di Austin Appleby (non da questo file).
+    // Expected values computed with a separate reference implementation of MurmurHash2,
+    // written in Python from Austin Appleby's public algorithm (not from this file).
     #[test]
     fn murmur2_matches_the_reference() {
         for (input, expected) in [
@@ -480,8 +480,8 @@ mod tests {
         assert_eq!(curse_hash(b"a b\r\nc"), curse_hash(b"abc"));
     }
 
-    /// Il calcolo di prima, sui byte filtrati copiati in un buffer: il riferimento di
-    /// `curse_hash` in streaming.
+    /// The previous computation, over the filtered bytes copied into a buffer: the reference
+    /// for the streaming `curse_hash`.
     fn reference_hash(data: &[u8]) -> u32 {
         let kept: Vec<u8> = data.iter().copied().filter(|b| !is_skipped(*b)).collect();
         murmur2(&kept, 1)
@@ -489,8 +489,8 @@ mod tests {
 
     #[test]
     fn streaming_hash_matches_the_buffered_one_at_every_length() {
-        // Contenuti deterministici con spaziatura sparsa: ogni lunghezza filtrata da 0 a oltre
-        // 300 byte, quindi ogni resto modulo 4 della coda, con e senza spaziatura in coda.
+        // Deterministic contents with scattered whitespace: every filtered length from 0 to over
+        // 300 bytes, hence every tail remainder modulo 4, with and without trailing whitespace.
         let mut state = 0x1234_5678u32;
         for len in 0..=320 {
             let data: Vec<u8> = (0..len)
@@ -574,7 +574,7 @@ mod tests {
         let contents = [
             (
                 "Foo/Foo.toc",
-                "## Title: Foo\n# commento\ncore.lua\nui.xml\n",
+                "## Title: Foo\n# comment\ncore.lua\nui.xml\n",
             ),
             (
                 "Foo/ui.xml",
@@ -648,13 +648,13 @@ mod tests {
         assert_eq!(xml_include_in_line(r#"<Scriptfile="c.lua"/>"#), None);
         assert_eq!(xml_include_in_line(r#"<Include file="../x.xml"/>"#), None);
         assert_eq!(xml_include_in_line("<Frame name=\"x\"/>"), None);
-        // Due tag sulla stessa riga: il valore arriva fino all'ultima virgoletta seguita da `/>`,
-        // come nel calcolo di riferimento (e quindi non corrisponde a nessun file).
+        // Two tags on the same line: the value runs up to the last quote followed by `/>`,
+        // as in the reference computation (and so it matches no file).
         assert_eq!(
             xml_include_in_line(r#"<Script file="a.lua"/><Script file="b.lua"/>"#).as_deref(),
             Some(r#"a.lua"/><Script file="b.lua"#)
         );
-        // Se il valore più lungo contiene `..` seguito da un carattere, si prova il più corto.
+        // If the longest value contains `..` followed by a character, the shorter one is tried.
         assert_eq!(
             xml_include_in_line(r#"<Script file="a.lua"/><Script file="../b.lua"/>"#).as_deref(),
             Some("a.lua")
@@ -681,7 +681,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::create_dir_all(&outside).unwrap();
         fs::write(outside.join("secret.lua"), "x").unwrap();
-        // Un ciclo e un link verso l'esterno: nessuno dei due deve essere attraversato.
+        // A cycle and a link pointing outside: neither must be traversed.
         std::os::unix::fs::symlink(&dir, dir.join("loop")).unwrap();
         std::os::unix::fs::symlink(&outside, dir.join("ext")).unwrap();
         fs::write(
@@ -718,7 +718,7 @@ mod tests {
             curse_hash(b"print('a')\n"),
         ]);
         assert_eq!(folder_fingerprint(&dir), Some(expected));
-        // Cambiare solo la spaziatura o un file non incluso non cambia il fingerprint.
+        // Changing only whitespace or a file that is not included does not change the fingerprint.
         fs::write(dir.join("Foo.lua"), "print('a')\r\n\r\n").unwrap();
         fs::write(dir.join("notes.txt"), "changed").unwrap();
         assert_eq!(folder_fingerprint(&dir), Some(expected));

@@ -1,9 +1,9 @@
-//! Catalogo di CurseForge: ricerca degli addon di WoW e categorie, per la tab Search.
+//! CurseForge catalog: search for WoW addons and categories, for the Search tab.
 //!
-//! I comandi restano sottili: qui si sceglie la versione del gioco, si traduce l'ordinamento
-//! nei valori dell'API, si rispetta il limite dei risultati e si calcola `installed` dal disco
-//! e dai record dell'app, senza chiamate di rete. Bloccante: va chiamato fuori dal thread
-//! principale.
+//! The commands stay thin: here the game version is chosen, the sort order is translated
+//! into the API's values, the result limit is respected and `installed` is computed from disk
+//! and from the app's records, without network calls. Blocking: it must be called off the main
+//! thread.
 
 mod detail;
 mod text;
@@ -25,13 +25,13 @@ use crate::sources::github_mirror;
 use crate::store::InstalledRecords;
 use crate::updates::{is_known_version_type, version_type_for};
 
-/// Risultati per pagina: il massimo che l'API accetta.
+/// Results per page: the maximum the API accepts.
 pub const PAGE_SIZE: u32 = 50;
-/// L'API rifiuta le ricerche con `index + pageSize` oltre questo valore.
+/// The API rejects searches with `index + pageSize` beyond this value.
 pub const MAX_RESULTS: u32 = 10_000;
 
-/// Gli ordinamenti della ricerca. Il frontend vede solo i nomi; i numeri di
-/// `ModsSearchSortField` (docs.curseforge.com/rest-api, verificati il 2026-10-24) restano qui.
+/// The search sort orders. The frontend sees only the names; the numbers of
+/// `ModsSearchSortField` (docs.curseforge.com/rest-api, verified on 2026-10-24) stay here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CatalogSort {
@@ -52,7 +52,7 @@ impl CatalogSort {
     }
 }
 
-/// Una categoria per il frontend.
+/// A category for the frontend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogCategory {
@@ -71,20 +71,20 @@ impl From<&Category> for CatalogCategory {
     }
 }
 
-/// L'ultimo file Release di un progetto per una versione del gioco.
+/// The latest Release file of a project for a game version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogFile {
     pub id: u32,
-    /// Il nome dello zip; vuoto se l'API non lo indica.
+    /// The zip's name; empty if the API does not give it.
     pub name: String,
-    /// La versione del gioco del file, per esempio `12.1.5`.
+    /// The game version of the file, for example `12.1.5`.
     pub game_version: String,
-    /// `releaseType` di CurseForge: 1 Release, 2 Beta (solo con l'opzione della issue #141).
+    /// CurseForge's `releaseType`: 1 Release, 2 Beta (only with the option from issue #141).
     pub release_type: u8,
 }
 
-/// Un addon del catalogo, come lo vede il frontend.
+/// A catalog addon, as the frontend sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogAddon {
@@ -93,29 +93,31 @@ pub struct CatalogAddon {
     pub summary: String,
     pub authors: Vec<String>,
     pub download_count: u64,
-    /// Data ISO 8601 dell'ultima modifica del progetto.
+    /// ISO 8601 date of the project's last modification.
     pub date_modified: String,
     pub categories: Vec<CatalogCategory>,
     pub thumbnail_url: Option<String>,
     pub url: Option<String>,
-    /// Se CurseForge permette di scaricare i file da un'app di terzi. Sconosciuto vale `false`.
+    /// Whether CurseForge allows downloading the files from a third-party app. Unknown counts
+    /// as `false`.
     pub allow_mod_distribution: bool,
-    /// Il repository GitHub `owner/repo` del progetto, ricavato da `links.sourceUrl` con la
-    /// regola del mirror ([`github_mirror::github_repo`]); `null` se `sourceUrl` manca o non è
-    /// un repository GitHub. Nessuna richiesta di rete: viene dai dati della ricerca o del
-    /// dettaglio. C'è per ogni progetto, ma conta solo con `allowModDistribution = false`:
-    /// senza, il mirror GitHub (D34) è impossibile a priori e la Search può mandare subito al
-    /// sito; con, il frontend può chiedere `github_mirror` da solo (issue #222, #223). Il
-    /// repository dice solo che il mirror è possibile, non che c'è la stessa versione.
+    /// The project's GitHub repository `owner/repo`, derived from `links.sourceUrl` with the
+    /// mirror rule ([`github_mirror::github_repo`]); `null` if `sourceUrl` is missing or is not
+    /// a GitHub repository. No network request: it comes from the search or detail data. It
+    /// is there for every project, but it only matters with `allowModDistribution = false`:
+    /// without it, the GitHub mirror (D34) is impossible up front and Search can send the user
+    /// straight to the website; with it, the frontend can ask for `github_mirror` on its own
+    /// (issue #222, #223). The repository only says the mirror is possible, not that the same
+    /// version is there.
     pub github_repo: Option<String>,
     pub latest_file: Option<CatalogFile>,
-    /// Il progetto è già nell'installazione (vedi [`installed_projects`]).
+    /// The project is already in the installation (see [`installed_projects`]).
     pub installed: bool,
 }
 
 impl CatalogAddon {
-    /// `version_type` sceglie l'ultimo file, una Beta solo con `allow_beta` e senza Release
-    /// (issue #141); `installed` è l'insieme di [`installed_projects`].
+    /// `version_type` picks the latest file, a Beta only with `allow_beta` and no Release
+    /// (issue #141); `installed` is the set from [`installed_projects`].
     pub fn new(
         found: &CatalogMod,
         version_type: u32,
@@ -150,9 +152,9 @@ impl CatalogAddon {
     }
 }
 
-/// Il file da installare per la versione, tra quelli che CurseForge indica come ultimi del
-/// progetto, con la regola di [`pick_file`]. L'indice non ha la data: decide l'id, che
-/// CurseForge assegna in ordine crescente.
+/// The file to install for the version, among those CurseForge lists as the project's latest,
+/// with the rule of [`pick_file`]. The index has no date: the id decides, which CurseForge
+/// assigns in ascending order.
 fn latest_file(found: &CatalogMod, version_type: u32, allow_beta: bool) -> Option<CatalogFile> {
     let for_version = found
         .project
@@ -173,40 +175,40 @@ fn latest_file(found: &CatalogMod, version_type: u32, allow_beta: bool) -> Optio
     })
 }
 
-/// Una pagina di risultati per il frontend.
+/// A page of results for the frontend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogPage {
     pub addons: Vec<CatalogAddon>,
     pub index: u32,
     pub page_size: u32,
-    /// Tutti i risultati della ricerca, anche quelli oltre [`MAX_RESULTS`] che l'API non
-    /// restituisce. Comprende anche quelli nascosti perché senza un file Release.
+    /// All the search results, including those beyond [`MAX_RESULTS`] that the API does not
+    /// return. It also includes those hidden for lacking a Release file.
     pub total_count: u64,
-    /// Quanti risultati dell'API ha letto questa pagina, nascosti compresi: zero vuol dire che
-    /// l'API non ha altro, anche se `addons` è vuota per il filtro.
+    /// How many API results this page read, hidden ones included: zero means the API has
+    /// nothing more, even if `addons` is empty because of the filter.
     pub fetched: u32,
-    /// Quanti risultati letti sono stati tolti perché non hanno un file Release per la versione
-    /// cercata (issue #140): non si potrebbero installare.
+    /// How many of the results read were removed because they have no Release file for the
+    /// searched version (issue #140): they could not be installed.
     pub hidden: u32,
 }
 
-/// Una ricerca come la chiede il frontend.
+/// A search as the frontend requests it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogQuery {
     pub query: String,
     pub category_id: Option<u32>,
-    /// Senza, vale la versione del gioco dell'installazione.
+    /// Without it, the installation's game version applies.
     pub version_type: Option<u32>,
-    /// L'opzione "Beta quando non c'è una Release" (issue #141).
+    /// The "Beta when there is no Release" option (issue #141).
     pub allow_beta: bool,
     pub sort: CatalogSort,
     pub sort_order: SortOrder,
     pub index: u32,
 }
 
-/// La versione del gioco della ricerca: quella chiesta, purché l'app la conosca, altrimenti
-/// quella dell'installazione.
+/// The game version of the search: the requested one, provided the app knows it, otherwise
+/// the installation's.
 fn search_version_type(installation: &Installation, requested: Option<u32>) -> Result<u32, String> {
     match requested {
         Some(id) if is_known_version_type(id) => Ok(id),
@@ -220,9 +222,9 @@ fn search_version_type(installation: &Installation, requested: Option<u32>) -> R
     }
 }
 
-/// Una pagina della ricerca nel catalogo. Oltre [`MAX_RESULTS`] l'API rifiuterebbe la
-/// richiesta: si chiede solo il conteggio (un risultato dall'inizio) e si restituisce una
-/// pagina vuota con il `totalCount` reale.
+/// A page of the catalog search. Beyond [`MAX_RESULTS`] the API would reject the request:
+/// only the count is asked for (one result from the start) and an empty page with the real
+/// `totalCount` is returned.
 pub fn search_catalog<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
@@ -255,9 +257,9 @@ pub fn search_catalog<T: Transport>(
     }
     let page = client.search_mods(&search).map_err(|e| e.to_string())?;
     let installed = installed_projects(installation, records);
-    // `gameVersionTypeId` include i progetti con un file di qualunque tipo per la versione (per
-    // esempio solo una Beta): quelli che l'installazione non prenderebbe si tolgono qui, con la
-    // stessa regola (`pick_file`, Beta solo con l'opzione).
+    // `gameVersionTypeId` includes projects with a file of any type for the version (for
+    // example only a Beta): those the installation would not take are removed here, with the
+    // same rule (`pick_file`, Beta only with the option).
     let all: Vec<CatalogAddon> = page
         .data
         .iter()
@@ -279,8 +281,7 @@ pub fn search_catalog<T: Transport>(
     })
 }
 
-/// Le categorie degli addon, ordinate per nome senza distinguere maiuscole e minuscole, senza
-/// le classi.
+/// The addon categories, sorted by name case-insensitively, without the classes.
 pub fn list_categories<T: Transport>(
     client: &CurseForgeClient<T>,
 ) -> Result<Vec<CatalogCategory>, String> {
@@ -300,20 +301,20 @@ pub fn list_categories<T: Transport>(
     Ok(categories)
 }
 
-/// I progetti CurseForge già presenti in un'installazione: quelli dei record dell'app con
-/// almeno una cartella ancora in `Interface/AddOns`, e quelli che una cartella dichiara con
-/// `## X-Curse-Project-ID` nel `.toc` del flavor. I nomi delle cartelle si confrontano senza
-/// distinguere maiuscole e minuscole, come fa il gioco. Nessuna chiamata di rete e nessun
-/// fingerprint: legge solo i nomi delle cartelle e i `.toc`.
+/// The CurseForge projects already present in an installation: those in the app's records
+/// with at least one folder still in `Interface/AddOns`, and those a folder declares with
+/// `## X-Curse-Project-ID` in the flavor's `.toc`. Folder names are compared
+/// case-insensitively, as the game does. No network call and no fingerprint: it reads only
+/// the folder names and the `.toc` files.
 ///
-/// È la regola di "già installato" della ricerca, e lo sarà dell'installazione di un addon
-/// nuovo e delle sue dipendenze. Una cartella `AddOns` mancante o illeggibile vale come vuota.
+/// It is the search's "already installed" rule, and it will be the rule for installing a new
+/// addon and its dependencies. A missing or unreadable `AddOns` folder counts as empty.
 pub(crate) fn installed_projects(
     installation: &Installation,
     records: &InstalledRecords,
 ) -> HashSet<u32> {
     let addons_dir = installation.path.join("Interface").join("AddOns");
-    // Nome in minuscolo → nome sul disco, solo cartelle.
+    // Lowercase name → name on disk, folders only.
     let mut folders: HashMap<String, String> = HashMap::new();
     if let Ok(entries) = fs::read_dir(&addons_dir) {
         for entry in entries.flatten() {
@@ -324,7 +325,7 @@ pub(crate) fn installed_projects(
             folders.insert(name.to_lowercase(), name);
         }
     }
-    // Prima i record, in memoria: le cartelle che un record reclama non servono al `.toc`.
+    // Records first, in memory: the folders a record claims are not needed for the `.toc`.
     let mut projects = HashSet::new();
     let mut claimed = HashSet::new();
     for (mod_id, record) in records {
@@ -339,7 +340,7 @@ pub(crate) fn installed_projects(
             claimed.extend(present);
         }
     }
-    // Poi il `.toc`, solo per le cartelle che nessun record conosce.
+    // Then the `.toc`, only for the folders no record knows.
     for (lower, name) in &folders {
         if claimed.contains(lower) {
             continue;
@@ -351,8 +352,8 @@ pub(crate) fn installed_projects(
     projects
 }
 
-/// L'id di `## X-Curse-Project-ID` nel `.toc` della cartella per il flavor. Usata anche
-/// dall'installazione di un addon nuovo per riconoscere le cartelle di altri progetti.
+/// The id from `## X-Curse-Project-ID` in the folder's `.toc` for the flavor. Also used by
+/// the installation of a new addon to recognise the folders of other projects.
 pub(crate) fn declared_project(dir: &Path, folder: &str, flavor: &str) -> Option<u32> {
     let file_names: Vec<String> = fs::read_dir(dir)
         .ok()?
@@ -377,7 +378,7 @@ mod tests {
     use crate::updates::{CLASSIC_ERA, FOREVER};
     use std::sync::Mutex;
 
-    /// Risponde sempre con lo stesso corpo e registra gli URL richiesti.
+    /// Always answers with the same body and records the requested URLs.
     struct Fake {
         status: u16,
         body: &'static str,
@@ -524,7 +525,7 @@ mod tests {
         assert!(!dbm.allow_mod_distribution);
         assert_eq!(dbm.latest_file.as_ref().map(|f| f.id), Some(20));
         assert_eq!(dbm.url, None);
-        // RareScanner ha per Retail solo una Beta: non si potrebbe installare e non compare.
+        // RareScanner has only a Beta for Retail: it could not be installed and does not appear.
         assert_eq!(page.addons.len(), 2);
         assert_eq!((page.fetched, page.hidden), (3, 1));
 
@@ -556,7 +557,7 @@ mod tests {
             rare.latest_file.as_ref().map(|f| (f.id, f.release_type)),
             Some((30, 2))
         );
-        // Una Release vince sempre sulla Beta, anche con l'opzione.
+        // A Release always wins over the Beta, even with the option.
         let details = page.addons.iter().find(|a| a.id == 61284).unwrap();
         assert_eq!(details.latest_file.as_ref().map(|f| f.id), Some(12));
     }
@@ -572,7 +573,7 @@ mod tests {
         let client = client(200, PAGE);
         let page = search_catalog(&forever, &client, &InstalledRecords::new(), &request).unwrap();
         assert_eq!(page.addons[0].latest_file.as_ref().unwrap().id, 14);
-        // Per Classic Era RareScanner ha una Release: con un'altra versione il filtro cambia.
+        // For Classic Era RareScanner has a Release: with another version the filter changes.
         assert_eq!(page.addons.len(), 3);
         assert_eq!((page.fetched, page.hidden), (3, 0));
         assert_eq!(
@@ -583,7 +584,7 @@ mod tests {
             ]
         );
 
-        // Senza versione esplicita vale quella dell'installazione.
+        // Without an explicit version the installation's applies.
         let client = self::client(200, PAGE);
         search_catalog(&forever, &client, &InstalledRecords::new(), &query(0)).unwrap();
         assert!(seen(&client)[0].contains(&format!("gameVersionTypeId={FOREVER}&")));
@@ -622,7 +623,7 @@ mod tests {
         assert_eq!(urls.len(), 1);
         assert!(urls[0].ends_with("&index=0&pageSize=1"), "{}", urls[0]);
 
-        // L'ultima pagina ammessa si chiede davvero; un indice enorme non trabocca.
+        // The last allowed page is really requested; a huge index does not overflow.
         let client = self::client(200, PAGE);
         search_catalog(&retail, &client, &InstalledRecords::new(), &query(9_950)).unwrap();
         assert!(seen(&client)[0].ends_with("&index=9950&pageSize=50"));
@@ -655,23 +656,23 @@ mod tests {
     fn installed_comes_from_records_and_toc_files() {
         let tmp = TempDir::new();
         let retail = installation(tmp.path(), "retail");
-        // Dichiarato nel `.toc` del flavor, con spazi.
+        // Declared in the flavor's `.toc`, with spaces.
         addon(
             tmp.path(),
             "Details",
             "Details.toc",
             "## X-Curse-Project-ID:  61284 \n",
         );
-        // Solo nel `.toc` di un altro flavor: per Retail non conta.
+        // Only in another flavor's `.toc`: it does not count for Retail.
         addon(
             tmp.path(),
             "EraOnly",
             "EraOnly_Vanilla.toc",
             "## X-Curse-Project-ID: 7\n",
         );
-        // Un id non numerico non conta.
+        // A non-numeric id does not count.
         addon(tmp.path(), "Odd", "Odd.toc", "## X-Curse-Project-ID: abc\n");
-        // Registrato dall'app, con un nome che differisce solo nelle maiuscole.
+        // Recorded by the app, with a name that differs only in case.
         addon(
             tmp.path(),
             "WeakAuras",
@@ -680,13 +681,13 @@ mod tests {
         );
         let mut records = InstalledRecords::new();
         records.insert(65387, record(&["weakauras", "WeakAurasOptions"]));
-        // Un record le cui cartelle non ci sono più non conta.
+        // A record whose folders are gone does not count.
         records.insert(999, record(&["Gone"]));
 
         let projects = installed_projects(&retail, &records);
         assert_eq!(projects, HashSet::from([61284, 65387]));
 
-        // Senza `Interface/AddOns` non c'è niente, nemmeno dai record.
+        // Without `Interface/AddOns` there is nothing, not even from the records.
         let empty = TempDir::new();
         assert!(installed_projects(&installation(empty.path(), "retail"), &records).is_empty());
     }
@@ -788,7 +789,7 @@ mod tests {
         assert!(addon.get("github_repo").is_none());
     }
 
-    /// Un progetto della ricerca con il `sourceUrl` indicato (`None`: senza `links.sourceUrl`).
+    /// A search project with the given `sourceUrl` (`None`: without `links.sourceUrl`).
     fn with_source(source_url: Option<&str>) -> CatalogAddon {
         let links = match source_url {
             Some(url) => serde_json::json!({ "sourceUrl": url }),
