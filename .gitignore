@@ -23,9 +23,9 @@ dist-ssr
 *.sln
 *.sw?
 
-# Segreti locali: la chiave API di CurseForge sta qui
+# Local secrets: the CurseForge API key lives here
 .env
 
-# Bytecode Python dei test del reviewer
+# Python bytecode from the reviewer tests
 __pycache__/
 *.py[cod]
