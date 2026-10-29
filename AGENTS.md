@@ -180,8 +180,8 @@ after the visibility change.
 - **Read first, then write**: look for existing patterns before implementing.
 - **No new dependencies** (crates or npm packages) without an explicit instruction.
 - **Never read `.env` files**: AI agents must NOT read, open or inspect any
-  `.env` file. To know which variables are needed, use only `.env.example`. `.env` contains the
-  real API key.
+  `.env` file. The app no longer uses one (D44: the CurseForge key lives only in the
+  wow-don-proxy Worker's secrets), but a leftover local `.env` can still hold a real key.
 - **No tool signatures**: no agent `Co-Authored-By` trailers, no
   "Generated with ..." in PRs, no `claude.ai/code/session_…` links in messages.
 - **NEVER push or merge to `main`**: `main` is the release branch and stays human only. The AI

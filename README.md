@@ -53,16 +53,15 @@ The full context is in [docs/context.md](docs/context.md).
 ## Addon sources and the CurseForge API
 
 The main source is the [CurseForge API](https://docs.curseforge.com/rest-api).
-The API requires a key, even to download files.
-
-- **In development** a personal key is used, generated from the CurseForge for Studios
-  console (`console.curseforge.com`).
-- **To distribute the app** a key for third-party applications will be needed, to be
-  requested from CurseForge/Overwolf once the project is far enough along.
+The API requires a key. WoW-don has a third-party application key from CurseForge, and it
+never ships in the app: it lives only in the secrets of the
+[wow-don-proxy](https://github.com/FabioSM46/wow-don-proxy) Cloudflare Worker, which answers a
+closed list of read-only, World of Warcraft-only calls. The backend calls the proxy; zips are
+downloaded straight from CurseForge's CDN (D44).
 
 Rules the project follows:
 
-- the key stays in the Rust backend: the frontend does not see it and it does not end up in logs;
+- the key is never in the app, the repository, a build or a log;
 - no scraping of the CurseForge site and no reuse of other apps' keys;
 - addons with `allowModDistribution = false` are not downloaded
   automatically.
@@ -90,7 +89,7 @@ wow-don/
 │   ├── src/
 │   │   ├── main.rs         # entry point
 │   │   ├── lib.rs          # Tauri setup and command registration
-│   │   ├── config.rs       # reading the API key from the environment / .env
+│   │   ├── config.rs       # the CurseForge proxy address (D44)
 │   │   └── commands.rs     # commands the frontend can invoke
 │   ├── capabilities/       # Tauri window permissions
 │   ├── icons/
@@ -105,7 +104,6 @@ wow-don/
 ├── .github/                # CI, DeepSeek review, labeler, issue templates
 ├── .claude/skills/         # agent skills (/dev-issue, /process-pr, /scrum-master)
 ├── AGENTS.md               # rules for AI agents and the pipeline
-├── .env.example            # template of the file with the API key
 ├── index.html
 ├── package.json
 └── vite.config.ts
@@ -140,22 +138,12 @@ On **Linux** you need the system libraries for Tauri. On Ubuntu/Debian:
     libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
   ```
 
-### API key
+### CurseForge
 
-```bash
-cp .env.example .env
-chmod 600 .env
-# then put the key in CURSEFORGE_API_KEY, in single quotes
-```
-
-The key goes **in single quotes**: `CURSEFORGE_API_KEY='$2a$10$...'`. CurseForge keys
-contain `$`, and without quotes (or with double quotes) the `.env` reader treats them as
-variables to substitute: the key arrives mangled and CurseForge rejects it.
-
-`.env` is in `.gitignore` and must never be committed. In debug the app reads it from the
-repository root; alternatively you can export the key in the environment, again in single
-quotes because the shell would also substitute the `$`:
-`export CURSEFORGE_API_KEY='$2a$10$...'`.
+No key is needed, in development or in a release: the app reaches CurseForge through the
+[wow-don-proxy](https://github.com/FabioSM46/wow-don-proxy) Worker, which holds the key (D44).
+To test against a proxy run locally with `wrangler dev`, start a debug build with
+`WOWDON_CURSEFORGE_PROXY=http://127.0.0.1:8787`; release builds accept only `https` there.
 
 ### Commands
 

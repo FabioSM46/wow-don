@@ -1,11 +1,11 @@
 # Roadmap
 
-Last updated: 2026-10-27.
+Last updated: 2026-10-29.
 
 ## M0 — Scaffolding (done)
 
 - Tauri 2 + React + TypeScript project.
-- Reading the CurseForge key from `.env`.
+- Reading the CurseForge key from `.env` (replaced by the proxy, D44).
 - Documentation: context, decisions, architecture, roadmap.
 
 ## M1 — Installed addons (done)
@@ -107,11 +107,10 @@ D41, issues #199–#204:
 
 ## M5 — Third-party application key and first release
 
-- Send CurseForge/Overwolf the form for the application key.
+- CurseForge/Overwolf application key: form sent, key granted (2026-10-29).
 - Ask Wago for read access to the API (D39), in parallel.
-- Decide how the key reaches the installed app: today the backend reads it only from
-  `CURSEFORGE_API_KEY` or from the checkout's `.env`, so an installed package starts without a
-  key.
+- The key never reaches the app: it lives in the wow-don-proxy Worker and the backend calls the
+  proxy, in development too (D44, #247).
 - First tested release: PR `develop → main` (the first to run `backend-macos` on the
   complete backend), then the `.deb`, NSIS installer and `.dmg` built by CI (D24) at the first tag.
 
