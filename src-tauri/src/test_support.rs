@@ -1,4 +1,4 @@
-//! Aiuti per i test: una cartella temporanea che si cancella da sola, senza dipendenze.
+//! Test helpers: a temporary folder that deletes itself, with no dependencies.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

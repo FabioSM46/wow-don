@@ -5,102 +5,111 @@ argument-hint: <issue-number> [--base <branch>]
 allowed-tools: Bash(gh *) Bash(git *) Bash(cargo *) Bash(rustup *) Bash(pnpm *) Bash(node *) Bash(python3 *) Bash(bash *) Bash(cd *) Bash(mkdir *) Bash(mktemp *) Bash(trap *) Bash(ls *) Bash(rm *) Bash(cp *) Bash(mv *) Bash(cat *) Bash(xargs *) Bash(sed *) Bash(awk *) Bash(tr *) Bash(head *) Bash(tail *) Bash(paste *) Bash(find *) Bash(rg *) Bash(date *) Bash(dirname *) Bash(echo *) Bash(set *) Bash(source *) Bash(export *) Bash(jq *) Bash(wc *)
 ---
 
-# dev-issue — dalla issue alla PR
+# dev-issue — from issue to PR
 
-Trigger: `/dev-issue <numero-issue>` oppure `/dev-issue <url-issue>`, con `--base <branch>`
-opzionale quando il lavoro va impilato su un branch di feature diverso da `develop`.
+Trigger: `/dev-issue <issue-number>` or `/dev-issue <issue-url>`, with an optional
+`--base <branch>` when the work must be stacked on a feature branch other than `develop`.
 
-## Scopo
+## Purpose
 
-Porta una issue GitHub dai requisiti alla PR, senza stato. Esce dopo aver aperto la PR e
-ripulito il worktree. **Non** sorveglia la PR: il monitoraggio passivo è di `pr-labeler.yml`
-(a eventi più un giro ogni sei ore), la correzione attiva è di `/process-pr`.
+Takes a GitHub issue from requirements to PR, statelessly. It exits after opening the PR and
+cleaning up the worktree. It does **not** watch the PR: passive monitoring belongs to
+`pr-labeler.yml` (event-driven plus a pass every six hours), active fixing belongs to
+`/process-pr`.
 
-Usa `git worktree` per isolare il branch, così più issue possono procedere in parallelo senza
-toccare la cartella di lavoro principale.
+It uses `git worktree` to isolate the branch, so several issues can progress in parallel
+without touching the main working folder.
 
 ## Workflow
 
-### Passo 1: leggere la issue
+### Step 1: read the issue
 
-`gh issue view <numero> --json title,body,labels`. Dal corpo si leggono questi campi:
+`gh issue view <number> --json title,body,labels`. These fields are read from the body:
 
-| Campo | Sezione nel corpo | Obbligatorio | Serve per |
-|-------|-------------------|--------------|-----------|
-| Area | `### Area` → menu | Sì | Cartella di lavoro e gate |
-| Tipo | `### Tipo` → menu | Sì* | Prefisso del branch (*i bug non hanno Tipo: si ricava dalla label `bug`) |
-| Priorità | `### Priorità` → menu | Sì* | Quanto impegno (*stessa eccezione) |
-| User story | `### User story` | Sì* | Obiettivo (*stessa eccezione) |
-| Criteri di accettazione | `### Criteri di accettazione` | Sì* | Checklist di verifica (*stessa eccezione) |
-| Contesto tecnico | `### Contesto tecnico` | Sì | Guida all'implementazione |
-| Fuori scope | `### Fuori scope` | Sì | Confini dell'implementazione |
-| Riferimenti nel codice | `### Riferimenti nel codice` | No | File da leggere per primi |
-| Dipendenze | `### Dipendenze` | No | Lavoro bloccante |
-| Strategia di test | `### Strategia di test` | No | Cosa testare |
+| Field | Section in the body | Required | Used for |
+|-------|---------------------|----------|----------|
+| Area | `### Area` → dropdown | Yes | Working folder and gates |
+| Type | `### Type` → dropdown | Yes* | Branch prefix (*bugs have no Type: it is derived from the `bug` label) |
+| Priority | `### Priority` → dropdown | Yes* | How much effort (*same exception) |
+| User story | `### User story` | Yes* | Goal (*same exception) |
+| Acceptance criteria | `### Acceptance criteria` | Yes* | Verification checklist (*same exception) |
+| Technical context | `### Technical context` | Yes | Implementation guide |
+| Out of scope | `### Out of scope` | Yes | Implementation boundaries |
+| Code pointers | `### Code pointers` | No | Files to read first |
+| Dependencies | `### Dependencies` | No | Blocking work |
+| Test strategy | `### Test strategy` | No | What to test |
 
-L'obbligatorietà rispecchia `.github/ISSUE_TEMPLATE/feature_request.yml`. I bug
-(`bug_report.yml`) hanno `Cosa è successo? / Cosa doveva succedere? / Passi per riprodurre` al
-posto di Tipo/Priorità/User story/Criteri: i passi per riprodurre sono i criteri di accettazione.
+Issues opened before the templates were translated carry the old Italian headings (`### Tipo`,
+`### Priorità`, `### Criteri di accettazione`, `### Contesto tecnico`, `### Fuori scope`,
+`### Riferimenti nel codice`, `### Dipendenze`, `### Strategia di test`, and for bugs
+`### Cosa è successo?`, `### Cosa doveva succedere?`, `### Passi per riprodurre`): accept them as
+the same fields.
 
-Se manca un campo obbligatorio non indovinare: di' quale manca e chiedi all'utente se procedere.
+Which fields are required mirrors `.github/ISSUE_TEMPLATE/feature_request.yml`. Bugs
+(`bug_report.yml`) have `What happened? / What should have happened? / Steps to reproduce`
+instead of Type/Priority/User story/Acceptance criteria: the steps to reproduce are the
+acceptance criteria.
 
-### Passo 2: validare l'area
+If a required field is missing, do not guess: say which one is missing and ask the user whether
+to proceed.
 
-| Valore nella issue | Cartella | Gate (Passo 6) |
-|--------------------|----------|----------------|
+### Step 2: validate the area
+
+| Value in the issue | Folder | Gates (Step 6) |
+|--------------------|--------|----------------|
 | `backend (Rust / Tauri)` | `src-tauri/` | backend |
-| `frontend (React / TypeScript)` | `src/` (più `index.html`, `vite.config.ts`, `tsconfig*.json`, `public/`) | frontend |
-| `shared (Trasversale)` | radice | backend e frontend |
+| `frontend (React / TypeScript)` | `src/` (plus `index.html`, `vite.config.ts`, `tsconfig*.json`, `public/`) | frontend |
+| `shared (Cross-cutting)` (older issues: `shared (Trasversale)`) | root | backend and frontend |
 
-**Validazione difensiva**: se il valore non è uno di questi, NON procedere. Chiedi: "Non
-riconosco l'area '[valore]'. Valori ammessi: backend (Rust / Tauri), frontend (React /
-TypeScript), shared (Trasversale). Quale uso?"
+**Defensive validation**: if the value is not one of these, do NOT proceed. Ask: "I don't
+recognise the area '[value]'. Allowed values: backend (Rust / Tauri), frontend (React /
+TypeScript), shared (Cross-cutting). Which one should I use?"
 
-### Passo 3: leggere il contesto
+### Step 3: read the context
 
-Prima di scrivere codice:
+Before writing code:
 
-1. Leggi `AGENTS.md` alla radice: convenzioni e contratto della pipeline.
-2. Leggi i documenti in `docs/` che la issue tocca: `architecture.md` per i moduli del backend,
-   `decisions.md` per le scelte già prese, `roadmap.md` per la milestone.
-3. Apri ogni **Riferimento nel codice** della issue.
-4. Leggi **Fuori scope** e tienilo a mente: non toccare niente di quell'elenco.
-5. Cerca i pattern esistenti con `rg --files` e `rg`.
+1. Read `AGENTS.md` at the root: conventions and the pipeline contract.
+2. Read the documents in `docs/` that the issue touches: `architecture.md` for the backend
+   modules, `decisions.md` for choices already made, `roadmap.md` for the milestone.
+3. Open every **Code pointer** in the issue.
+4. Read **Out of scope** and keep it in mind: touch nothing on that list.
+5. Look for existing patterns with `rg --files` and `rg`.
 
-### Passo 3a: scegliere la base della PR
+### Step 3a: choose the PR base
 
-`BASE_BRANCH=develop`, a meno che l'invocazione passi `--base <branch>`. La base decide sia il
-punto di partenza del branch sia il target della PR.
+`BASE_BRANCH=develop`, unless the invocation passes `--base <branch>`. The base decides both
+the branch's starting point and the PR's target.
 
-Verifica che il branch remoto esista prima di creare il worktree. Rifiuta una base vuota e
-rifiuta `main`: questa skill non apre e non ridirige mai PR verso `main`. Se riusi un branch o
-una PR esistenti, verifica che la base reale sia quella richiesta invece di cambiarla in silenzio.
+Verify that the remote branch exists before creating the worktree. Refuse an empty base and
+refuse `main`: this skill never opens or retargets a PR to `main`. If you reuse an existing
+branch or PR, verify that its real base is the requested one instead of silently changing it.
 
-### Passo 4: creare worktree e branch
+### Step 4: create worktree and branch
 
-**Nome del branch:**
+**Branch name:**
 
 ```
-Tipo (dal menu, o dalle label se manca):
+Type (from the dropdown, or from the labels if missing):
   feature     → feature/
   enhancement → feature/
   refactor    → refactor/
-  label bug   → fix/
+  bug label   → fix/
 
-Slug: titolo → minuscolo → caratteri non alfanumerici in trattini
-      → trattini consecutivi compressi → senza trattini iniziali/finali
-      → al massimo 5 parole
+Slug: title → lowercase → non-alphanumeric characters to hyphens
+      → consecutive hyphens collapsed → no leading/trailing hyphens
+      → at most 5 words
 
-Risultato: <prefisso><numero-issue>-<slug>
+Result: <prefix><issue-number>-<slug>
 
-Esempi:
-  feature/12-aggiungi-installazione-manuale
-  fix/31-toc-duplicati-classic-beta
-  refactor/40-estrai-client-curseforge
+Examples:
+  feature/12-add-manual-installation
+  fix/31-duplicate-toc-classic-beta
+  refactor/40-extract-curseforge-client
 ```
 
-Il percorso del worktree si ricava dalla radice del repo, mai da `$PWD`: un relativo
-`../wow-don-issue-N` dopo un `cd src-tauri` creerebbe il worktree *dentro* il repo.
+The worktree path is derived from the repo root, never from `$PWD`: a relative
+`../wow-don-issue-N` after a `cd src-tauri` would create the worktree *inside* the repo.
 
 ```bash
 set -euo pipefail
@@ -108,14 +117,14 @@ set -euo pipefail
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
-SLUG=$(echo "<titolo-issue>" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+/-/g' | sed 's/^-//;s/-$//' | tr '-' '\n' | head -5 | paste -sd '-')
-BRANCH="<prefisso><numero-issue>-${SLUG}"
-WORKTREE_DIR="$(dirname "$REPO_ROOT")/wow-don-issue-<numero-issue>"
-BASE_BRANCH="<develop-o-base-esplicita>"
+SLUG=$(echo "<issue-title>" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+/-/g' | sed 's/^-//;s/-$//' | tr '-' '\n' | head -5 | paste -sd '-')
+BRANCH="<prefix><issue-number>-${SLUG}"
+WORKTREE_DIR="$(dirname "$REPO_ROOT")/wow-don-issue-<issue-number>"
+BASE_BRANCH="<develop-or-explicit-base>"
 [ -n "$BASE_BRANCH" ] && [ "$BASE_BRANCH" != "main" ] || { echo "Refusing PR base: $BASE_BRANCH"; exit 1; }
 git fetch origin "$BASE_BRANCH"
 
-# Riusa un worktree già aperto per questo branch.
+# Reuse a worktree already open for this branch.
 EXISTING=$(git worktree list --porcelain | awk -v b="refs/heads/$BRANCH" '
   /^worktree /{wt=substr($0,10)}
   /^branch /{if (substr($0,8)==b) {print wt; exit}}')
@@ -125,9 +134,9 @@ if [ -n "$EXISTING" ]; then
   WORKTREE_DIR="$EXISTING"
   cd "$WORKTREE_DIR"
 else
-  # Tre stati, non due: il branch può esistere senza worktree (il Passo 10 rimuove il
-  # worktree e tiene il branch, che contiene i commit della PR). `worktree add -b`
-  # fallirebbe con "A branch named '<branch>' already exists".
+  # Three states, not two: the branch can exist without a worktree (Step 10 removes the
+  # worktree and keeps the branch, which holds the PR's commits). `worktree add -b`
+  # would fail with "A branch named '<branch>' already exists".
   if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
     echo "Branch $BRANCH exists with no worktree — checking it out"
     git worktree add "$WORKTREE_DIR" "$BRANCH"
@@ -137,114 +146,117 @@ else
   cd "$WORKTREE_DIR"
 fi
 
-# Dipendenze: node_modules non è condiviso tra worktree.
+# Dependencies: node_modules is not shared between worktrees.
 pnpm install --frozen-lockfile
 (cd src-tauri && cargo fetch --locked)
 ```
 
-Il worktree è `<cartella-padre-del-repo>/wow-don-issue-<numero>`:
+The worktree is `<repo-parent-folder>/wow-don-issue-<number>`:
 
-- repo principale: `<workspace>/wow-don`
-- worktree della issue #12: `<workspace>/wow-don-issue-12`
+- main repo: `<workspace>/wow-don`
+- worktree for issue #12: `<workspace>/wow-don-issue-12`
 
-**Verifica prima di modificare qualunque cosa:**
+**Verify before modifying anything:**
 
 ```bash
 [ "$(git rev-parse --show-toplevel)" = "$WORKTREE_DIR" ] || { echo "NOT in worktree — abort"; exit 1; }
 ```
 
-Da qui in poi ogni modifica e ogni comando git girano dentro `$WORKTREE_DIR`. Se il controllo
-fallisce, fermati e rientra nel worktree: non modificare la cartella principale.
+From here on every change and every git command runs inside `$WORKTREE_DIR`. If the check
+fails, stop and go back into the worktree: do not modify the main folder.
 
-Il worktree non ha il file `.env` e non deve averlo: i gate non usano la chiave CurseForge, e
-gli agenti non leggono mai `.env`.
+The worktree needs no environment file and must not have one: the gates use no key, and the app
+reaches CurseForge through the wow-don-proxy Worker (D44). Agents still never read `.env` files: a
+leftover one can hold a real key.
 
-### Passo 5: decidere quante PR, poi implementare
+### Step 5: decide how many PRs, then implement
 
-**Prima di scrivere codice decidi in quante PR va divisa la issue.** Il Passo 7 misura il diff
-finito contro `DEEPSEEK_MAX_DIFF_CHARS` (**90,000** caratteri): oltre quel limite il reviewer
-tronca il diff e ogni file non letto diventa un finding che blocca la PR. Dividere dopo aver
-scritto tutto è il momento più costoso, perché ogni confine va ritagliato dal lavoro finito.
+**Before writing code, decide how many PRs the issue must be split into.** Step 7 measures the
+finished diff against `DEEPSEEK_MAX_DIFF_CHARS` (**90,000** characters): beyond that limit the
+reviewer truncates the diff and every unread file becomes a finding that blocks the PR.
+Splitting after writing everything is the most expensive moment, because every boundary has to
+be cut out of finished work.
 
-Stima dalla issue, non a sensazione:
+Estimate from the issue, not by feel:
 
-- conta le **aree** toccate (backend, frontend);
-- conta i **tipi di superficie** che la issue nomina: un meccanismo, un modello dati, un
-  comando Tauri, una schermata o un controllo UI, uno stato persistente, un client verso una
-  fonte esterna. Un tipo è una PR; due tipi sono di norma due PR;
-- conta i **criteri di accettazione**: oltre sei o sette, i gruppi in cui cadono sono già i
-  confini delle parti;
-- ricorda che i test pesano: un modulo con test veri vale circa tre volte il codice di
-  produzione.
+- count the **areas** touched (backend, frontend);
+- count the **kinds of surface** the issue names: a mechanism, a data model, a Tauri command,
+  a UI screen or control, persistent state, a client for an external source. One kind is one
+  PR; two kinds are normally two PRs;
+- count the **acceptance criteria**: beyond six or seven, the groups they fall into are already
+  the boundaries of the parts;
+- remember that tests weigh: a module with real tests is worth about three times the
+  production code.
 
-Punta a circa 80,000 caratteri per parte, non a 90,000: il limite è un punto di troncamento,
-non un obiettivo. Se il corpo della issue dichiara già un numero di PR, è un minimo da
-verificare, non una risposta: rifai la stima e, se non torna, dillo nella descrizione della PR e
-segui la tua.
+Aim for about 80,000 characters per part, not 90,000: the limit is a truncation point, not a
+target. If the issue body already states a number of PRs, it is a minimum to verify, not an
+answer: redo the estimate and, if it does not match, say so in the PR description and follow
+yours.
 
-**Il confine è uno che il codice traccia già**: il comando Tauri e la UI che lo usa, il
-meccanismo e chi lo chiama, il modello dati e la sua persistenza. Mai un conteggio di caratteri.
-Ogni parte deve compilare, passare i gate e reggersi da sola. In un crate binario "da sola" ha
-un significato per il compilatore: un elemento `pub` raggiungibile solo dai test è `dead_code`
-con `-D warnings`. Sposta il confine oppure usa `#[allow(dead_code)]` con un commento che
-nomina la parte che lo userà, e dillo nella PR.
+**The boundary is one the code already draws**: the Tauri command and the UI that uses it, the
+mechanism and its caller, the data model and its persistence. Never a character count. Each
+part must compile, pass the gates and stand on its own. In a binary crate "on its own" has a
+meaning for the compiler: a `pub` item reachable only from tests is `dead_code` under
+`-D warnings`. Move the boundary or use `#[allow(dead_code)]` with a comment naming the part
+that will use it, and say so in the PR.
 
-Le parti successive si aprono sul branch della parte precedente (`--base <branch-precedente>`):
-la CI gira su PR verso qualunque base. Ogni descrizione dice quale parte è, quante sono, la base
-esatta e il verso in cui la pila va chiusa (la foglia più profonda pronta si unisce per prima
-nella sua base, poi la base sale).
+Later parts are opened on the previous part's branch (`--base <previous-branch>`): CI runs on
+PRs to any base. Each description says which part it is, how many there are, the exact base and
+the direction in which the stack must be closed (the deepest ready leaf merges first into its
+base, then the base moves up).
 
-**Scrivi la stima nella descrizione della PR**, accanto alla misura del Passo 7.
+**Write the estimate in the PR description**, next to the Step 7 measurement.
 
-Poi implementa:
+Then implement:
 
-1. **Rispetta Fuori scope alla lettera**: se una modifica tocca qualcosa di quell'elenco,
-   fermati e rivaluta.
-2. Segui i pattern esistenti.
-3. **Rete, disco e chiave API stanno nel backend.** Il frontend mostra dati e chiama comandi
-   Tauri; non conosce la chiave CurseForge e non fa richieste HTTP verso le fonti.
-4. La chiave non va mai nei log, negli errori restituiti al frontend o nei test.
-5. Nessuna nuova dipendenza (crate o pacchetti npm) senza istruzione esplicita.
-6. Niente segreti nel codice, niente `dbg!`/`println!`/`console.log` di debug lasciati nei
-   percorsi di produzione.
-7. Modifiche chirurgiche: modifica file esistenti quando puoi, creane di nuovi solo se serve.
-8. Gli addon con `allowModDistribution = false` non si scaricano in automatico.
-9. Ogni modifica in `src/` segue la sezione "Interfaccia: minimale e moderna" di `AGENTS.md`;
-   la PR dice in una riga come la rispetta.
+1. **Respect Out of scope to the letter**: if a change touches something on that list, stop and
+   reassess.
+2. Follow the existing patterns.
+3. **Network and disk live in the backend; the app holds no third-party key.** The frontend
+   shows data and calls Tauri commands and makes no HTTP requests to the sources; the backend
+   reaches CurseForge through the wow-don-proxy Worker.
+4. The CurseForge key never reaches the app (D44): no key in the code, the logs, the errors
+   returned to the frontend or the tests.
+5. No new dependencies (crates or npm packages) without explicit instruction.
+6. No secrets in the code, no debug `dbg!`/`println!`/`console.log` left in production paths.
+7. Surgical changes: modify existing files when you can, create new ones only when needed.
+8. Addons with `allowModDistribution = false` are not downloaded automatically.
+9. Every change in `src/` follows the "Interface: minimal and modern" section of `AGENTS.md`;
+   the PR says in one line how it complies.
 
-### Passo 6: gate di qualità (OBBLIGATORI)
+### Step 6: quality gates (REQUIRED)
 
-Questi comandi rispecchiano `.github/workflows/ci.yml`. Quello che salti qui diventa una PR
-rossa e un round di review DeepSeek sprecato: il budget è di un round.
+These commands mirror `.github/workflows/ci.yml`. Whatever you skip here becomes a red PR and a
+wasted DeepSeek review round: the budget is one round.
 
-Dentro il worktree, per **ogni** area toccata dal diff
-(`git diff --name-only "origin/$BASE_BRANCH"...HEAD` più le modifiche non ancora committate):
+Inside the worktree, for **every** area touched by the diff
+(`git diff --name-only "origin/$BASE_BRANCH"...HEAD` plus the changes not yet committed):
 
-| Area | Comando |
+| Area | Command |
 | ---- | ------- |
 | backend (`src-tauri/**`) | `cd src-tauri && cargo fmt --all --check && cargo clippy --all-targets --locked -- -D warnings && cargo build --locked && cargo test --locked` |
 | frontend (`src/**`, `public/**`, `index.html`, `vite.config.ts`, `tsconfig*.json`) | `pnpm install --frozen-lockfile && pnpm build && pnpm test` |
-| `package.json` / `pnpm-lock.yaml` | entrambe le righe sopra |
+| `package.json` / `pnpm-lock.yaml` | both rows above |
 
-`pnpm build` è `tsc && vite build`: type-check e bundle insieme. `pnpm test` esegue i
-`src/**/*.test.ts` con `node --test` (Node 22.18 o successivo toglie i tipi da solo).
+`pnpm build` is `tsc && vite build`: type-check and bundle together. `pnpm test` runs the
+`src/**/*.test.ts` files with `node --test` (Node 22.18 or later strips the types on its own).
 
-**Il verdetto di un gate è il suo exit status, e quello di una pipeline è dell'ultimo
-comando.** `cargo clippy ... 2>&1 | tail -5 && echo OK` stampa `OK` su un clippy fallito: clippy
-esce 1, `tail` esce 0. Le catene sopra usano `&&` per questo: eseguile come sono scritte. Se
-l'output è troppo lungo, tieni lo stato e taglia il testo a parte:
+**A gate's verdict is its exit status, and a pipeline's is that of its last command.**
+`cargo clippy ... 2>&1 | tail -5 && echo OK` prints `OK` on a failed clippy: clippy exits 1,
+`tail` exits 0. The chains above use `&&` for this reason: run them as written. If the output
+is too long, keep the status and trim the text separately:
 
 ```bash
 status=0
 cargo clippy --all-targets --locked -- -D warnings > /tmp/clippy.txt 2>&1 || status=$?
 tail -20 /tmp/clippy.txt
-[ "$status" -eq 0 ]   # ← il verdetto, letto dal gate e non dal pager
+[ "$status" -eq 0 ]   # ← the verdict, read from the gate and not from the pager
 ```
 
-`|| status=$?` e non `; status=$?`: con `set -e` attivo (il Passo 4 lo attiva) un comando
-fallito fuori da una lista `||` chiude la shell prima che `tail` mostri il perché.
+`|| status=$?` and not `; status=$?`: with `set -e` active (Step 4 turns it on) a failed
+command outside an `||` list closes the shell before `tail` shows why.
 
-**Ogni PR esegue anche la suite di automazione**, comprese quelle solo di documentazione:
+**Every PR also runs the automation suite**, documentation-only ones included:
 
 ```bash
 failed=0
@@ -253,59 +265,60 @@ for t in scripts/test/*.test.sh; do
   bash "$t" || { echo "FAILED: $t"; failed=1; }
 done
 python3 .github/scripts/test_deepseek_review.py || failed=1
-[ "$failed" -eq 0 ]  # ← lo stato di uscita del blocco È il verdetto; non togliere questa riga
+[ "$failed" -eq 0 ]  # ← the block's exit status IS the verdict; do not remove this line
 ```
 
-Il glob è l'istruzione: non elencare i file a mano, la lista resterebbe indietro rispetto alla
-cartella. L'ultima riga è portante: con `break` al posto del flag il ciclo uscirebbe 0 su un
-test fallito.
+The glob is the instruction: do not list the files by hand, the list would fall behind the
+folder. The last line is load-bearing: with `break` instead of the flag the loop would exit 0
+on a failed test.
 
-Se modifichi una skill in `.claude/skills/`, rigenera gli adapter
-(`bash scripts/sync-agent-skills.sh`) e committa le tre copie insieme.
+If you modify a skill in `.claude/skills/`, regenerate the adapters
+(`bash scripts/sync-agent-skills.sh`) and commit the three copies together.
 
-La formattazione è il gate saltato più spesso e quello che arrossa più spesso la CI. Correggi con
-`cargo fmt --all`, segui i messaggi di clippy, poi riesegui l'intero gate.
+Formatting is the most often skipped gate and the one that turns CI red most often. Fix it with
+`cargo fmt --all`, follow clippy's messages, then rerun the whole gate.
 
-**Definition of Done (verificata prima della PR):**
+**Definition of Done (verified before the PR):**
 
-- [ ] Formattazione pulita (`cargo fmt --check`)
-- [ ] Lint pulito (`cargo clippy -D warnings`)
-- [ ] Build backend (`cargo build --locked`) e frontend (`pnpm build`) riuscite
-- [ ] Test verdi (`cargo test --locked`)
-- [ ] Suite di automazione verde
-- [ ] Nessuna stampa di debug nel codice di produzione
-- [ ] Nessun segreto, token o chiave nel codice o nei test
-- [ ] Chiave API solo nel backend, mai nel frontend né nei log
-- [ ] Privacy di pubblicazione pulita: `check-publication-privacy.sh` sull'indice e su ogni
-      commit del branch, `check-commit-privacy.sh` su autore e messaggi dei commit del branch
+- [ ] Clean formatting (`cargo fmt --check`)
+- [ ] Clean lint (`cargo clippy -D warnings`)
+- [ ] Backend (`cargo build --locked`) and frontend (`pnpm build`) builds succeed
+- [ ] Tests green (`cargo test --locked`)
+- [ ] Automation suite green
+- [ ] No debug prints in production code
+- [ ] No secrets, tokens or keys in the code or the tests
+- [ ] No CurseForge key in the app, the logs or the tests (D44)
+- [ ] Clean publication privacy: `check-publication-privacy.sh` on the index and on every
+      commit of the branch, `check-commit-privacy.sh` on author and messages of the branch's
+      commits
 
-### Passo 7: commit, poi misura quello che il reviewer dovrà leggere
+### Step 7: commit, then measure what the reviewer will have to read
 
-DeepSeek scrive il ragionamento nello stesso budget di output del verdetto: un diff troppo
-grande può esaurirlo e non restituire niente. Il limite di `DEEPSEEK_MAX_DIFF_CHARS` è
-**90,000** caratteri; oltre, il diff viene troncato e ogni file non letto diventa un finding che
-blocca la PR finché qualcuno non lo legge e lo dichiara pubblicamente. Un umano può dare questo
-riconoscimento; `/process-pr` può farlo solo con la sua sequenza documentata, datata e basata su
-prove. Nessuno dei due è un esito da cercare apposta.
+DeepSeek writes its reasoning in the same output budget as the verdict: a diff that is too
+large can exhaust it and return nothing. The `DEEPSEEK_MAX_DIFF_CHARS` limit is **90,000**
+characters; beyond it, the diff is truncated and every unread file becomes a finding that
+blocks the PR until someone reads it and declares so publicly. A human can give this
+acknowledgement; `/process-pr` can do it only with its documented, dated, evidence-based
+sequence. Neither is an outcome to aim for.
 
-**Prima il commit, poi la misura.** `git diff "origin/$BASE_BRANCH"...HEAD` confronta commit:
-su un albero non committato risponde `0` qualunque sia il lavoro in sospeso.
+**Commit first, then measure.** `git diff "origin/$BASE_BRANCH"...HEAD` compares commits: on an
+uncommitted tree it answers `0` whatever work is pending.
 
 ```bash
 git add -A
-git commit -m "<tipo-conventional-commit>: <descrizione concisa>
+git commit -m "<conventional-commit-type>: <concise description>
 
-Implements #<numero-issue>
+Implements #<issue-number>
 
-- <modifica principale>
-- <modifica principale>"
+- <main change>
+- <main change>"
 
-# Quello che il reviewer vede davvero: il codice generato e i lockfile sono esclusi per
-# nome, quindi escludili anche qui. `wc -m` e non `wc -c`: il limite è in caratteri.
-# Due pathspec per lockfile: senza `:(glob)` un pathspec è ancorato alla radice, quindi
-# `Cargo.lock` da solo non esclude `src-tauri/Cargo.lock`. Il reviewer confronta il
-# basename a qualunque profondità (`is_generated_path` in .github/scripts/deepseek_review.py);
-# scripts/test/diff-measure-parity.test.sh tiene allineate le due liste.
+# What the reviewer actually sees: generated code and lockfiles are excluded by
+# name, so exclude them here too. `wc -m` and not `wc -c`: the limit is in characters.
+# Two pathspecs per lockfile: without `:(glob)` a pathspec is anchored at the root, so
+# `Cargo.lock` alone does not exclude `src-tauri/Cargo.lock`. The reviewer matches the
+# basename at any depth (`is_generated_path` in .github/scripts/deepseek_review.py);
+# scripts/test/diff-measure-parity.test.sh keeps the two lists aligned.
 REVIEWABLE=$(git diff "origin/$BASE_BRANCH"...HEAD -- . \
   ':(exclude)gen/*' ':(exclude)*/gen/*' ':(exclude)*_generated.*' \
   ':(exclude)Cargo.lock' ':(exclude)*/Cargo.lock' \
@@ -314,32 +327,32 @@ REVIEWABLE=$(git diff "origin/$BASE_BRANCH"...HEAD -- . \
 echo "reviewable diff: ${REVIEWABLE} characters (cap 90,000)"
 ```
 
-**Misura contro la base su cui la parte verrà davvero aperta.** Una parte nata dalla parte
-precedente e aperta su di essa misura solo sé stessa. Misurarla contro `develop` mentre la parte
-precedente non è unita conta anche i commit di quella.
+**Measure against the base the part will actually be opened on.** A part born from the
+previous part and opened on it measures only itself. Measuring it against `develop` while the
+previous part is not merged also counts that part's commits.
 
-**Se devi cambiare la base di una PR, fallo prima del push.** Il cambio di base genera
-`pull_request` con azione `edited`, che non è tra i tipi di attività predefiniti: da solo non
-rilancia niente. Prima cambia la base, poi fai il push, così è il push a far partire la CI.
+**If you have to change a PR's base, do it before the push.** Changing the base generates
+`pull_request` with action `edited`, which is not among the default activity types: on its own
+it relaunches nothing. Change the base first, then push, so that the push starts CI.
 
-**Se la misura supera il limite, la stima era sbagliata e il lavoro va diviso prima di aprire
-qualunque PR**, lungo un confine come quelli del Passo 5, in quante parti servono. Se le parti
-non possono reggersi da sole, dillo e chiedi all'utente invece di aprire pezzi che non
-compilano.
+**If the measurement exceeds the limit, the estimate was wrong and the work must be split
+before opening any PR**, along a boundary like those in Step 5, into as many parts as needed.
+If the parts cannot stand on their own, say so and ask the user instead of opening pieces that
+do not compile.
 
-Annota nella PR la stima del Passo 5 accanto alla misura: due numeri rendono la stima
-verificabile.
+Note the Step 5 estimate in the PR next to the measurement: two numbers make the estimate
+verifiable.
 
-### Passo 8: push e PR
+### Step 8: push and PR
 
-Prima del push i due controlli di privacy: il contenuto (l'indice e ogni commit che il branch
-aggiunge, uno per uno) e i metadati dei commit (autore, committer e messaggio). Prima di creare la PR, il corpo. Un controllo fallito
-blocca la pubblicazione anche con tutti i gate verdi: togli il dato prima di continuare, senza
-ristamparlo in un altro messaggio. Il corpo di una PR descrive quello che hai appena fatto, e
-l'hai fatto in una cartella con un nome: scrivi `<worktree>` o `<repo-root>`, mai il percorso.
+Before the push, the two privacy checks: the content (the index and every commit the branch
+adds, one by one) and the commit metadata (author, committer and message). Before creating the PR, the body. A failed check
+blocks publication even with all gates green: remove the data before continuing, without
+reprinting it in another message. A PR body describes what you just did, and you did it in a
+folder with a name: write `<worktree>` or `<repo-root>`, never the path.
 
 ```bash
-# Dal worktree, con il commit del Passo 7 già fatto:
+# From the worktree, with the Step 7 commit already made:
 bash scripts/check-publication-privacy.sh "origin/$BASE_BRANCH" HEAD
 bash scripts/check-commit-privacy.sh "origin/$BASE_BRANCH" HEAD
 git push -u origin HEAD
@@ -347,65 +360,67 @@ git push -u origin HEAD
 PR_BODY=$(mktemp)
 trap 'rm -f "$PR_BODY"' EXIT
 cat >"$PR_BODY" <<'EOF'
-## Sintesi
+## Summary
 
-Closes #<numero-issue>
+Closes #<issue-number>
 
-### Modifiche
-- <modifiche principali>
+### Changes
+- <main changes>
 
-### Dimensione per la review
-- Stima prima dell'implementazione: <stima e ragionamento>
-- Diff misurato: <REVIEWABLE> caratteri
+### Review size
+- Estimate before implementation: <estimate and reasoning>
+- Measured diff: <REVIEWABLE> characters
 
-### Gate eseguiti
+### Gates run
 - [x] cargo fmt / clippy
-- [x] build backend e frontend
-- [x] test — tutti verdi
-- [x] suite di automazione
+- [x] backend and frontend build
+- [x] tests — all green
+- [x] automation suite
 
-### Verifica dei criteri di accettazione
-<ogni criterio, spuntato oppure non spuntato con la spiegazione>
+### Acceptance criteria check
+<each criterion, ticked or unticked with the explanation>
 
-### Fuori scope (verificato)
-<conferma che niente dell'elenco Fuori scope è stato toccato>
+### Out of scope (verified)
+<confirmation that nothing on the Out of scope list was touched>
 EOF
 
 bash scripts/check-body-privacy.sh <"$PR_BODY"
 gh pr create \
   --base "$BASE_BRANCH" \
-  --title "<titolo-issue>" \
+  --title "<issue-title>" \
   --body-file "$PR_BODY"
 ```
 
-**Per correggere titolo o corpo di una PR non usare `gh pr edit`.** Su `gh` 2.45.0 il suo
-pre-fetch dei Projects classic fallisce prima di applicare qualunque flag. Usa
-`bash scripts/gh-automation.sh pr-edit <pr> --title "<titolo>" --body-file <path>`, che scrive
-via REST e rilegge i campi prima di dichiarare successo.
+The PR title, the PR body and the commit messages are written in English.
 
-Spunta solo le caselle che hai eseguito davvero. Una casella vuota con una riga di motivazione è
-utile; una spuntata e falsa avvelena ogni review successiva.
+**To fix a PR's title or body do not use `gh pr edit`.** On `gh` 2.45.0 its Projects classic
+pre-fetch fails before applying any flag. Use
+`bash scripts/gh-automation.sh pr-edit <pr> --title "<title>" --body-file <path>`, which writes
+via REST and rereads the fields before declaring success.
 
-**Target della PR**: `develop` di default; un `--base` esplicito può puntare a un altro branch di
-feature. Mai aprire o ridirigere una PR verso `main`, mai push diretto su `main`, mai merge verso
-`main`. Il merge verso basi diverse da `main` è autorizzato, ma **non da questa skill**:
-`/dev-issue` esce alla creazione della PR, prima che la CI abbia detto qualcosa.
+Tick only the boxes you actually ran. An empty box with a line of reasoning is useful; a ticked
+and false one poisons every later review.
 
-### Passo 9: uscita
+**PR target**: `develop` by default; an explicit `--base` can point at another feature branch.
+Never open or retarget a PR to `main`, never push directly to `main`, never merge into `main`.
+Merging into bases other than `main` is authorised, but **not by this skill**: `/dev-issue`
+exits at PR creation, before CI has said anything.
 
-Riporta all'utente:
+### Step 9: exit
 
-- nome del branch
-- numero e URL della PR
-- cartella del worktree
-- che la review DeepSeek partirà da sola con `deepseek-pr-review.yml`
+Report to the user:
 
-**NON** aspettare la CI, non controllare le review, non fare merge.
+- the branch name
+- the PR number and URL
+- the worktree folder
+- that the DeepSeek review will start on its own with `deepseek-pr-review.yml`
 
-### Passo 10: rimuovere il worktree
+Do **NOT** wait for CI, do not check reviews, do not merge.
+
+### Step 10: remove the worktree
 
 ```bash
-# Torna al repo principale (ricavato, non scritto a mano)
+# Go back to the main repo (derived, not hard-coded)
 MAIN_REPO=$(git rev-parse --path-format=absolute --git-common-dir)
 MAIN_REPO=$(dirname "$MAIN_REPO")
 cd "$MAIN_REPO"
@@ -414,16 +429,16 @@ git worktree remove "$WORKTREE_DIR"
 git worktree prune
 ```
 
-Conferma: "Worktree rimosso: `$WORKTREE_DIR`".
+Confirm: "Worktree removed: `$WORKTREE_DIR`".
 
-Se `git worktree remove` fallisce (modifiche non committate), avvisa l'utente e dai il comando
-per la pulizia manuale. `node_modules` e `src-tauri/target` sono ignorati da git e non bloccano
-la rimozione.
+If `git worktree remove` fails (uncommitted changes), warn the user and give the command for
+manual cleanup. `node_modules` and `src-tauri/target` are ignored by git and do not block the
+removal.
 
-## Riferimenti
+## References
 
-- Template delle issue: `.github/ISSUE_TEMPLATE/`
+- Issue templates: `.github/ISSUE_TEMPLATE/`
 - Pipeline: `AGENTS.md`
-- Gate (fonte di verità): `.github/workflows/ci.yml`
-- Protezione dei branch: `.github/branch-protection.md`
+- Gates (source of truth): `.github/workflows/ci.yml`
+- Branch protection: `.github/branch-protection.md`
 - Helper: `scripts/gh-automation.sh`

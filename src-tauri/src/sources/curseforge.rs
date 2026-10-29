@@ -1,14 +1,13 @@
-//! Client per l'API di CurseForge (`https://api.curseforge.com`, documentazione su
-//! docs.curseforge.com/rest-api).
+//! Client for the CurseForge API (documentation at docs.curseforge.com/rest-api).
 //!
-//! La chiave viaggia solo nell'header `x-api-key` delle richieste verso [`BASE_URL`] e non
-//! compare mai in messaggi d'errore, nel `Debug` o nei log (D10). Gli zip si scaricano dalla
-//! CDN senza chiave, solo da host di CurseForge e con un limite di dimensione. Il trasporto HTTP
-//! sta dietro [`Transport`]: i test provano il parsing e gli errori con risposte scritte a mano,
-//! senza rete e senza chiave.
+//! The app never holds a CurseForge key (D44): it calls the wow-don-proxy Worker at
+//! [`PROXY_URL`], which answers the same `/v1/...` paths and adds the key on Cloudflare's side.
+//! Zips are downloaded from the CDN, only from CurseForge hosts and with a size limit. The HTTP
+//! transport sits behind [`Transport`]: the tests exercise parsing and errors with hand-written
+//! responses, without the network.
 
-// Alcune parti servono solo al test live (`version_types`) o arriveranno con M3 (campi dei file
-// e dei mod per il download): sono già qui perché descrivono l'API, non il loro uso.
+// Some parts are only used by the live test (`version_types`) or will arrive with M3 (file and
+// mod fields for the download): they are already here because they describe the API, not their use.
 #![allow(dead_code)]
 
 use std::fmt;
@@ -19,16 +18,17 @@ use super::http::{DownloadProgress, transport_error};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const BASE_URL: &str = "https://api.curseforge.com";
-/// Id di World of Warcraft nell'API di CurseForge.
+/// The wow-don-proxy Worker (D44): CurseForge's `/v1/...` paths, without a key in the app.
+pub const PROXY_URL: &str = "https://wow-don-proxy.fabiosm46.workers.dev";
+/// World of Warcraft's id in the CurseForge API.
 pub const WOW_GAME_ID: u32 = 1;
-/// `releaseType` dei file stabili.
+/// `releaseType` of stable files.
 pub const RELEASE_TYPE_RELEASE: u8 = 1;
-/// `releaseType` dei file Beta (`FileReleaseType`: 1 Release, 2 Beta, 3 Alpha).
+/// `releaseType` of Beta files (`FileReleaseType`: 1 Release, 2 Beta, 3 Alpha).
 pub const RELEASE_TYPE_BETA: u8 = 2;
-/// La regola di scelta di un file per una versione del gioco, una sola per ricerca,
-/// installazione e aggiornamento (issue #141): il Release più recente; se non c'è e `allow_beta`
-/// è vero, la Beta più recente. Mai Alpha. `newest` ordina i candidati dello stesso tipo.
+/// The rule for choosing a file for a game version, a single one for search,
+/// installation and update (issue #141): the most recent Release; if there is none and `allow_beta`
+/// is true, the most recent Beta. Never Alpha. `newest` orders candidates of the same type.
 pub fn pick_file<T: Copy, K: Ord>(
     candidates: impl IntoIterator<Item = T>,
     release_type: impl Fn(T) -> u8,
@@ -52,59 +52,34 @@ pub fn pick_file<T: Copy, K: Ord>(
     })
 }
 
-/// `relationType` di una dipendenza obbligatoria. I valori di `FileRelationType`
-/// (docs.curseforge.com/rest-api, verificati il 2026-10-24): 1 EmbeddedLibrary,
+/// `relationType` of a required dependency. The values of `FileRelationType`
+/// (docs.curseforge.com/rest-api, verified on 2026-10-24): 1 EmbeddedLibrary,
 /// 2 OptionalDependency, 3 RequiredDependency, 4 Tool, 5 Incompatible, 6 Include.
 pub const RELATION_REQUIRED_DEPENDENCY: u8 = 3;
-/// Dimensione massima di uno zip scaricato. Gli addon più grandi pesano poche decine di MiB.
+/// Maximum size of a downloaded zip. The largest addons weigh a few tens of MiB.
 pub const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
-/// I domini da cui si scaricano gli zip, con i loro sottodomini.
+/// The domains from which zips are downloaded, with their subdomains.
 const DOWNLOAD_DOMAINS: [&str; 2] = ["forgecdn.net", "curseforge.com"];
-/// I domini delle immagini della gallery mostrate nel dettaglio, con i loro sottodomini: solo
-/// il CDN, non il sito.
+/// The domains of the gallery images shown in the detail view, with their subdomains: only
+/// the CDN, not the site.
 const MEDIA_DOMAINS: [&str; 1] = ["forgecdn.net"];
 
-/// La chiave API. Il `Debug` non la mostra.
-#[derive(Clone)]
-pub struct ApiKey(String);
-
-impl ApiKey {
-    pub fn new(key: String) -> Self {
-        Self(key)
-    }
-
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for ApiKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("ApiKey(***)")
-    }
-}
-
-// ── Trasporto ───────────────────────────────────────────────────────────────
+// ── Transport ───────────────────────────────────────────────────────────────
 
 pub trait Transport: Send + Sync {
-    /// Richiesta all'API, con la chiave.
-    fn get(&self, url: &str, api_key: &ApiKey) -> Result<HttpResponse, TransportError>;
-    /// Richiesta all'API, con la chiave.
-    fn post_json(
-        &self,
-        url: &str,
-        api_key: &ApiKey,
-        body: String,
-    ) -> Result<HttpResponse, TransportError>;
-    /// Scarica un file **senza chiave**. Un corpo più lungo di `max_len` byte dà
-    /// [`TransportError::TooLarge`] senza tenerne in memoria più di `max_len`.
+    /// Request to the API.
+    fn get(&self, url: &str) -> Result<HttpResponse, TransportError>;
+    /// Request to the API with a JSON body.
+    fn post_json(&self, url: &str, body: String) -> Result<HttpResponse, TransportError>;
+    /// Downloads a file. A body longer than `max_len` bytes gives
+    /// [`TransportError::TooLarge`] without holding more than `max_len` of it in memory.
     ///
-    /// Non controlla l'URL: chi chiama deve averlo già validato con `is_download_url`, come fa
-    /// [`CurseForgeClient::download`]. Il trasporto reale applica la stessa regola solo ai
-    /// redirect.
+    /// Does not check the URL: the caller must already have validated it with `is_download_url`, as
+    /// [`CurseForgeClient::download`] does. The real transport applies the same rule only to
+    /// redirects.
     fn get_bytes(&self, url: &str, max_len: u64) -> Result<BytesResponse, TransportError>;
-    /// Come [`get_bytes`](Self::get_bytes), riportando a `progress` i byte scaricati. Senza una
-    /// versione propria il trasporto riporta solo la fine.
+    /// Like [`get_bytes`](Self::get_bytes), reporting the downloaded bytes to `progress`. Without
+    /// its own version the transport reports only the end.
     fn get_bytes_with_progress(
         &self,
         url: &str,
@@ -118,13 +93,12 @@ pub trait Transport: Send + Sync {
     }
 }
 
-/// Il trasporto reale: `reqwest` bloccante con TLS `rustls`. Va usato fuori dal thread
-/// principale (i comandi lo chiamano dentro `spawn_blocking`).
+/// The real transport: blocking `reqwest` with `rustls` TLS. Must be used off the main
+/// thread (the commands call it inside `spawn_blocking`).
 pub struct ReqwestTransport {
-    /// Per l'API: non segue i redirect, perché `x-api-key` non è un header che `reqwest` toglie
-    /// passando a un altro host.
+    /// For the API: does not follow redirects, so a request never leaves the proxy's host.
     api: reqwest::blocking::Client,
-    /// Per gli zip: segue i redirect solo verso host di download ammessi.
+    /// For the zips: follows redirects only to allowed download hosts.
     downloads: reqwest::blocking::Client,
 }
 
@@ -132,7 +106,7 @@ impl ReqwestTransport {
     pub fn new() -> Result<Self, CurseForgeError> {
         let builder = || {
             reqwest::blocking::Client::builder()
-                // Vale per la connessione e per ogni lettura, non per l'intero download.
+                // Applies to the connection and to every read, not to the whole download.
                 .timeout(Duration::from_secs(30))
                 .user_agent(concat!("wow-don/", env!("CARGO_PKG_VERSION")))
         };
@@ -165,25 +139,14 @@ impl ReqwestTransport {
 }
 
 impl Transport for ReqwestTransport {
-    fn get(&self, url: &str, api_key: &ApiKey) -> Result<HttpResponse, TransportError> {
-        self.send(
-            self.api
-                .get(url)
-                .header("x-api-key", api_key.expose())
-                .header("accept", "application/json"),
-        )
+    fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
+        self.send(self.api.get(url).header("accept", "application/json"))
     }
 
-    fn post_json(
-        &self,
-        url: &str,
-        api_key: &ApiKey,
-        body: String,
-    ) -> Result<HttpResponse, TransportError> {
+    fn post_json(&self, url: &str, body: String) -> Result<HttpResponse, TransportError> {
         self.send(
             self.api
                 .post(url)
-                .header("x-api-key", api_key.expose())
                 .header("accept", "application/json")
                 .header("content-type", "application/json")
                 .body(body),
@@ -204,45 +167,48 @@ impl Transport for ReqwestTransport {
     }
 }
 
-/// Un URL da cui si può scaricare: `https`, senza credenziali né porta esplicita, verso un
-/// dominio di [`DOWNLOAD_DOMAINS`] o un suo sottodominio.
+/// A URL that can be downloaded from: `https`, without credentials or an explicit port, to a
+/// domain of [`DOWNLOAD_DOMAINS`] or one of its subdomains.
 fn is_download_url(url: &reqwest::Url) -> bool {
     super::http::is_allowed_url(url, &DOWNLOAD_DOMAINS)
 }
 
-/// Un'immagine che il frontend può mostrare: un URL valido con la stessa regola dei download
-/// ([`super::http::is_allowed_url`]), ma solo verso un dominio di [`MEDIA_DOMAINS`]. Il backend
-/// non la scarica: il frontend la carica con `<img src>` come il logo dei risultati.
+/// An image the frontend can show: a valid URL under the same rule as downloads
+/// ([`super::http::is_allowed_url`]), but only to a domain of [`MEDIA_DOMAINS`]. The backend
+/// does not download it: the frontend loads it with `<img src>` like the results' logo.
 pub fn is_media_url(url: &str) -> bool {
     reqwest::Url::parse(url).is_ok_and(|url| super::http::is_allowed_url(&url, &MEDIA_DOMAINS))
 }
 
-// ── Errori ──────────────────────────────────────────────────────────────────
+// ── Errors ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CurseForgeError {
-    MissingKey,
-    KeyRejected,
+    /// The client has no address to reach CurseForge (only in tests: the app always has one).
+    NotConfigured,
+    /// The proxy refused the request (401, 403).
+    Refused,
+    /// The proxy cannot reach CurseForge right now, or is switched off (502, 503).
+    Unavailable,
     RateLimited,
     Http(u16),
     Network(TransportError),
     InvalidResponse,
-    /// Il file non ha `downloadUrl`: l'autore non permette il download da app di terzi (D13).
+    /// No `downloadUrl`: the author does not allow downloads from third-party apps (D13).
     DownloadNotAllowed,
-    /// `downloadUrl` non è un indirizzo `https` di CurseForge.
+    /// `downloadUrl` is not a CurseForge `https` address.
     DownloadUrlRejected,
-    /// Lo zip supera [`MAX_DOWNLOAD_BYTES`].
+    /// The zip exceeds [`MAX_DOWNLOAD_BYTES`].
     DownloadTooLarge,
 }
 
 impl fmt::Display for CurseForgeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingKey => {
-                f.write_str("CurseForge key missing: set CURSEFORGE_API_KEY in the .env file.")
-            }
-            Self::KeyRejected => {
-                f.write_str("CurseForge rejected the key: check CURSEFORGE_API_KEY.")
+            Self::NotConfigured => f.write_str("CurseForge is not configured in this build."),
+            Self::Refused => f.write_str("The WoW-don CurseForge service refused the request."),
+            Self::Unavailable => {
+                f.write_str("CurseForge is temporarily unavailable: try again in a few minutes.")
             }
             Self::RateLimited => {
                 f.write_str("Too many requests to CurseForge: try again in a few minutes.")
@@ -274,7 +240,7 @@ impl fmt::Display for CurseForgeError {
 
 impl std::error::Error for CurseForgeError {}
 
-// ── Modello dei dati ────────────────────────────────────────────────────────
+// ── Data model ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 struct Envelope<T> {
@@ -288,9 +254,9 @@ pub struct FingerprintMatches {
     pub exact_matches: Vec<FingerprintMatch>,
     #[serde(deserialize_with = "null_as_default")]
     pub exact_fingerprints: Vec<u64>,
-    /// File di cui combacia solo una parte delle cartelle (un addon installato in parte, una
-    /// cartella modificata, versioni miste). Ogni cartella va abbinata al file i cui `modules`
-    /// contengono il suo fingerprint, e solo se non c'è un match esatto.
+    /// Files of which only some of the folders match (a partially installed addon, a
+    /// modified folder, mixed versions). Each folder must be matched to the file whose `modules`
+    /// contain its fingerprint, and only if there is no exact match.
     #[serde(deserialize_with = "null_as_default")]
     pub partial_matches: Vec<FingerprintMatch>,
     #[serde(deserialize_with = "null_as_default")]
@@ -300,7 +266,7 @@ pub struct FingerprintMatches {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FingerprintMatch {
-    /// Id del mod (progetto).
+    /// Id of the mod (project).
     pub id: u32,
     pub file: File,
     #[serde(default, deserialize_with = "null_as_default")]
@@ -314,10 +280,10 @@ pub struct File {
     pub mod_id: u32,
     #[serde(default, deserialize_with = "null_as_default")]
     pub display_name: String,
-    /// Identifica il file da scaricare: assente o `null` resta `None`, mai un nome vuoto.
+    /// Identifies the file to download: absent or `null` stays `None`, never an empty name.
     #[serde(default)]
     pub file_name: Option<String>,
-    /// Data ISO 8601, per esempio `2026-10-01T12:00:00Z`.
+    /// ISO 8601 date, for example `2026-10-01T12:00:00Z`.
     #[serde(default, deserialize_with = "null_as_default")]
     pub file_date: String,
     pub release_type: u8,
@@ -331,21 +297,21 @@ pub struct File {
     pub modules: Vec<FileModule>,
     #[serde(default = "available", deserialize_with = "null_as_available")]
     pub is_available: bool,
-    /// Indirizzo dello zip sulla CDN. Assente o `null` quando l'autore non permette il download
-    /// da app di terzi (D13).
+    /// Address of the zip on the CDN. Absent or `null` when the author does not allow downloads
+    /// from third-party apps (D13).
     #[serde(default)]
     pub download_url: Option<String>,
-    /// I progetti da cui il file dipende, con il tipo di relazione.
+    /// The projects the file depends on, with the relation type.
     #[serde(default, deserialize_with = "null_as_default")]
     pub dependencies: Vec<FileDependency>,
 }
 
-/// Una dipendenza di un file (`FileDependency`).
+/// A dependency of a file (`FileDependency`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileDependency {
     pub mod_id: u32,
-    /// Un valore di `FileRelationType`, vedi [`RELATION_REQUIRED_DEPENDENCY`].
+    /// A value of `FileRelationType`, see [`RELATION_REQUIRED_DEPENDENCY`].
     pub relation_type: u8,
 }
 
@@ -353,12 +319,12 @@ fn available() -> bool {
     true
 }
 
-/// L'API a volte manda `null` dove ci si aspetta una lista o un testo descrittivo (per esempio
-/// `"unmatchedFingerprints": null`): `null` vale come il valore vuoto, come un campo assente.
+/// The API sometimes sends `null` where a list or a descriptive text is expected (for example
+/// `"unmatchedFingerprints": null`): `null` counts as the empty value, like an absent field.
 ///
-/// Solo per liste e testi descrittivi. Gli identificativi (id, `fileName`, `releaseType`,
-/// fingerprint, nome del mod) restano rigorosi o diventano `Option`: un `0` o un nome vuoto al
-/// posto di un dato mancante sembrerebbero validi a chi li usa.
+/// Only for lists and descriptive texts. Identifiers (ids, `fileName`, `releaseType`,
+/// fingerprints, mod name) stay strict or become `Option`: a `0` or an empty name in
+/// place of missing data would look valid to whoever uses them.
 fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -398,16 +364,16 @@ pub struct Mod {
     pub name: String,
     #[serde(default, deserialize_with = "null_as_default")]
     pub slug: String,
-    /// Assente vuol dire sconosciuto: chi lo usa per i download lo tratta come `false`.
+    /// Absent means unknown: whoever uses it for downloads treats it as `false`.
     #[serde(default)]
     pub allow_mod_distribution: Option<bool>,
     #[serde(default, deserialize_with = "null_as_default")]
     pub links: ModLinks,
     #[serde(default, deserialize_with = "null_as_default")]
     pub latest_files_indexes: Vec<FileIndex>,
-    /// Gli ultimi file del progetto, come i `latestFiles` di un match dei fingerprint (stesso
-    /// schema `File`, con `sortableGameVersions` e `isAvailable`): servono al controllo dei
-    /// progetti riconosciuti dai record dell'app (issue #216).
+    /// The project's latest files, like the `latestFiles` of a fingerprint match (same
+    /// `File` schema, with `sortableGameVersions` and `isAvailable`): they serve the check of
+    /// projects recognised from the app's records (issue #216).
     #[serde(default, deserialize_with = "null_as_default")]
     pub latest_files: Vec<File>,
 }
@@ -416,9 +382,9 @@ pub struct Mod {
 #[serde(rename_all = "camelCase", default)]
 pub struct ModLinks {
     pub website_url: Option<String>,
-    /// Il repository dei sorgenti dichiarato dall'autore (per esempio
-    /// `https://github.com/Nevcairiel/Bartender4`): assente o `null` resta `None`. Serve al
-    /// mirror GitHub dei progetti bloccati (`github_mirror`, issue #162).
+    /// The source repository declared by the author (for example
+    /// `https://github.com/Nevcairiel/Bartender4`): absent or `null` stays `None`. Used by the
+    /// GitHub mirror of blocked projects (`github_mirror`, issue #162).
     pub source_url: Option<String>,
 }
 
@@ -447,7 +413,7 @@ pub struct GameVersionType {
     pub slug: String,
 }
 
-/// Un mod come lo restituisce la ricerca: [`Mod`] più i campi descrittivi del catalogo.
+/// A mod as the search returns it: [`Mod`] plus the catalogue's descriptive fields.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogMod {
@@ -459,20 +425,20 @@ pub struct CatalogMod {
     pub authors: Vec<ModAuthor>,
     #[serde(default, deserialize_with = "count")]
     pub download_count: u64,
-    /// Data ISO 8601 dell'ultima modifica del progetto.
+    /// ISO 8601 date of the project's last modification.
     #[serde(default, deserialize_with = "null_as_default")]
     pub date_modified: String,
     #[serde(default, deserialize_with = "null_as_default")]
     pub categories: Vec<Category>,
     #[serde(default)]
     pub logo: Option<ModAsset>,
-    /// La gallery del progetto, nell'ordine dell'API; assente o `null` vale vuota.
+    /// The project's gallery, in API order; absent or `null` counts as empty.
     #[serde(default, deserialize_with = "null_as_default")]
     pub screenshots: Vec<ModAsset>,
 }
 
-/// Un conteggio descrittivo: `null` vale 0, e un numero con la virgola (l'API ne manda per
-/// alcuni progetti) si tronca invece di far fallire tutta la risposta.
+/// A descriptive count: `null` counts as 0, and a number with a fractional part (the API sends
+/// some for a few projects) is truncated instead of failing the whole response.
 fn count<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -480,7 +446,7 @@ where
     let value = Option::<serde_json::Number>::deserialize(deserializer)?;
     Ok(value.map_or(0, |n| {
         n.as_u64().unwrap_or_else(|| {
-            // `as` satura: un negativo diventa 0, un valore enorme `u64::MAX`.
+            // `as` saturates: a negative becomes 0, a huge value `u64::MAX`.
             n.as_f64().map_or(0, |f| f as u64)
         })
     }))
@@ -510,12 +476,12 @@ pub struct Category {
     pub name: String,
     #[serde(default)]
     pub parent_category_id: Option<u32>,
-    /// Le classi sono le categorie di primo livello (per esempio "Addons" in altri giochi).
+    /// Classes are the top-level categories (for example "Addons" in other games).
     #[serde(default)]
     pub is_class: Option<bool>,
 }
 
-/// La paginazione di `GET /v1/mods/search` e `GET /v1/mods/{modId}/files`.
+/// The pagination of `GET /v1/mods/search` and `GET /v1/mods/{modId}/files`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pagination {
@@ -525,7 +491,7 @@ pub struct Pagination {
     pub total_count: u64,
 }
 
-/// Una pagina di risultati della ricerca.
+/// A page of search results.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SearchPage {
     #[serde(default, deserialize_with = "null_as_default")]
@@ -533,7 +499,7 @@ pub struct SearchPage {
     pub pagination: Pagination,
 }
 
-/// Una pagina dei file di un mod.
+/// A page of a mod's files.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct FilesPage {
     #[serde(default, deserialize_with = "null_as_default")]
@@ -541,7 +507,7 @@ pub struct FilesPage {
     pub pagination: Pagination,
 }
 
-/// `sortOrder` della ricerca.
+/// The search's `sortOrder`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SortOrder {
@@ -558,8 +524,8 @@ impl SortOrder {
     }
 }
 
-/// I parametri di `GET /v1/mods/search` oltre a `gameId`: quelli a `None` non si mandano.
-/// `sort_field` è il numero di `ModsSearchSortField` della documentazione.
+/// The parameters of `GET /v1/mods/search` besides `gameId`: those set to `None` are not sent.
+/// `sort_field` is the `ModsSearchSortField` number from the documentation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModSearch {
     pub search_filter: Option<String>,
@@ -572,10 +538,10 @@ pub struct ModSearch {
 }
 
 impl ModSearch {
-    /// L'URL della ricerca, con i valori codificati.
-    fn url(&self) -> String {
-        let mut url = reqwest::Url::parse(&format!("{BASE_URL}/v1/mods/search"))
-            .expect("BASE_URL è un URL valido");
+    /// The search URL under `base`, with the values encoded.
+    fn url(&self, base: &str) -> String {
+        let mut url = reqwest::Url::parse(&format!("{base}/v1/mods/search"))
+            .expect("the base is a valid URL");
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("gameId", &WOW_GAME_ID.to_string());
@@ -626,106 +592,103 @@ struct FilesRequest<'a> {
 
 pub struct CurseForgeClient<T: Transport> {
     transport: T,
-    key: Option<ApiKey>,
+    /// The API's base URL, normally [`PROXY_URL`]. `None` only in tests.
+    base: Option<String>,
 }
 
 impl<T: Transport> fmt::Debug for CurseForgeClient<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CurseForgeClient")
-            .field("key", &self.key)
+            .field("base", &self.base)
             .finish_non_exhaustive()
     }
 }
 
 impl<T: Transport> CurseForgeClient<T> {
-    pub fn new(transport: T, key: Option<String>) -> Self {
+    /// A client for the API at `base`, without the trailing `/`. Without a base every API
+    /// call gives [`CurseForgeError::NotConfigured`].
+    pub fn new(transport: T, base: Option<String>) -> Self {
         Self {
             transport,
-            // Ripulita dagli spazi: un header con spazi ai bordi verrebbe rifiutato dal
-            // trasporto e l'errore sembrerebbe un problema di rete.
-            key: key
-                .map(|k| k.trim().to_owned())
-                .filter(|k| !k.is_empty())
-                .map(ApiKey::new),
+            base: base
+                .map(|base| base.trim().trim_end_matches('/').to_owned())
+                .filter(|base| !base.is_empty()),
         }
     }
 
-    /// Il trasporto, per i test di altri moduli che usano un trasporto finto.
+    /// The transport, for the tests of other modules that use a fake transport.
     #[cfg(test)]
     pub fn transport(&self) -> &T {
         &self.transport
     }
 
-    /// Se il client ha una chiave: senza, ogni chiamata all'API dà
-    /// [`CurseForgeError::MissingKey`].
-    pub fn has_key(&self) -> bool {
-        self.key.is_some()
+    /// Whether the client can reach CurseForge: otherwise every API call gives
+    /// [`CurseForgeError::NotConfigured`].
+    pub fn is_configured(&self) -> bool {
+        self.base.is_some()
     }
 
-    fn key(&self) -> Result<&ApiKey, CurseForgeError> {
-        self.key.as_ref().ok_or(CurseForgeError::MissingKey)
+    fn base(&self) -> Result<&str, CurseForgeError> {
+        self.base.as_deref().ok_or(CurseForgeError::NotConfigured)
     }
 
-    /// Gli addon che CurseForge riconosce dai loro fingerprint. Una sola richiesta.
+    /// The addons CurseForge recognises from their fingerprints. A single request.
     pub fn match_fingerprints(
         &self,
         fingerprints: &[u32],
     ) -> Result<FingerprintMatches, CurseForgeError> {
-        let key = self.key()?;
+        let base = self.base()?;
         if fingerprints.is_empty() {
             return Ok(FingerprintMatches::default());
         }
         let body = serde_json::to_string(&FingerprintsRequest { fingerprints })
             .map_err(|_| CurseForgeError::InvalidResponse)?;
-        let url = format!("{BASE_URL}/v1/fingerprints/{WOW_GAME_ID}");
-        decode(self.transport.post_json(&url, key, body))
+        let url = format!("{base}/v1/fingerprints/{WOW_GAME_ID}");
+        decode(self.transport.post_json(&url, body))
     }
 
-    /// Il dettaglio di più mod. Una sola richiesta.
+    /// The detail of several mods. A single request.
     pub fn get_mods(&self, mod_ids: &[u32]) -> Result<Vec<Mod>, CurseForgeError> {
-        let key = self.key()?;
+        let base = self.base()?;
         if mod_ids.is_empty() {
             return Ok(Vec::new());
         }
         let body = serde_json::to_string(&ModsRequest { mod_ids })
             .map_err(|_| CurseForgeError::InvalidResponse)?;
-        decode(
-            self.transport
-                .post_json(&format!("{BASE_URL}/v1/mods"), key, body),
-        )
+        decode(self.transport.post_json(&format!("{base}/v1/mods"), body))
     }
 
-    /// I tipi di versione del gioco di WoW (Retail, Classic, …).
+    /// WoW's game version types (Retail, Classic, …).
     pub fn version_types(&self) -> Result<Vec<GameVersionType>, CurseForgeError> {
-        let key = self.key()?;
-        let url = format!("{BASE_URL}/v1/games/{WOW_GAME_ID}/version-types");
-        decode(self.transport.get(&url, key))
+        let base = self.base()?;
+        let url = format!("{base}/v1/games/{WOW_GAME_ID}/version-types");
+        decode(self.transport.get(&url))
     }
 
-    /// Una pagina della ricerca nel catalogo di WoW (`GET /v1/mods/search`).
+    /// A page of the search in WoW's catalogue (`GET /v1/mods/search`).
     pub fn search_mods(&self, search: &ModSearch) -> Result<SearchPage, CurseForgeError> {
-        let key = self.key()?;
-        decode_body(self.transport.get(&search.url(), key))
+        let base = self.base()?;
+        decode_body(self.transport.get(&search.url(base)))
     }
 
-    /// Le categorie degli addon di WoW (`GET /v1/categories`).
+    /// The categories of WoW addons (`GET /v1/categories`).
     pub fn categories(&self) -> Result<Vec<Category>, CurseForgeError> {
-        let key = self.key()?;
-        let url = format!("{BASE_URL}/v1/categories?gameId={WOW_GAME_ID}");
-        decode(self.transport.get(&url, key))
+        let base = self.base()?;
+        let url = format!("{base}/v1/categories?gameId={WOW_GAME_ID}");
+        decode(self.transport.get(&url))
     }
 
-    /// Il dettaglio di un file di un mod (`GET /v1/mods/{modId}/files/{fileId}`).
+    /// The detail of a file of a mod (`GET /v1/mods/{modId}/files/{fileId}`).
     pub fn get_file(&self, mod_id: u32, file_id: u32) -> Result<File, CurseForgeError> {
-        let key = self.key()?;
-        let url = format!("{BASE_URL}/v1/mods/{mod_id}/files/{file_id}");
-        decode(self.transport.get(&url, key))
+        let base = self.base()?;
+        let url = format!("{base}/v1/mods/{mod_id}/files/{file_id}");
+        decode(self.transport.get(&url))
     }
 
-    /// Il dettaglio di più file, anche di mod diversi (`POST /v1/mods/files`). Una sola
-    /// richiesta; un file che CurseForge non conosce manca dalla risposta.
+    /// The detail of several files, even of different mods (`POST /v1/mods/files`). A single
+    /// request; a file CurseForge does not know is missing from the response.
     pub fn get_files(&self, file_ids: &[u32]) -> Result<Vec<File>, CurseForgeError> {
-        let key = self.key()?;
+        let base = self.base()?;
         if file_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -733,28 +696,28 @@ impl<T: Transport> CurseForgeClient<T> {
             .map_err(|_| CurseForgeError::InvalidResponse)?;
         decode(
             self.transport
-                .post_json(&format!("{BASE_URL}/v1/mods/files"), key, body),
+                .post_json(&format!("{base}/v1/mods/files"), body),
         )
     }
 
-    /// Un mod con i campi descrittivi del catalogo (`GET /v1/mods/{modId}`).
+    /// A mod with the catalogue's descriptive fields (`GET /v1/mods/{modId}`).
     pub fn get_mod(&self, mod_id: u32) -> Result<CatalogMod, CurseForgeError> {
-        let key = self.key()?;
-        let url = format!("{BASE_URL}/v1/mods/{mod_id}");
-        decode(self.transport.get(&url, key))
+        let base = self.base()?;
+        let url = format!("{base}/v1/mods/{mod_id}");
+        decode(self.transport.get(&url))
     }
 
-    /// La descrizione completa di un mod, in HTML come la scrive l'autore
-    /// (`GET /v1/mods/{modId}/description`). `null` vale come descrizione vuota.
+    /// The full description of a mod, in HTML as the author writes it
+    /// (`GET /v1/mods/{modId}/description`). `null` counts as an empty description.
     pub fn mod_description(&self, mod_id: u32) -> Result<String, CurseForgeError> {
-        let key = self.key()?;
-        let url = format!("{BASE_URL}/v1/mods/{mod_id}/description");
-        decode::<Option<String>>(self.transport.get(&url, key)).map(Option::unwrap_or_default)
+        let base = self.base()?;
+        let url = format!("{base}/v1/mods/{mod_id}/description");
+        decode::<Option<String>>(self.transport.get(&url)).map(Option::unwrap_or_default)
     }
 
-    /// Una pagina dei file di un mod per una versione del gioco, dalla posizione `index`
-    /// (`GET /v1/mods/{modId}/files`; `pageSize` arriva al massimo a 50). Senza `pagination`
-    /// la risposta non è valida: senza il totale non si sa se ci sono altre pagine.
+    /// A page of a mod's files for a game version, from position `index`
+    /// (`GET /v1/mods/{modId}/files`; `pageSize` goes up to 50 at most). Without `pagination`
+    /// the response is not valid: without the total it is unknown whether more pages exist.
     pub fn mod_files(
         &self,
         mod_id: u32,
@@ -762,24 +725,24 @@ impl<T: Transport> CurseForgeClient<T> {
         index: u32,
         page_size: u32,
     ) -> Result<FilesPage, CurseForgeError> {
-        let key = self.key()?;
+        let base = self.base()?;
         let url = format!(
-            "{BASE_URL}/v1/mods/{mod_id}/files?gameVersionTypeId={game_version_type_id}&index={index}&pageSize={page_size}"
+            "{base}/v1/mods/{mod_id}/files?gameVersionTypeId={game_version_type_id}&index={index}&pageSize={page_size}"
         );
-        decode_body(self.transport.get(&url, key))
+        decode_body(self.transport.get(&url))
     }
 
-    /// I byte dello zip di `file`, scaricati dalla CDN senza chiave. Non controlla
-    /// `allowModDistribution` del mod: lo fa chi decide cosa installare.
+    /// The bytes of `file`'s zip, downloaded from the CDN, never through the proxy. Does not check the
+    /// mod's `allowModDistribution`: whoever decides what to install does that.
     ///
-    /// Senza `downloadUrl`, o con un indirizzo che non è `https` verso un host di CurseForge,
-    /// fallisce senza nessuna richiesta. Gli errori non riportano l'indirizzo.
+    /// Without `downloadUrl`, or with an address that is not `https` to a CurseForge host,
+    /// it fails without any request. The errors do not report the address.
     pub fn download(&self, file: &File) -> Result<Vec<u8>, CurseForgeError> {
         self.download_with_progress(file, &mut |_, _| {})
     }
 
-    /// Come [`download`](Self::download), riportando a `progress` i byte ricevuti e quelli
-    /// dichiarati dal server (issue #127).
+    /// Like [`download`](Self::download), reporting to `progress` the bytes received and those
+    /// declared by the server (issue #127).
     pub fn download_with_progress(
         &self,
         file: &File,
@@ -808,14 +771,14 @@ impl<T: Transport> CurseForgeClient<T> {
     }
 }
 
-/// Il campo `data` della risposta.
+/// The response's `data` field.
 fn decode<D: DeserializeOwned>(
     response: Result<HttpResponse, TransportError>,
 ) -> Result<D, CurseForgeError> {
     decode_body::<Envelope<D>>(response).map(|envelope| envelope.data)
 }
 
-/// Tutto il corpo della risposta, per le risposte che hanno altro accanto a `data`.
+/// The whole response body, for responses that have more beside `data`.
 fn decode_body<D: DeserializeOwned>(
     response: Result<HttpResponse, TransportError>,
 ) -> Result<D, CurseForgeError> {
@@ -824,7 +787,8 @@ fn decode_body<D: DeserializeOwned>(
         200..=299 => {
             serde_json::from_str::<D>(&response.body).map_err(|_| CurseForgeError::InvalidResponse)
         }
-        401 | 403 => Err(CurseForgeError::KeyRejected),
+        401 | 403 => Err(CurseForgeError::Refused),
+        502 | 503 => Err(CurseForgeError::Unavailable),
         429 => Err(CurseForgeError::RateLimited),
         status => Err(CurseForgeError::Http(status)),
     }
@@ -837,16 +801,17 @@ mod tests {
     use std::io::Read;
     use std::sync::Mutex;
 
-    const KEY: &str = "test-key-7f3a9c";
+    /// The base the test clients use: a reserved example host, never the real proxy.
+    const BASE: &str = "https://proxy.example.com";
 
-    /// Un trasporto finto: risponde sempre con la stessa risposta e registra le richieste.
+    /// A fake transport: always answers with the same response and records the requests.
     struct Fake {
         reply: Result<(u16, &'static str), TransportError>,
-        /// Le richieste con la chiave: URL, chiave, corpo.
-        seen: Mutex<Vec<(String, String, Option<String>)>>,
-        /// Risposta ai download.
+        /// The API requests: URL and body.
+        seen: Mutex<Vec<(String, Option<String>)>>,
+        /// Response to downloads.
         bytes: Result<(u16, &'static [u8]), TransportError>,
-        /// I download: URL e limite. Il trait non passa la chiave a `get_bytes`.
+        /// The downloads: URL and limit.
         seen_bytes: Mutex<Vec<(String, u64)>>,
     }
 
@@ -869,24 +834,13 @@ mod tests {
     }
 
     impl Transport for Fake {
-        fn get(&self, url: &str, key: &ApiKey) -> Result<HttpResponse, TransportError> {
-            self.seen
-                .lock()
-                .unwrap()
-                .push((url.to_owned(), key.expose().to_owned(), None));
+        fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
+            self.seen.lock().unwrap().push((url.to_owned(), None));
             self.answer()
         }
 
-        fn post_json(
-            &self,
-            url: &str,
-            key: &ApiKey,
-            body: String,
-        ) -> Result<HttpResponse, TransportError> {
-            self.seen
-                .lock()
-                .unwrap()
-                .push((url.to_owned(), key.expose().to_owned(), Some(body)));
+        fn post_json(&self, url: &str, body: String) -> Result<HttpResponse, TransportError> {
+            self.seen.lock().unwrap().push((url.to_owned(), Some(body)));
             self.answer()
         }
 
@@ -903,7 +857,7 @@ mod tests {
     }
 
     fn client(reply: Result<(u16, &'static str), TransportError>) -> CurseForgeClient<Fake> {
-        CurseForgeClient::new(Fake::new(reply), Some(KEY.to_owned()))
+        CurseForgeClient::new(Fake::new(reply), Some(BASE.to_owned()))
     }
 
     const MATCHES: &str = r#"{
@@ -945,13 +899,12 @@ mod tests {
         assert_eq!(result.unmatched_fingerprints, [456]);
 
         let seen = client.transport.seen.lock().unwrap();
-        assert_eq!(seen[0].0, "https://api.curseforge.com/v1/fingerprints/1");
-        assert_eq!(seen[0].1, KEY);
-        assert_eq!(seen[0].2.as_deref(), Some(r#"{"fingerprints":[123,456]}"#));
+        assert_eq!(seen[0].0, "https://proxy.example.com/v1/fingerprints/1");
+        assert_eq!(seen[0].1.as_deref(), Some(r#"{"fingerprints":[123,456]}"#));
     }
 
-    /// Forma di `FingerprintsMatchesResult` nella documentazione ufficiale: `partialMatches` è
-    /// una lista di `FingerprintMatch`, come `exactMatches`.
+    /// Shape of `FingerprintsMatchesResult` in the official documentation: `partialMatches` is
+    /// a list of `FingerprintMatch`, like `exactMatches`.
     #[test]
     fn partial_matches_are_parsed() {
         let body = r#"{"data": {
@@ -993,8 +946,8 @@ mod tests {
           {"id": 2, "name": "Minimal", "latestFiles": null}
         ]}"#;
 
-    /// La forma esatta di una risposta reale di `POST /v1/fingerprints/1` per un fingerprint
-    /// che non corrisponde a niente: `unmatchedFingerprints` è `null`, non una lista vuota.
+    /// The exact shape of a real `POST /v1/fingerprints/1` response for a fingerprint
+    /// that matches nothing: `unmatchedFingerprints` is `null`, not an empty list.
     #[test]
     fn nulls_in_the_real_response_are_read_as_empty() {
         let client = client(Ok((
@@ -1006,7 +959,7 @@ mod tests {
         assert!(result.partial_matches.is_empty());
         assert!(result.unmatched_fingerprints.is_empty());
 
-        // `partialMatches` null o assente vale come lista vuota.
+        // `partialMatches` null or absent counts as an empty list.
         for body in [
             r#"{"data":{"exactMatches":[],"partialMatches":null}}"#,
             r#"{"data":{"exactMatches":[]}}"#,
@@ -1022,7 +975,7 @@ mod tests {
         let file: File = serde_json::from_str(file).unwrap();
         assert!(file.display_name.is_empty() && file.modules.is_empty());
         assert_eq!(file.file_name, None);
-        // Gli identificativi non diventano 0: un id null resta un errore.
+        // Identifiers do not become 0: a null id stays an error.
         let broken = r#"{"id": null, "modId": 2, "releaseType": 1}"#;
         assert!(serde_json::from_str::<File>(broken).is_err());
         assert!(file.is_available);
@@ -1047,12 +1000,12 @@ mod tests {
         );
         assert_eq!(mods[1].allow_mod_distribution, None);
         assert_eq!(mods[1].links.source_url, None);
-        // `sourceUrl: null` vale come assente.
+        // `sourceUrl: null` counts as absent.
         let links: ModLinks =
             serde_json::from_str(r#"{"websiteUrl": null, "sourceUrl": null}"#).unwrap();
         assert_eq!(links, ModLinks::default());
         assert!(mods[1].latest_files_indexes.is_empty());
-        // `latestFiles` ha lo schema `File` dei match dei fingerprint; `null` vale vuota.
+        // `latestFiles` has the `File` schema of the fingerprint matches; `null` counts as empty.
         let latest = &mods[0].latest_files[0];
         assert_eq!((latest.id, latest.mod_id), (9, 1));
         assert_eq!(
@@ -1061,8 +1014,8 @@ mod tests {
         );
         assert!(mods[1].latest_files.is_empty());
         let seen = client.transport.seen.lock().unwrap();
-        assert_eq!(seen[0].0, "https://api.curseforge.com/v1/mods");
-        assert_eq!(seen[0].2.as_deref(), Some(r#"{"modIds":[1,2]}"#));
+        assert_eq!(seen[0].0, "https://proxy.example.com/v1/mods");
+        assert_eq!(seen[0].1.as_deref(), Some(r#"{"modIds":[1,2]}"#));
     }
 
     #[test]
@@ -1077,8 +1030,8 @@ mod tests {
         );
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].0, "https://api.curseforge.com/v1/mods/files");
-        assert_eq!(seen[0].2.as_deref(), Some(r#"{"fileIds":[10,20]}"#));
+        assert_eq!(seen[0].0, "https://proxy.example.com/v1/mods/files");
+        assert_eq!(seen[0].1.as_deref(), Some(r#"{"fileIds":[10,20]}"#));
         drop(seen);
         assert!(client.get_files(&[]).unwrap().is_empty());
     }
@@ -1112,9 +1065,9 @@ mod tests {
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(
             seen[0].0,
-            "https://api.curseforge.com/v1/games/1/version-types"
+            "https://proxy.example.com/v1/games/1/version-types"
         );
-        assert_eq!(seen[0].2, None);
+        assert_eq!(seen[0].1, None);
     }
 
     #[test]
@@ -1129,14 +1082,15 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_key_fails_before_any_request() {
-        for key in [None, Some(String::new()), Some("  ".to_owned())] {
-            let client = CurseForgeClient::new(Fake::new(Ok((200, MATCHES))), key);
+    fn without_a_base_it_fails_before_any_request() {
+        for base in [None, Some(String::new()), Some("  ".to_owned())] {
+            let client = CurseForgeClient::new(Fake::new(Ok((200, MATCHES))), base);
+            assert!(!client.is_configured());
             assert_eq!(
                 client.match_fingerprints(&[1]),
-                Err(CurseForgeError::MissingKey)
+                Err(CurseForgeError::NotConfigured)
             );
-            assert_eq!(client.version_types(), Err(CurseForgeError::MissingKey));
+            assert_eq!(client.version_types(), Err(CurseForgeError::NotConfigured));
             assert!(client.transport.seen.lock().unwrap().is_empty());
         }
     }
@@ -1144,8 +1098,10 @@ mod tests {
     #[test]
     fn errors_are_mapped() {
         for (reply, expected) in [
-            (Ok((401, "")), CurseForgeError::KeyRejected),
-            (Ok((403, "")), CurseForgeError::KeyRejected),
+            (Ok((401, "")), CurseForgeError::Refused),
+            (Ok((403, "")), CurseForgeError::Refused),
+            (Ok((502, "")), CurseForgeError::Unavailable),
+            (Ok((503, "")), CurseForgeError::Unavailable),
             (Ok((429, "")), CurseForgeError::RateLimited),
             (Ok((500, "")), CurseForgeError::Http(500)),
             (Ok((200, "{ broken")), CurseForgeError::InvalidResponse),
@@ -1167,37 +1123,30 @@ mod tests {
     }
 
     #[test]
-    fn the_key_never_appears_in_messages_or_debug() {
-        let replies = [
-            Ok((401, "")),
-            Ok((429, "")),
-            Ok((500, "")),
-            Ok((200, "{ broken")),
-            Err(TransportError::Other),
-        ];
-        for reply in replies {
-            let client = client(reply);
-            let error = client.match_fingerprints(&[1]).unwrap_err();
-            assert!(!error.to_string().contains(KEY));
-            assert!(!format!("{error:?}").contains(KEY));
-            assert!(!format!("{client:?}").contains(KEY));
+    fn no_message_mentions_a_key() {
+        for error in [
+            CurseForgeError::NotConfigured,
+            CurseForgeError::Refused,
+            CurseForgeError::Unavailable,
+            CurseForgeError::RateLimited,
+            CurseForgeError::Http(500),
+        ] {
+            let text = error.to_string().to_lowercase();
+            assert!(!text.contains("key") && !text.contains(".env"), "{text}");
         }
-        assert_eq!(format!("{:?}", ApiKey::new(KEY.to_owned())), "ApiKey(***)");
-        assert!(
-            CurseForgeError::MissingKey
-                .to_string()
-                .contains("CURSEFORGE_API_KEY")
-        );
     }
 
     #[test]
-    fn the_key_is_trimmed_before_use() {
+    fn the_base_is_trimmed_before_use() {
         let client = CurseForgeClient::new(
             Fake::new(Ok((200, r#"{"data": []}"#))),
-            Some(format!("  {KEY} \n")),
+            Some(format!("  {BASE}/ \n")),
         );
         client.version_types().unwrap();
-        assert_eq!(client.transport.seen.lock().unwrap()[0].1, KEY);
+        assert_eq!(
+            client.transport.seen.lock().unwrap()[0].0,
+            format!("{BASE}/v1/games/1/version-types")
+        );
     }
 
     const SEARCH: &str = r#"{
@@ -1248,7 +1197,7 @@ mod tests {
             details.logo.as_ref().unwrap().thumbnail_url.as_deref(),
             Some("https://media.forgecdn.net/thumb.png")
         );
-        // I campi descrittivi `null` valgono come vuoti.
+        // The `null` descriptive fields count as empty.
         let bare = &page.data[1];
         assert!(bare.summary.is_empty() && bare.authors.is_empty());
         assert!(bare.categories.is_empty() && bare.date_modified.is_empty());
@@ -1258,10 +1207,10 @@ mod tests {
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(
             seen[0].0,
-            "https://api.curseforge.com/v1/mods/search?gameId=1&searchFilter=deadly+boss+%26+mods\
+            "https://proxy.example.com/v1/mods/search?gameId=1&searchFilter=deadly+boss+%26+mods\
              &categoryId=1&gameVersionTypeId=517&sortField=2&sortOrder=desc&index=50&pageSize=50"
         );
-        assert_eq!((seen[0].1.as_str(), seen[0].2.as_ref()), (KEY, None));
+        assert_eq!(seen[0].1, None);
     }
 
     #[test]
@@ -1270,7 +1219,7 @@ mod tests {
         client.search_mods(&ModSearch::default()).unwrap();
         assert_eq!(
             client.transport.seen.lock().unwrap()[0].0,
-            "https://api.curseforge.com/v1/mods/search?gameId=1"
+            "https://proxy.example.com/v1/mods/search?gameId=1"
         );
     }
 
@@ -1289,7 +1238,7 @@ mod tests {
         let missing = CurseForgeClient::new(Fake::new(Ok((200, SEARCH))), None);
         assert_eq!(
             missing.search_mods(&ModSearch::default()),
-            Err(CurseForgeError::MissingKey)
+            Err(CurseForgeError::NotConfigured)
         );
         assert!(missing.transport.seen.lock().unwrap().is_empty());
     }
@@ -1319,10 +1268,10 @@ mod tests {
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(
             seen[0].0,
-            "https://api.curseforge.com/v1/categories?gameId=1"
+            "https://proxy.example.com/v1/categories?gameId=1"
         );
-        assert_eq!(seen[0].2, None);
-        // Gli identificativi restano rigorosi.
+        assert_eq!(seen[0].1, None);
+        // Identifiers stay strict.
         assert!(serde_json::from_str::<Category>(r#"{"id": null}"#).is_err());
     }
 
@@ -1355,12 +1304,11 @@ mod tests {
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(
             seen[0].0,
-            "https://api.curseforge.com/v1/mods/61284/files/5001"
+            "https://proxy.example.com/v1/mods/61284/files/5001"
         );
-        assert_eq!(seen[0].1, KEY);
-        assert_eq!(seen[0].2, None);
+        assert_eq!(seen[0].1, None);
 
-        // `null` e assente valgono entrambi "non scaricabile".
+        // `null` and absent both count as "not downloadable".
         assert_eq!(downloadable(None).download_url, None);
         let absent: File =
             serde_json::from_str(r#"{"id": 1, "modId": 2, "releaseType": 1}"#).unwrap();
@@ -1396,9 +1344,9 @@ mod tests {
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(
             seen[0].0,
-            "https://api.curseforge.com/v1/mods/61284/files?gameVersionTypeId=517&index=100&pageSize=50"
+            "https://proxy.example.com/v1/mods/61284/files?gameVersionTypeId=517&index=100&pageSize=50"
         );
-        assert_eq!((seen[0].1.as_str(), seen[0].2.as_deref()), (KEY, None));
+        assert_eq!(seen[0].1, None);
         drop(seen);
         let unpaged = self::client(Ok((200, r#"{"data": []}"#)));
         assert_eq!(
@@ -1413,7 +1361,7 @@ mod tests {
         assert_eq!(client.mod_description(61284).unwrap(), "<p>Hello</p>");
         assert_eq!(
             client.transport.seen.lock().unwrap()[0].0,
-            "https://api.curseforge.com/v1/mods/61284/description"
+            "https://proxy.example.com/v1/mods/61284/description"
         );
         let empty = self::client(Ok((200, r#"{"data": null}"#)));
         assert_eq!(empty.mod_description(1).unwrap(), "");
@@ -1440,29 +1388,29 @@ mod tests {
         );
         assert_eq!(
             client.transport.seen.lock().unwrap()[0].0,
-            "https://api.curseforge.com/v1/mods/61284"
+            "https://proxy.example.com/v1/mods/61284"
         );
         let missing = self::client(Ok((404, "")));
         assert_eq!(missing.get_mod(1), Err(CurseForgeError::Http(404)));
     }
 
     #[test]
-    fn download_goes_to_the_cdn_without_the_key() {
+    fn download_goes_to_the_cdn_not_to_the_proxy() {
         let client = client(Ok((200, FILE)));
         let file = client.get_file(61284, 5001).unwrap();
         let bytes = client.download(&file).unwrap();
         assert_eq!(bytes, b"PK\x03\x04zip");
-        // Una sola richiesta con la chiave, quella all'API; il download passa da `get_bytes`,
-        // che la chiave non la riceve.
+        // A single request to the proxy, the one to the API; the download goes to the CDN
+        // through `get_bytes`.
         let seen = client.transport.seen.lock().unwrap();
         assert_eq!(seen.len(), 1);
-        assert!(seen[0].0.starts_with(BASE_URL));
+        assert!(seen[0].0.starts_with(BASE));
         let downloads = client.transport.seen_bytes.lock().unwrap();
         assert_eq!(*downloads, [(CDN_URL.to_owned(), MAX_DOWNLOAD_BYTES)]);
     }
 
     #[test]
-    fn download_works_without_a_key() {
+    fn download_works_without_a_base() {
         let client = CurseForgeClient::new(Fake::new(Ok((200, ""))), None);
         assert!(client.download(&downloadable(Some(CDN_URL))).is_ok());
     }
@@ -1502,7 +1450,7 @@ mod tests {
             "https://evilforgecdn.net/a.zip",
             "https://notcurseforge.com/a.zip",
             "https://edge.forgecdn.net:8443/a.zip",
-            // Credenziali nell'URL; spezzato perché il controllo di privacy non lo legga come email.
+            // Credentials in the URL; split so the privacy check does not read it as an email.
             concat!("https://user:pass", "@", "edge.forgecdn.net/a.zip"),
             "https://203.0.113.7/a.zip",
             "ftp://edge.forgecdn.net/a.zip",
@@ -1521,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn download_errors_are_mapped_without_url_or_key() {
+    fn download_errors_are_mapped_without_the_url() {
         for (reply, expected) in [
             (Ok((404, &b""[..])), CurseForgeError::Http(404)),
             (Ok((403, &b""[..])), CurseForgeError::Http(403)),
@@ -1541,11 +1489,10 @@ mod tests {
         ] {
             let mut fake = Fake::new(Ok((200, "")));
             fake.bytes = reply;
-            let client = CurseForgeClient::new(fake, Some(KEY.to_owned()));
+            let client = CurseForgeClient::new(fake, Some(BASE.to_owned()));
             let error = client.download(&downloadable(Some(CDN_URL))).unwrap_err();
             assert_eq!(error, expected);
             for text in [error.to_string(), format!("{error:?}")] {
-                assert!(!text.contains(KEY), "{text}");
                 assert!(!text.contains("forgecdn"), "{text}");
                 assert!(!text.contains("files/5/1"), "{text}");
             }
@@ -1566,7 +1513,7 @@ mod tests {
     #[test]
     fn read_limited_stops_at_the_limit() {
         let data = vec![7u8; 200_000];
-        // Né la lunghezza né la capacità superano il limite, con o senza Content-Length.
+        // Neither the length nor the capacity exceeds the limit, with or without Content-Length.
         for (max_len, declared) in [
             (200_000, None),
             (200_000, Some(200_000)),
@@ -1584,8 +1531,8 @@ mod tests {
         assert!(read_limited(&mut &b""[..], 0, None).unwrap().is_empty());
     }
 
-    /// Un server HTTP locale che risponde a una sola richiesta con `response` e restituisce
-    /// la richiesta ricevuta (riga e header).
+    /// A local HTTP server that answers a single request with `response` and returns
+    /// the request it received (line and headers).
     fn local_server(response: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
         use std::io::Write;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1597,7 +1544,7 @@ mod tests {
             while !request.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap() == 1 {
                 request.push(byte[0]);
             }
-            // Il client può chiudere prima di aver letto tutto (limite superato).
+            // The client may close before reading everything (limit exceeded).
             let _ = stream.write_all(&response);
             let _ = stream.flush();
             String::from_utf8_lossy(&request).to_lowercase()
@@ -1605,8 +1552,35 @@ mod tests {
         (address, handle)
     }
 
+    /// The proxy accepts only WoW-don's user agent, and the app sends no key at all.
     #[test]
-    fn real_transport_downloads_without_the_key_and_within_the_limit() {
+    fn real_transport_api_requests_carry_no_key_and_the_app_user_agent() {
+        let transport = ReqwestTransport::new().unwrap();
+        let ok = b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}".to_vec();
+
+        let (address, server) = local_server(ok.clone());
+        transport.get(&format!("{address}/v1/mods/1")).unwrap();
+        let request = server.join().unwrap();
+        assert!(request.starts_with("get /v1/mods/1 "));
+        assert!(!request.contains("x-api-key"));
+        let user_agent = concat!("user-agent: wow-don/", env!("CARGO_PKG_VERSION"), "\r\n");
+        assert!(request.contains(user_agent), "{request}");
+
+        let (address, server) = local_server(ok);
+        transport
+            .post_json(
+                &format!("{address}/v1/mods"),
+                r#"{"modIds":[1]}"#.to_owned(),
+            )
+            .unwrap();
+        let request = server.join().unwrap();
+        assert!(request.starts_with("post /v1/mods "));
+        assert!(request.contains("content-type: application/json\r\n"));
+        assert!(!request.contains("x-api-key"));
+    }
+
+    #[test]
+    fn real_transport_downloads_within_the_limit() {
         let transport = ReqwestTransport::new().unwrap();
 
         let (address, server) = local_server(
@@ -1621,7 +1595,7 @@ mod tests {
         assert!(request.starts_with("get /a.zip "));
         assert!(!request.contains("x-api-key"));
 
-        // Content-Length oltre il limite: rifiutato prima di leggere il corpo.
+        // Content-Length over the limit: rejected before reading the body.
         let (address, server) = local_server(
             b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\nconnection: close\r\n\r\n".to_vec(),
         );
@@ -1631,7 +1605,7 @@ mod tests {
         );
         server.join().unwrap();
 
-        // Senza Content-Length: si ferma leggendo.
+        // Without Content-Length: it stops while reading.
         let mut body = b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\n".to_vec();
         body.extend(std::iter::repeat_n(b'x', 300_000));
         let (address, server) = local_server(body);
@@ -1642,8 +1616,8 @@ mod tests {
         server.join().unwrap();
     }
 
-    /// Un redirect non viene seguito verso un host che non è di CurseForge, e l'API non segue
-    /// redirect: la chiave non può arrivare a un altro host.
+    /// A redirect is not followed to a host that is not CurseForge's, and the API does not follow
+    /// redirects: a request never leaves the proxy's host.
     #[test]
     fn real_transport_does_not_follow_redirects_off_curseforge() {
         let transport = ReqwestTransport::new().unwrap();
@@ -1654,53 +1628,37 @@ mod tests {
         server.join().unwrap();
 
         let (address, server) = local_server(redirect.to_vec());
-        let response = transport
-            .get(&address, &ApiKey::new(KEY.to_owned()))
-            .unwrap();
+        let response = transport.get(&address).unwrap();
         assert_eq!(response.status, 302);
         server.join().unwrap();
     }
 
-    /// Prova che TLS e indirizzo funzionano davvero, senza chiave: una chiave inventata deve
-    /// essere rifiutata da CurseForge (401/403), non fallire per rete o certificati.
-    ///
-    /// `cargo test --manifest-path src-tauri/Cargo.toml live_tls_reaches_curseforge -- --ignored`
-    #[test]
-    #[ignore = "usa la rete"]
-    fn live_tls_reaches_curseforge() {
-        let client = CurseForgeClient::new(
-            ReqwestTransport::new().unwrap(),
-            Some("not-a-real-key".to_owned()),
-        );
-        assert_eq!(client.version_types(), Err(CurseForgeError::KeyRejected));
-    }
-
-    /// Prova `POST /v1/fingerprints/1` con la chiave reale. Un fingerprint inventato non deve
-    /// corrispondere a niente, ma la richiesta deve riuscire (non 404). Con
-    /// `WOW_DON_LIVE_FINGERPRINTS=<f1>,<f2>` stampa anche i match parziali trovati.
+    /// Exercises `POST /v1/fingerprints/1` through the proxy. A made-up fingerprint must
+    /// match nothing, but the request must succeed (not 404). With
+    /// `WOW_DON_LIVE_FINGERPRINTS=<f1>,<f2>` it also prints the partial matches found.
     ///
     /// `cargo test --manifest-path src-tauri/Cargo.toml live_fingerprint_matches -- --ignored --nocapture`
     #[test]
-    #[ignore = "usa la rete e la chiave CurseForge reale"]
+    #[ignore = "uses the network and the wow-don-proxy"]
     fn live_fingerprint_matches() {
         let config = crate::config::Config::load();
         let client = CurseForgeClient::new(
             ReqwestTransport::new().unwrap(),
-            config.curseforge_api_key.clone(),
+            Some(config.curseforge_url.clone()),
         );
-        // Fingerprint da `WOW_DON_LIVE_FINGERPRINTS` (numeri separati da virgole), per provare
-        // anche i match parziali con le cartelle di un addon reale; altrimenti uno inventato.
+        // Fingerprints from `WOW_DON_LIVE_FINGERPRINTS` (comma-separated numbers), to also exercise
+        // the partial matches with the folders of a real addon; otherwise a made-up one.
         let fingerprints: Vec<u32> = std::env::var("WOW_DON_LIVE_FINGERPRINTS")
             .ok()
             .map(|v| {
                 v.split(',')
-                    .map(|f| f.trim().parse().expect("fingerprint non numerico"))
+                    .map(|f| f.trim().parse().expect("non-numeric fingerprint"))
                     .collect()
             })
             .unwrap_or_else(|| vec![1]);
         let result = client
             .match_fingerprints(&fingerprints)
-            .expect("richiesta a CurseForge");
+            .expect("request to CurseForge");
         println!(
             "exact: {}, partial: {}, unmatched: {:?}",
             result.exact_matches.len(),
@@ -1714,7 +1672,7 @@ mod tests {
                 .iter()
                 .map(|m| (m.name.as_str(), m.fingerprint))
                 .collect();
-            // `evaluate` calcola lo stato di aggiornamento da `latestFiles`: va visto anche qui.
+            // `evaluate` computes the update status from `latestFiles`: it must be seen here too.
             let latest: Vec<u32> = found.latest_files.iter().map(|f| f.id).collect();
             println!(
                 "partial: mod {} file {} modules {modules:?} latestFiles {latest:?}",
@@ -1723,36 +1681,36 @@ mod tests {
         }
     }
 
-    /// Interroga l'API reale con la chiave dell'ambiente (o di `.env` in debug) e stampa i
-    /// tipi di versione del gioco di WoW, per confermare gli id usati dal controllo degli
-    /// aggiornamenti. Lo lancia l'utente, a mano:
+    /// Queries the real API through the proxy and prints
+    /// WoW's game version types, to confirm the ids used by the update
+    /// check. The user runs it by hand:
     ///
     /// `cargo test --manifest-path src-tauri/Cargo.toml live_version_types -- --ignored --nocapture`
     #[test]
-    #[ignore = "usa la rete e la chiave CurseForge reale"]
+    #[ignore = "uses the network and the wow-don-proxy"]
     fn live_version_types() {
         let config = crate::config::Config::load();
         let client = CurseForgeClient::new(
             ReqwestTransport::new().unwrap(),
-            config.curseforge_api_key.clone(),
+            Some(config.curseforge_url.clone()),
         );
-        let types = client.version_types().expect("richiesta a CurseForge");
+        let types = client.version_types().expect("request to CurseForge");
         for t in types {
             println!("{:>6}  {:<40} {}", t.id, t.name, t.slug);
         }
     }
 
-    /// Cerca "details" tra gli addon Retail per popolarità e legge le categorie, con la chiave
-    /// reale: conferma i parametri della ricerca, la paginazione e la forma delle categorie.
+    /// Searches "details" among Retail addons by popularity and reads the categories through the
+    /// proxy: confirms the search parameters, the pagination and the shape of the categories.
     ///
     /// `cargo test --manifest-path src-tauri/Cargo.toml live_search_and_categories -- --ignored --nocapture`
     #[test]
-    #[ignore = "usa la rete e la chiave CurseForge reale"]
+    #[ignore = "uses the network and the wow-don-proxy"]
     fn live_search_and_categories() {
         let config = crate::config::Config::load();
         let client = CurseForgeClient::new(
             ReqwestTransport::new().unwrap(),
-            config.curseforge_api_key.clone(),
+            Some(config.curseforge_url.clone()),
         );
         let page = client
             .search_mods(&ModSearch {
@@ -1764,7 +1722,7 @@ mod tests {
                 page_size: Some(5),
                 ..ModSearch::default()
             })
-            .expect("richiesta a CurseForge");
+            .expect("request to CurseForge");
         println!("{:?}", page.pagination);
         assert!(page.pagination.result_count as usize == page.data.len());
         for found in &page.data {
@@ -1773,47 +1731,47 @@ mod tests {
                 found.project.id, found.project.name, found.download_count, found.date_modified
             );
         }
-        let categories = client.categories().expect("richiesta a CurseForge");
+        let categories = client.categories().expect("request to CurseForge");
         assert!(!categories.is_empty());
         for category in categories.iter().take(10) {
             println!("{category:?}");
         }
     }
 
-    /// Legge l'ultimo file di Details! (mod 61284) con `get_file` e, se l'autore lo permette,
-    /// lo scarica dalla CDN e controlla che sia uno zip. Lo lancia l'utente, a mano:
+    /// Reads the latest file of Details! (mod 61284) with `get_file` and, if the author allows it,
+    /// downloads it from the CDN and checks that it is a zip. The user runs it by hand:
     ///
     /// `cargo test --manifest-path src-tauri/Cargo.toml live_get_file_and_download -- --ignored --nocapture`
     #[test]
-    #[ignore = "usa la rete e la chiave CurseForge reale"]
+    #[ignore = "uses the network and the wow-don-proxy"]
     fn live_get_file_and_download() {
-        // Progetto da `WOW_DON_LIVE_MOD_ID`, altrimenti Details! (61284). Il test fallisce se il
-        // progetto è distribuibile ma il download non riesce: così non passa senza aver provato
-        // la CDN.
+        // Project from `WOW_DON_LIVE_MOD_ID`, otherwise Details! (61284). The test fails if the
+        // project is distributable but the download does not succeed: that way it does not pass
+        // without having tried the CDN.
         let mod_id: u32 = std::env::var("WOW_DON_LIVE_MOD_ID")
             .ok()
             .map(|v| {
                 v.trim()
                     .parse()
-                    .expect("WOW_DON_LIVE_MOD_ID non è un numero")
+                    .expect("WOW_DON_LIVE_MOD_ID is not a number")
             })
             .unwrap_or(61284);
         let config = crate::config::Config::load();
         let client = CurseForgeClient::new(
             ReqwestTransport::new().unwrap(),
-            config.curseforge_api_key.clone(),
+            Some(config.curseforge_url.clone()),
         );
-        let mods = client.get_mods(&[mod_id]).expect("richiesta a CurseForge");
-        let project = mods.first().expect("progetto trovato");
+        let mods = client.get_mods(&[mod_id]).expect("request to CurseForge");
+        let project = mods.first().expect("project found");
         let index = project
             .latest_files_indexes
             .first()
-            .expect("almeno un file");
+            .expect("at least one file");
         let file = client
             .get_file(mod_id, index.file_id)
-            .expect("richiesta a CurseForge");
+            .expect("request to CurseForge");
         println!(
-            "progetto {} ({}), allowModDistribution: {:?}; file {} ({:?}), downloadUrl presente: {}",
+            "project {} ({}), allowModDistribution: {:?}; file {} ({:?}), downloadUrl present: {}",
             project.id,
             project.name,
             project.allow_mod_distribution,
@@ -1823,14 +1781,14 @@ mod tests {
         );
         match client.download(&file) {
             Ok(bytes) => {
-                println!("scaricati {} byte", bytes.len());
-                assert!(bytes.starts_with(b"PK"), "non è uno zip");
+                println!("downloaded {} bytes", bytes.len());
+                assert!(bytes.starts_with(b"PK"), "not a zip");
             }
             Err(CurseForgeError::DownloadNotAllowed) => {
                 assert_ne!(
                     project.allow_mod_distribution,
                     Some(true),
-                    "progetto distribuibile ma senza downloadUrl"
+                    "distributable project but without downloadUrl"
                 );
                 println!("download not allowed by the author");
             }
@@ -1863,7 +1821,7 @@ mod tests {
                 ModAsset::default(),
             ]
         );
-        // Il logo continua a leggersi con i nuovi campi.
+        // The logo keeps being read with the new fields.
         assert_eq!(
             found.logo.unwrap().thumbnail_url.as_deref(),
             Some("https://media.forgecdn.net/thumb.png")

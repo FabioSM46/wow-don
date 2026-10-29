@@ -72,7 +72,7 @@ describe("importProgressText", () => {
   });
 
   it("uses the same ids as the progress events", () => {
-    // Il contatore confronta gli id della lista con quelli degli eventi: devono coincidere.
+    // The counter compares the list's ids with the events' ids: they must match.
     const event = {
       installationId: "test",
       source: "curseforge" as const,
@@ -127,7 +127,7 @@ describe("importProgressText", () => {
       ),
       "Installing 2 of 2",
     );
-    // Una dipendenza non conta come progetto della lista, ma la sua installazione sì come fase.
+    // A dependency does not count as a project of the list, but its installation counts as a phase.
     assert.equal(
       importProgressText(reached([["curseforge:99", "installing"]]), fresh, "installing"),
       "Installing 1 of 2",

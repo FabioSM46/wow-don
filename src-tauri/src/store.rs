@@ -1,18 +1,19 @@
-//! Stato locale salvato su disco: l'elenco delle installazioni (`installations.json`), le
-//! impostazioni degli addon (`addon-settings.json`: la versione del gioco forzata, D6, e le
-//! esclusioni dall'aggiornamento automatico, D41),
-//! i progetti installati dall'app con le loro cartelle (`installed-addons.json`, issue #62) e le
-//! impostazioni dell'app (`settings.json`, per ora il tema, issue #92).
+//! Local state saved on disk: the list of installations (`installations.json`), the
+//! addon settings (`addon-settings.json`: the pinned game version, D6, and the
+//! exclusions from automatic updates, D41),
+//! the projects installed by the app with their folders (`installed-addons.json`, issue #62) and
+//! the app settings (`settings.json`, for now the theme, issue #92).
 //!
-//! I file stanno nella cartella di configurazione dell'app risolta da Tauri (D22). Si scrive in modo atomico: file temporaneo nella stessa cartella, poi `rename`.
-//! Un file mancante vuol dire nessuna installazione; un file illeggibile blocca le
-//! modifiche invece di essere sovrascritto, così non si perde quello che c'era.
+//! The files live in the app's configuration folder resolved by Tauri (D22). Writes are atomic:
+//! a temporary file in the same folder, then `rename`.
+//! A missing file means no installations; an unreadable file blocks changes instead of being
+//! overwritten, so what was there is not lost.
 //!
-//! Su disco si salvano solo i percorsi: id, flavor e nome si ricalcolano a ogni lettura,
-//! così seguono sempre il codice attuale. Prima di ogni modifica il file si rilegge, per non
-//! cancellare quello che un'altra istanza dell'app ha scritto nel frattempo. Due modifiche
-//! davvero simultanee da due istanze possono ancora perdersene una: non c'è un lock sul file,
-//! e l'app non impedisce di aprire due istanze.
+//! Only the paths are saved on disk: id, flavor and name are recomputed on every read,
+//! so they always follow the current code. Before every change the file is re-read, so as not
+//! to delete what another instance of the app wrote in the meantime. Two truly simultaneous
+//! changes from two instances can still lose one: there is no lock on the file,
+//! and the app does not prevent opening two instances.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -38,7 +39,7 @@ struct StoredInstallations {
 pub struct InstallationStore {
     file: PathBuf,
     installations: Vec<Installation>,
-    /// Impostato quando il file esiste ma non si può leggere: ogni comando lo riporta.
+    /// Set when the file exists but cannot be read: every command reports it.
     load_error: Option<String>,
 }
 
@@ -93,7 +94,7 @@ impl InstallationStore {
         self.save(next)
     }
 
-    /// Rilegge il file prima di una modifica. Se non si legge, la modifica non avviene.
+    /// Re-reads the file before a change. If it cannot be read, the change does not happen.
     fn reload(&mut self) -> Result<(), String> {
         self.check_loaded()?;
         self.installations = read(&self.file)?;
@@ -107,7 +108,7 @@ impl InstallationStore {
         }
     }
 
-    /// Scrive prima su disco e aggiorna la memoria solo se la scrittura è riuscita.
+    /// Writes to disk first and updates memory only if the write succeeded.
     fn save(&mut self, installations: Vec<Installation>) -> Result<(), String> {
         let stored = StoredInstallations {
             version: FORMAT_VERSION,
@@ -120,31 +121,31 @@ impl InstallationStore {
     }
 }
 
-// ── Impostazioni degli addon ────────────────────────────────────────────────
+// ── Addon settings ──────────────────────────────────────────────────────────
 
 pub const ADDON_SETTINGS_FILE: &str = "addon-settings.json";
 const ADDON_SETTINGS_VERSION: u32 = 1;
 
-/// Le impostazioni di un progetto CurseForge in un'installazione.
+/// The settings of a CurseForge project in an installation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AddonSetting {
-    /// La versione del gioco forzata (D6).
+    /// The pinned game version (D6).
     game_version_type_id: u32,
 }
 
-/// Id dell'installazione → id del progetto CurseForge → impostazioni.
+/// Installation id → CurseForge project id → settings.
 type SettingsByInstallation = BTreeMap<String, BTreeMap<u32, AddonSetting>>;
 
-/// L'aggiornamento automatico di un'installazione (D41, issue #199). Senza voce l'installazione
-/// partecipa e nessun progetto è escluso.
+/// The automatic update of an installation (D41, issue #199). Without an entry the installation
+/// participates and no project is excluded.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallationAutoUpdate {
-    /// L'installazione è esclusa per intero.
+    /// The installation is excluded entirely.
     #[serde(default)]
     pub disabled: bool,
-    /// I progetti esclusi, di qualunque fonte.
+    /// The excluded projects, from any source.
     #[serde(default)]
     pub excluded: BTreeSet<ProjectKey>,
 }
@@ -155,18 +156,18 @@ impl InstallationAutoUpdate {
     }
 }
 
-/// Id dell'installazione → aggiornamento automatico.
+/// Installation id → automatic update.
 type AutoUpdateByInstallation = BTreeMap<String, InstallationAutoUpdate>;
 
-/// Tutto `addon-settings.json` in memoria.
+/// All of `addon-settings.json` in memory.
 #[derive(Debug, Clone, Default)]
 struct AddonSettings {
     overrides: SettingsByInstallation,
     auto_update: AutoUpdateByInstallation,
 }
 
-/// Il campo `autoUpdate` è un'aggiunta della issue #199: un file di prima non lo ha e vale
-/// "nessuna esclusione", senza cambiare versione (come i campi aggiunti a `settings.json`).
+/// The `autoUpdate` field was added by issue #199: an older file does not have it and it counts
+/// as "no exclusions", without changing version (like the fields added to `settings.json`).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredAddonSettings {
@@ -176,9 +177,9 @@ struct StoredAddonSettings {
     auto_update: AutoUpdateByInstallation,
 }
 
-/// Le impostazioni per addon, con le stesse regole di [`InstallationStore`]: rilettura prima
-/// di ogni modifica, scrittura atomica, file illeggibile che blocca le modifiche. I messaggi
-/// sono in inglese, come l'interfaccia (issue #45).
+/// The per-addon settings, with the same rules as [`InstallationStore`]: re-read before
+/// every change, atomic write, an unreadable file blocks changes. Messages
+/// are in English, like the interface (issue #45).
 #[derive(Debug)]
 pub struct AddonSettingsStore {
     file: PathBuf,
@@ -202,9 +203,9 @@ impl AddonSettingsStore {
         }
     }
 
-    /// Le versioni forzate di un'installazione. Un tipo che l'app non conosce più (per esempio
-    /// la Classic progressiva dopo un cambio di espansione) non si usa, e il salvataggio
-    /// successivo lo toglie dal file.
+    /// The pinned versions of an installation. A type the app no longer knows (for example
+    /// progressive Classic after an expansion change) is not used, and the next save
+    /// removes it from the file.
     pub fn overrides_for(&self, installation_id: &str) -> Result<VersionOverrides, String> {
         self.check_loaded()?;
         Ok(self
@@ -218,7 +219,7 @@ impl AddonSettingsStore {
             .collect::<HashMap<_, _>>())
     }
 
-    /// Forza la versione del gioco `version_type` per il progetto `mod_id`.
+    /// Pins the game version `version_type` for the project `mod_id`.
     pub fn set_override(
         &mut self,
         installation_id: &str,
@@ -242,7 +243,7 @@ impl AddonSettingsStore {
         self.save(next)
     }
 
-    /// Toglie la versione forzata; senza una versione forzata non fa niente.
+    /// Removes the pinned version; without a pinned version it does nothing.
     pub fn clear_override(&mut self, installation_id: &str, mod_id: u32) -> Result<(), String> {
         self.reload()?;
         let mut next = self.settings.clone();
@@ -255,8 +256,8 @@ impl AddonSettingsStore {
         self.save(next)
     }
 
-    /// L'aggiornamento automatico di un'installazione: se partecipa e quali progetti sono
-    /// esclusi.
+    /// The automatic update of an installation: whether it participates and which projects are
+    /// excluded.
     pub fn auto_update_for(&self, installation_id: &str) -> Result<InstallationAutoUpdate, String> {
         self.check_loaded()?;
         Ok(self
@@ -267,7 +268,7 @@ impl AddonSettingsStore {
             .unwrap_or_default())
     }
 
-    /// Esclude il progetto dall'aggiornamento automatico, o lo riammette.
+    /// Excludes the project from automatic updates, or readmits it.
     pub fn set_auto_update_excluded(
         &mut self,
         installation_id: &str,
@@ -283,8 +284,8 @@ impl AddonSettingsStore {
         })
     }
 
-    /// Fa partecipare l'installazione all'aggiornamento automatico, o la esclude per intero.
-    /// Le esclusioni dei singoli progetti restano.
+    /// Makes the installation participate in automatic updates, or excludes it entirely.
+    /// The exclusions of single projects stay.
     pub fn set_installation_auto_update(
         &mut self,
         installation_id: &str,
@@ -313,7 +314,7 @@ impl AddonSettingsStore {
         Ok(changed)
     }
 
-    /// Toglie tutte le impostazioni di un'installazione rimossa: versioni forzate ed esclusioni.
+    /// Removes all the settings of a removed installation: pinned versions and exclusions.
     pub fn remove_installation(&mut self, installation_id: &str) -> Result<(), String> {
         self.reload()?;
         if !self.settings.overrides.contains_key(installation_id)
@@ -340,7 +341,7 @@ impl AddonSettingsStore {
         }
     }
 
-    /// Scrive le impostazioni senza i tipi che l'app non conosce più e senza le voci vuote.
+    /// Writes the settings without the types the app no longer knows and without empty entries.
     fn save(&mut self, mut settings: AddonSettings) -> Result<(), String> {
         for addons in settings.overrides.values_mut() {
             addons
@@ -389,36 +390,36 @@ fn read_addon_settings(file: &Path) -> Result<AddonSettings, String> {
     })
 }
 
-// ── Addon installati dall'app ───────────────────────────────────────────────
+// ── Addons installed by the app ─────────────────────────────────────────────
 
 pub const INSTALLED_ADDONS_FILE: &str = "installed-addons.json";
-/// Versione 2: record per fonte e id testuale (issue #104). La versione 1 aveva solo progetti
-/// CurseForge con id numerico; si legge ancora e si riscrive come 2 alla prima modifica.
-/// Una nuova variante di [`SourceKind`] richiede una versione nuova.
+/// Version 2: records per source and textual id (issue #104). Version 1 had only CurseForge
+/// projects with a numeric id; it is still read and rewritten as 2 on the first change.
+/// A new variant of [`SourceKind`] requires a new version.
 const INSTALLED_ADDONS_VERSION: u32 = 2;
 const INSTALLED_ADDONS_VERSION_V1: u32 = 1;
 
-/// La fonte da cui l'app ha installato un progetto. Su disco è la chiave in minuscolo
+/// The source the app installed a project from. On disk it is the lowercase key
 /// (`curseforge`, `github`, `wowinterface`, `tukui`).
 ///
-/// **Aggiungere una variante cambia il formato del file**: va alzato anche
-/// [`INSTALLED_ADDONS_VERSION`]. Una versione dell'app più vecchia legge allora una versione
-/// sconosciuta e chiede di aggiornare l'app lasciando il file com'è; con la stessa versione
-/// leggerebbe una fonte sconosciuta e direbbe che il file è danneggiato, invitando a spostarlo
-/// e a perdere tutti i record.
+/// **Adding a variant changes the file format**: [`INSTALLED_ADDONS_VERSION`] must be raised
+/// too. An older version of the app then reads an unknown version and asks to update the
+/// app, leaving the file as it is; with the same version it would read an unknown source and
+/// say the file is damaged, inviting the user to move it away and lose all the
+/// records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceKind {
     Curseforge,
-    // Le fonti libere scriveranno i loro record con le issue #106, #107 e #108; per ora queste
-    // varianti si leggono solo da file.
+    // The free sources will write their records with issues #106, #107 and #108; for now these
+    // variants are only read from file.
     Github,
     Wowinterface,
     Tukui,
 }
 
 impl SourceKind {
-    /// Il nome della fonte mostrato nei messaggi (in inglese, come tutta l'interfaccia).
+    /// The source name shown in messages (in English, like the whole interface).
     pub fn label(self) -> &'static str {
         match self {
             Self::Curseforge => "CurseForge",
@@ -429,38 +430,38 @@ impl SourceKind {
     }
 }
 
-/// Quello che l'app ha installato per un progetto di una fonte. `file` identifica il file
-/// installato nel modo della fonte: l'id del file per CurseForge, il tag per GitHub, la
-/// versione per WoWInterface e Tukui.
+/// What the app installed for a project of a source. `file` identifies the installed file in
+/// the source's own way: the file id for CurseForge, the tag for GitHub, the
+/// version for WoWInterface and Tukui.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceRecord {
     pub file: String,
-    /// I nomi delle cartelle di primo livello dello zip, come li ha restituiti l'estrazione.
+    /// The names of the zip's top-level folders, as the extraction returned them.
     pub folders: Vec<String>,
 }
 
-/// Id del progetto nella fonte (`61284`, `owner/repo`, `-2`) → record.
+/// Project id in the source (`61284`, `owner/repo`, `-2`) → record.
 pub type ProjectRecords = BTreeMap<String, SourceRecord>;
 
-/// Fonte → record dei suoi progetti.
+/// Source → records of its projects.
 pub type SourceRecords = BTreeMap<SourceKind, ProjectRecords>;
 
-/// Id dell'installazione → record per fonte.
+/// Installation id → records per source.
 type RecordsByInstallation = BTreeMap<String, SourceRecords>;
 
-/// Quello che l'app ha installato per un progetto CurseForge: il file e le cartelle del suo
-/// zip. Serve a ritrovare le cartelle di un progetto senza indovinarle dai `.toc` (issue #62).
-/// È la vista CurseForge dei record v2, quella che usano oggi controllo e installazione.
+/// What the app installed for a CurseForge project: the file and the folders of its
+/// zip. It is used to find a project's folders without guessing them from the `.toc` (issue #62).
+/// It is the CurseForge view of the v2 records, the one checking and installing use today.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledRecord {
     pub file_id: u32,
-    /// I nomi delle cartelle di primo livello dello zip, come li ha restituiti l'estrazione.
+    /// The names of the zip's top-level folders, as the extraction returned them.
     pub folders: Vec<String>,
 }
 
-/// Id del progetto CurseForge → il suo record.
+/// CurseForge project id → its record.
 pub type InstalledRecords = BTreeMap<u32, InstalledRecord>;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -469,7 +470,7 @@ struct StoredInstalledAddons {
     installations: RecordsByInstallation,
 }
 
-/// Il formato della versione 1, letto solo per la migrazione.
+/// The version 1 format, read only for the migration.
 #[derive(Debug, Deserialize)]
 struct StoredInstalledAddonsV1 {
     installations: BTreeMap<String, InstalledRecords>,
@@ -480,8 +481,8 @@ struct StoredVersion {
     version: u32,
 }
 
-/// I progetti installati dall'app, con le stesse regole di [`InstallationStore`]: rilettura
-/// prima di ogni modifica, scrittura atomica, file illeggibile che blocca le modifiche.
+/// The projects installed by the app, with the same rules as [`InstallationStore`]: re-read
+/// before every change, atomic write, an unreadable file blocks changes.
 #[derive(Debug)]
 pub struct InstalledAddonsStore {
     file: PathBuf,
@@ -505,8 +506,8 @@ impl InstalledAddonsStore {
         }
     }
 
-    /// I record CurseForge di un'installazione; vuoto se l'app non vi ha ancora installato
-    /// niente. I record delle altre fonti restano nel file e non compaiono qui.
+    /// The CurseForge records of an installation; empty if the app has not installed anything
+    /// there yet. The records of the other sources stay in the file and do not appear here.
     pub fn records_for(&self, installation_id: &str) -> Result<InstalledRecords, String> {
         self.check_loaded()?;
         let Some(projects) = self
@@ -522,8 +523,8 @@ impl InstalledAddonsStore {
             .collect()
     }
 
-    /// Registra (o sostituisce) quello che l'app ha appena installato per il progetto
-    /// CurseForge `mod_id`.
+    /// Records (or replaces) what the app has just installed for the CurseForge project
+    /// `mod_id`.
     pub fn record(
         &mut self,
         installation_id: &str,
@@ -541,8 +542,8 @@ impl InstalledAddonsStore {
         )
     }
 
-    /// Tutti i record di un'installazione, per fonte; vuoto se l'app non vi ha ancora installato
-    /// niente.
+    /// All the records of an installation, per source; empty if the app has not installed
+    /// anything there yet.
     pub fn source_records_for(&self, installation_id: &str) -> Result<SourceRecords, String> {
         self.check_loaded()?;
         Ok(self
@@ -552,7 +553,7 @@ impl InstalledAddonsStore {
             .unwrap_or_default())
     }
 
-    /// Registra (o sostituisce) il record di un progetto di qualsiasi fonte.
+    /// Records (or replaces) the record of a project from any source.
     pub fn record_source(
         &mut self,
         installation_id: &str,
@@ -570,8 +571,9 @@ impl InstalledAddonsStore {
         self.save(next)
     }
 
-    /// Toglie il record di un solo progetto, se c'è (l'Undo del giro automatico per un
-    /// progetto che prima non aveva record, issue #201). Senza record da togliere non scrive.
+    /// Removes the record of a single project, if there is one (the automatic round's Undo for a
+    /// project that had no record before, issue #201). Without a record to remove it does not
+    /// write.
     pub fn forget_project(
         &mut self,
         installation_id: &str,
@@ -598,14 +600,14 @@ impl InstalledAddonsStore {
         self.save(next)
     }
 
-    /// Toglie i record (di qualsiasi fonte) dell'installazione che nominano almeno una delle
-    /// cartelle `folders`, senza distinguere maiuscole e minuscole: servono quando uno zip
-    /// installato a mano scrive quelle cartelle (D32), così il record non descrive più un file
-    /// che non c'è. Si toglie il record intero, anche se solo una delle sue cartelle è cambiata:
-    /// un record dice "questo file è installato in queste cartelle", e dopo una sovrascrittura
-    /// parziale non è più vero per nessuna. Le cartelle rimaste si riconoscono di nuovo come
-    /// quelle installate a mano (per CurseForge dal fingerprint, che non usa i record).
-    /// Restituisce quanti record ha tolto; senza record da togliere non scrive.
+    /// Removes the installation's records (from any source) that name at least one of the
+    /// `folders`, case-insensitively: needed when a zip installed by hand writes those folders
+    /// (D32), so that the record no longer describes a file that is not there. The whole
+    /// record is removed, even if only one of its folders changed: a record says "this file is
+    /// installed in these folders", and after a partial overwrite that is no longer true for
+    /// any of them. The remaining folders are recognised again like those installed by hand
+    /// (for CurseForge by fingerprint, which does not use the records).
+    /// Returns how many records it removed; without records to remove it does not write.
     pub fn forget_folders(
         &mut self,
         installation_id: &str,
@@ -637,7 +639,7 @@ impl InstalledAddonsStore {
         Ok(removed)
     }
 
-    /// Toglie tutti i record di un'installazione rimossa.
+    /// Removes all the records of a removed installation.
     pub fn remove_installation(&mut self, installation_id: &str) -> Result<(), String> {
         self.reload()?;
         if !self.records.contains_key(installation_id) {
@@ -677,8 +679,8 @@ impl InstalledAddonsStore {
     }
 }
 
-/// Un record v2 di CurseForge nella forma usata da controllo e installazione. Id del progetto
-/// e del file devono essere numerici: [`read_installed_addons`] lo verifica già alla lettura.
+/// A CurseForge v2 record in the form used by checking and installing. Project and file ids
+/// must be numeric: [`read_installed_addons`] already verifies it on read.
 fn curseforge_record(id: &str, record: &SourceRecord) -> Result<(u32, InstalledRecord), String> {
     match (id.parse(), record.file.parse()) {
         (Ok(mod_id), Ok(file_id)) => Ok((
@@ -726,8 +728,8 @@ fn read_installed_addons(file: &Path) -> Result<RecordsByInstallation, String> {
             ));
         }
     };
-    // Un record CurseForge con id non numerici renderebbe illeggibile la vista di
-    // `records_for`: meglio bloccare subito, come per un file danneggiato.
+    // A CurseForge record with non-numeric ids would make the `records_for` view
+    // unreadable: better to block right away, as for a damaged file.
     for sources in records.values() {
         if let Some(projects) = sources.get(&SourceKind::Curseforge) {
             for (id, record) in projects {
@@ -738,7 +740,7 @@ fn read_installed_addons(file: &Path) -> Result<RecordsByInstallation, String> {
     Ok(records)
 }
 
-/// Versione 1 → 2: ogni progetto era CurseForge, con id e file numerici.
+/// Version 1 → 2: every project was CurseForge, with numeric id and file.
 fn migrate_v1(stored: StoredInstalledAddonsV1) -> RecordsByInstallation {
     stored
         .installations
@@ -764,12 +766,12 @@ fn migrate_v1(stored: StoredInstalledAddonsV1) -> RecordsByInstallation {
         .collect()
 }
 
-// ── Impostazioni dell'app ───────────────────────────────────────────────────
+// ── App settings ────────────────────────────────────────────────────────────
 
 pub const APP_SETTINGS_FILE: &str = "settings.json";
 const APP_SETTINGS_VERSION: u32 = 1;
 
-/// Il tema dell'interfaccia: `system` segue il sistema operativo.
+/// The interface theme: `system` follows the operating system.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
@@ -780,7 +782,7 @@ pub enum Theme {
 }
 
 impl Theme {
-    /// Il tema dal suo nome; un valore sconosciuto è un errore con un messaggio in inglese.
+    /// The theme from its name; an unknown value is an error with a message in English.
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
             "system" => Ok(Self::System),
@@ -791,8 +793,8 @@ impl Theme {
     }
 }
 
-/// Cosa fa l'aggiornamento automatico degli addon (D41, issue #199): niente, solo il
-/// controllo, oppure il controllo e l'installazione.
+/// What the automatic addon update does (D41, issue #199): nothing, only the
+/// check, or the check and the installation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AutoUpdateMode {
@@ -803,7 +805,7 @@ pub enum AutoUpdateMode {
 }
 
 impl AutoUpdateMode {
-    /// La modalità dal suo nome; un valore sconosciuto è un errore con un messaggio in inglese.
+    /// The mode from its name; an unknown value is an error with a message in English.
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
             "off" => Ok(Self::Off),
@@ -814,11 +816,11 @@ impl AutoUpdateMode {
     }
 }
 
-/// Gli intervalli ammessi tra due giri dell'aggiornamento automatico, in ore.
+/// The allowed intervals between two automatic update rounds, in hours.
 pub const AUTO_UPDATE_INTERVALS_HOURS: [u32; 5] = [1, 3, 6, 12, 24];
 pub const DEFAULT_AUTO_UPDATE_INTERVAL_HOURS: u32 = 6;
 
-/// Controlla un intervallo scelto dall'utente.
+/// Validates an interval chosen by the user.
 pub fn check_auto_update_interval(hours: u32) -> Result<u32, String> {
     if AUTO_UPDATE_INTERVALS_HOURS.contains(&hours) {
         Ok(hours)
@@ -831,25 +833,26 @@ fn default_auto_update_interval() -> u32 {
     DEFAULT_AUTO_UPDATE_INTERVAL_HOURS
 }
 
-/// Le impostazioni dell'app, come le riceve il frontend (`get_settings`).
+/// The app settings, as the frontend receives them (`get_settings`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub theme: Theme,
-    /// Installare e aggiornare alla Beta quando la versione del gioco non ha una Release (issue
-    /// #141). Un `settings.json` di prima non ha il campo: vale falso, senza cambiare versione.
+    /// Install and update to the Beta when the game version has no Release (issue #141). An
+    /// older `settings.json` lacks the field: it counts as false, without changing version.
     #[serde(default)]
     pub beta_when_no_release: bool,
-    /// Chiudere la finestra principale la nasconde nella tray invece di chiudere l'app (issue
-    /// #158, D35). Un `settings.json` di prima non ha il campo: vale falso, la X chiude.
+    /// Closing the main window hides it in the tray instead of closing the app (issue
+    /// #158, D35). An older `settings.json` lacks the field: it counts as false, the X closes.
     #[serde(default)]
     pub close_to_tray: bool,
-    /// L'aggiornamento automatico (D41, issue #199). Un `settings.json` di prima non ha il
-    /// campo: vale `notify`, che controlla senza toccare il disco.
+    /// The automatic update (D41, issue #199). An older `settings.json` lacks the
+    /// field: it counts as `notify`, which checks without touching the disk.
     #[serde(default)]
     pub auto_update: AutoUpdateMode,
-    /// Le ore tra due giri, uno di [`AUTO_UPDATE_INTERVALS_HOURS`]. Un file senza il campo vale
-    /// 6; un valore non ammesso scritto a mano si legge come 6, senza bloccare le impostazioni.
+    /// The hours between two rounds, one of [`AUTO_UPDATE_INTERVALS_HOURS`]. A file without the
+    /// field counts as 6; a disallowed value written by hand reads as 6, without blocking the
+    /// settings.
     #[serde(default = "default_auto_update_interval")]
     pub auto_update_interval_hours: u32,
 }
@@ -873,9 +876,9 @@ struct StoredAppSettings {
     settings: AppSettings,
 }
 
-/// Le impostazioni dell'app, con le stesse regole di [`InstallationStore`]: rilettura prima di
-/// ogni modifica, scrittura atomica, file illeggibile che blocca le modifiche. Senza file valgono
-/// i valori di default (tema `system`).
+/// The app settings, with the same rules as [`InstallationStore`]: re-read before every
+/// change, atomic write, an unreadable file blocks changes. Without a file the default values
+/// apply (theme `system`).
 #[derive(Debug)]
 pub struct AppSettingsStore {
     file: PathBuf,
@@ -904,17 +907,17 @@ impl AppSettingsStore {
         Ok(self.settings)
     }
 
-    /// Salva il tema e restituisce le impostazioni aggiornate.
+    /// Saves the theme and returns the updated settings.
     pub fn set_theme(&mut self, theme: Theme) -> Result<AppSettings, String> {
         self.reload()?;
-        // Si cambia solo il tema: le altre impostazioni restano quelle appena rilette.
+        // Only the theme changes: the other settings stay those just re-read.
         let mut next = self.settings;
         next.theme = theme;
         self.save(next)?;
         Ok(next)
     }
 
-    /// Salva l'opzione della Beta e restituisce le impostazioni aggiornate.
+    /// Saves the Beta option and returns the updated settings.
     pub fn set_beta_when_no_release(&mut self, enabled: bool) -> Result<AppSettings, String> {
         self.reload()?;
         let mut next = self.settings;
@@ -923,8 +926,8 @@ impl AppSettingsStore {
         Ok(next)
     }
 
-    /// Salva modalità e intervallo dell'aggiornamento automatico e restituisce le impostazioni
-    /// aggiornate. Un intervallo non ammesso non tocca né la memoria né il file.
+    /// Saves the automatic update's mode and interval and returns the updated
+    /// settings. A disallowed interval touches neither memory nor the file.
     pub fn set_auto_update(
         &mut self,
         mode: AutoUpdateMode,
@@ -939,7 +942,7 @@ impl AppSettingsStore {
         Ok(next)
     }
 
-    /// Salva l'opzione "Close to tray" e restituisce le impostazioni aggiornate.
+    /// Saves the "Close to tray" option and returns the updated settings.
     pub fn set_close_to_tray(&mut self, enabled: bool) -> Result<AppSettings, String> {
         self.reload()?;
         let mut next = self.settings;
@@ -984,8 +987,8 @@ fn read_app_settings(file: &Path) -> Result<AppSettings, String> {
             ));
         }
     };
-    // Prima la versione, poi il resto: un file di una versione futura si riconosce come tale
-    // anche se i suoi campi non si leggono più.
+    // The version first, then the rest: a file from a future version is recognised as such
+    // even if its fields can no longer be read.
     let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| damaged_settings())?;
     let version = value.get("version").and_then(serde_json::Value::as_u64);
     if version != Some(u64::from(APP_SETTINGS_VERSION)) {
@@ -1040,7 +1043,7 @@ fn read(file: &Path) -> Result<Vec<Installation>, String> {
         .collect()
 }
 
-/// Il contenuto del file; `None` se non esiste.
+/// The file's content; `None` if it does not exist.
 pub(crate) fn read_text(file: &Path) -> std::io::Result<Option<String>> {
     match fs::read_to_string(file) {
         Ok(text) => Ok(Some(text)),
@@ -1246,7 +1249,7 @@ mod tests {
         let mut store = AddonSettingsStore::load(file.clone());
         store.set_override("a", 7, CLASSIC_ERA).unwrap();
         store.clear_override("a", 7).unwrap();
-        // Togliere una versione forzata che non c'è non è un errore.
+        // Removing a pinned version that is not there is not an error.
         store.clear_override("a", 7).unwrap();
         store.clear_override("missing", 1).unwrap();
 
@@ -1285,14 +1288,14 @@ mod tests {
             VersionOverrides::from([(8, RETAIL)])
         );
 
-        // La lettura non tocca il file: il tipo sconosciuto resta finché non si salva.
+        // Reading does not touch the file: the unknown type stays until a save.
         let before: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
         assert_eq!(
             before["installations"]["a"]["7"],
             serde_json::json!({"gameVersionTypeId": 1})
         );
 
-        // Il salvataggio successivo lo toglie dal file.
+        // The next save removes it from the file.
         store.set_override("b", 7, RETAIL).unwrap();
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
         assert_eq!(
@@ -1362,7 +1365,7 @@ mod tests {
         store
             .set_auto_update_excluded("a", project(SourceKind::Github, "owner/repo"), true)
             .unwrap();
-        // Escludere due volte lo stesso progetto non lo duplica.
+        // Excluding the same project twice does not duplicate it.
         let entry = store
             .set_auto_update_excluded("a", project(SourceKind::Tukui, "-2"), true)
             .unwrap();
@@ -1427,7 +1430,7 @@ mod tests {
         store
             .set_auto_update_excluded("a", project(SourceKind::Wowinterface, "5"), false)
             .unwrap();
-        // Una voce tornata al default non resta nel file.
+        // An entry back at the default does not stay in the file.
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
         assert!(saved.get("autoUpdate").is_none());
     }
@@ -1546,7 +1549,7 @@ mod tests {
             .record("a", 7, record(70, &["Details", "Details_Compare2"]))
             .unwrap();
         store.record("b", 7, record(71, &["Details"])).unwrap();
-        // Un nuovo record dello stesso progetto sostituisce il precedente.
+        // A new record for the same project replaces the previous one.
         store.record("a", 7, record(72, &["Details"])).unwrap();
 
         let reloaded = InstalledAddonsStore::load(file.clone());
@@ -1628,7 +1631,7 @@ mod tests {
             store.records_for("a").unwrap(),
             InstalledRecords::from([(61284, record(5000, &["Details", "Details_Compare2"]))])
         );
-        // Leggere non riscrive il file.
+        // Reading does not rewrite the file.
         assert_eq!(fs::read(&file).unwrap(), v1);
 
         store.record("b", 7, record(70, &["Alpha"])).unwrap();
@@ -1675,7 +1678,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        // Un record CurseForge scritto dopo non cancella quelli delle altre fonti.
+        // A CurseForge record written afterwards does not delete those of the other sources.
         store.record("a", 8, record(80, &["Beta"])).unwrap();
 
         let reloaded = InstalledAddonsStore::load(file.clone());
@@ -1701,7 +1704,7 @@ mod tests {
         store
             .forget_project("a", SourceKind::Curseforge, "7")
             .unwrap();
-        // Un progetto senza record non scrive e non fallisce.
+        // A project without a record neither writes nor fails.
         store
             .forget_project("a", SourceKind::Github, "x/y")
             .unwrap();
@@ -1743,7 +1746,7 @@ mod tests {
             .unwrap();
         store.record("b", 7, record(70, &["Alpha"])).unwrap();
 
-        // Le maiuscole non contano; l'altra installazione resta com'è.
+        // Case does not matter; the other installation stays as it is.
         let removed = store
             .forget_folders("a", &["alpha_options".to_owned(), "ELVUI".to_owned()])
             .unwrap();
@@ -1760,7 +1763,7 @@ mod tests {
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
         assert!(saved["installations"]["a"].get("tukui").is_none());
 
-        // Nessun record da togliere: il file non si riscrive.
+        // No record to remove: the file is not rewritten.
         let before = fs::read(&file).unwrap();
         assert_eq!(store.forget_folders("a", &["Other".to_owned()]).unwrap(), 0);
         assert_eq!(
@@ -1792,13 +1795,13 @@ mod tests {
         let tmp = TempDir::new();
         let file = tmp.path().join(INSTALLED_ADDONS_FILE);
         for body in [
-            // Fonte sconosciuta.
+            // Unknown source.
             r#"{"version": 2, "installations": {"a": {"wago": {"x": {"file": "1", "folders": []}}}}}"#,
-            // Id CurseForge non numerico.
+            // Non-numeric CurseForge id.
             r#"{"version": 2, "installations": {"a": {"curseforge": {"abc": {"file": "1", "folders": []}}}}}"#,
-            // File CurseForge non numerico.
+            // Non-numeric CurseForge file.
             r#"{"version": 2, "installations": {"a": {"curseforge": {"7": {"file": "v1", "folders": []}}}}}"#,
-            // Versione illeggibile.
+            // Unreadable version.
             r#"{"installations": {}}"#,
         ] {
             fs::write(&file, body).unwrap();
@@ -1820,7 +1823,7 @@ mod tests {
         let file = tmp.path().join("config").join(APP_SETTINGS_FILE);
         let store = AppSettingsStore::load(file.clone());
         assert_eq!(store.get().unwrap().theme, Theme::System);
-        // Leggere non crea il file.
+        // Reading does not create the file.
         assert!(!file.exists());
     }
 
@@ -1861,7 +1864,7 @@ mod tests {
     fn the_beta_option_defaults_to_off_and_keeps_the_theme() {
         let tmp = TempDir::new();
         let file = tmp.path().join(APP_SETTINGS_FILE);
-        // Un file scritto prima della issue #141 non ha il campo.
+        // A file written before issue #141 does not have the field.
         fs::write(&file, r#"{"version": 1, "theme": "dark"}"#).unwrap();
         let mut store = AppSettingsStore::load(file.clone());
         assert!(!store.get().unwrap().beta_when_no_release);
@@ -1925,7 +1928,7 @@ mod tests {
         assert_eq!(missing.auto_update, AutoUpdateMode::Notify);
         assert_eq!(missing.auto_update_interval_hours, 6);
 
-        // Un file scritto prima della issue #199 non ha i campi.
+        // A file written before issue #199 does not have the fields.
         fs::write(
             &file,
             r#"{"version": 1, "theme": "dark", "closeToTray": true}"#,

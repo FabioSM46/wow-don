@@ -1,22 +1,22 @@
-// Installazione di uno zip scaricato a mano (D32): quale file trascinato si accetta e il testo
-// dell'esito di `install_zip`. Funzioni pure, senza React né I/O.
+// Installing a manually downloaded zip (D32): which dropped file is accepted and the text of
+// the `install_zip` outcome. Pure functions, no React or I/O.
 
 import type { LocalInstall } from "../api";
 
-/** Il nome del file alla fine di un percorso, con `/` o `\` come separatore. */
+/** The file name at the end of a path, with `/` or `\` as separator. */
 export function fileName(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
 }
 
-/** Se il percorso termina in `.zip`, senza distinguere maiuscole e minuscole. */
+/** Whether the path ends in `.zip`, ignoring case. */
 export function isZipPath(path: string): boolean {
   return fileName(path).toLowerCase().endsWith(".zip");
 }
 
 /**
- * Il file da installare tra quelli trascinati, oppure il motivo per cui non si installa niente.
- * Il backend non si chiama finché questo non restituisce un percorso.
+ * The file to install among the dropped ones, or the reason nothing is installed.
+ * The backend is not called until this returns a path.
  */
 export function pickZip(
   paths: string[],
@@ -37,7 +37,7 @@ function folderList(folders: string[]): string {
   return folders.join(", ");
 }
 
-/** La frase dell'esito di `install_zip` per lo zip `zipName` nell'installazione `target`. */
+/** The sentence for the `install_zip` outcome of zip `zipName` in installation `target`. */
 export function describeZipInstall(result: LocalInstall, zipName: string, target: string): string {
   const count = result.installed.length;
   const what = count === 1 ? "1 folder" : `${count} folders`;

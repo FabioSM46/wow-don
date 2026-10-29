@@ -4,15 +4,15 @@ import { SettingRow, SettingsSection, Segmented } from "./Setting";
 import { isTheme, THEMES } from "./theme";
 
 type Props = {
-  /** Il tema in uso; `null` finché `get_settings` non ha risposto. */
+  /** The theme in use; `null` until `get_settings` has answered. */
   theme: Theme | null;
-  /** Errore di `get_settings` (per esempio `settings.json` danneggiato). */
+  /** Error from `get_settings` (for example a corrupted `settings.json`). */
   loadError: string | null;
-  /** Applica il tema a tutta l'app. */
+  /** Applies the theme to the whole app. */
   onChange: (theme: Theme) => void;
 };
 
-/** La sezione "Appearance" di Options: un solo controllo segmentato per il tema. */
+/** The "Appearance" section of Options: a single segmented control for the theme. */
 export function Appearance({ theme, loadError, onChange }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -21,8 +21,8 @@ export function Appearance({ theme, loadError, onChange }: Props) {
     if (!isTheme(value) || theme === null) return;
     const previous = theme;
     setError(null);
-    // Il tema si applica subito; se il salvataggio fallisce si torna a quello di prima, così
-    // quello che si vede è quello che ci sarà al prossimo avvio.
+    // The theme applies at once; if saving fails it goes back to the previous one, so what
+    // you see is what there will be at the next start.
     onChange(value);
     setBusy(true);
     try {

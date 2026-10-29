@@ -1,22 +1,21 @@
-//! Banco di prova dell'import (issue #180): misura un import reale, con la rete vera, nello
-//! stesso percorso del comando `import_addons` (`import_availability`, `CommandInstaller`,
-//! `addon_import::run_import`), in un'installazione finta sotto una cartella temporanea. Non tocca
-//! mai una cartella del gioco vera e non gira in CI (`#[ignore]`).
+//! Import benchmark (issue #180): measures a real import, over the real network, along the same
+//! path as the `import_addons` command (`import_availability`, `CommandInstaller`,
+//! `addon_import::run_import`), in a fake installation under a temporary folder. It never touches
+//! a real game folder and does not run in CI (`#[ignore]`).
 //!
-//! Legge solo due variabili d'ambiente: `CURSEFORGE_API_KEY` (mai stampata) e
-//! `WOWDON_IMPORT_LIST`, il percorso di un file con una stringa `WOWDON1`. Dalla radice del
-//! repository:
+//! It reaches CurseForge through the proxy, as the app does (D44), and reads one environment
+//! variable: `WOWDON_IMPORT_LIST`, the path of a file holding a `WOWDON1` string. From the
+//! repository root:
 //!
 //! ```text
 //! cd src-tauri
-//! CURSEFORGE_API_KEY=<key> WOWDON_IMPORT_LIST=<file> \
-//!   cargo test --locked --lib import_bench -- --ignored --nocapture
+//! WOWDON_IMPORT_LIST=<file> cargo test --locked --lib import_bench -- --ignored --nocapture
 //! ```
 //!
-//! Stampa il tempo totale e quello delle fasi, ricavate dagli eventi di avanzamento: ogni
-//! intervallo tra due eventi va alla fase dell'evento che lo apre. "network" sono `checking`,
-//! `downloading` e `downloaded`, più il tempo prima del primo evento; "disk" sono `extracting` e
-//! `installing`.
+//! It prints the total time and the time of each phase, derived from the progress events: every
+//! interval between two events goes to the phase of the event that opens it. "network" is
+//! `checking`, `downloading` and `downloaded`, plus the time before the first event; "disk" is
+//! `extracting` and `installing`.
 
 use std::fs;
 use std::sync::Mutex;
@@ -26,7 +25,7 @@ use super::*;
 use crate::progress::Phase;
 use crate::test_support::TempDir;
 
-/// Gli eventi di avanzamento con il momento in cui sono arrivati.
+/// The progress events with the moment they arrived.
 #[derive(Default)]
 struct Timeline(Mutex<Vec<(Instant, Phase)>>);
 
@@ -38,8 +37,8 @@ impl Timeline {
             .push((Instant::now(), progress.phase));
     }
 
-    /// (rete, disco): la somma degli intervalli tra eventi consecutivi da `start` a `end`. Il
-    /// tempo prima del primo evento (le richieste in blocco) è rete.
+    /// (network, disk): the sum of the intervals between consecutive events from `start` to
+    /// `end`. The time before the first event (the bulk requests) is network.
     fn split(&self, start: Instant, end: Instant) -> (Duration, Duration) {
         let events = self.0.lock().unwrap();
         let mut network = events
@@ -60,12 +59,8 @@ impl Timeline {
 }
 
 #[test]
-#[ignore = "real network and API key: run by hand, see the module documentation"]
+#[ignore = "real network through the proxy: run by hand, see the module documentation"]
 fn import_bench() {
-    let key = std::env::var("CURSEFORGE_API_KEY")
-        .ok()
-        .filter(|key| !key.trim().is_empty())
-        .expect("CURSEFORGE_API_KEY is not set");
     let list = std::env::var("WOWDON_IMPORT_LIST").expect("WOWDON_IMPORT_LIST is not set");
     let text = fs::read_to_string(list).expect("the WOWDON_IMPORT_LIST file is not readable");
     let decoded = addon_list::decode(&text).expect("not a WOWDON1 string");
@@ -100,11 +95,13 @@ fn import_bench() {
 
     let start = Instant::now();
     let transport = ReqwestTransport::new().unwrap();
-    let client = CurseForgeClient::new(transport, Some(key));
+    let client = CurseForgeClient::new(
+        transport,
+        Some(crate::config::Config::load().curseforge_url),
+    );
     let tukui = tukui_source().unwrap();
     let github = github_source().unwrap();
-    let (availability, lookup_error) =
-        import_availability(&decoded.list.addons, &client, true, &tukui);
+    let (availability, lookup_error) = import_availability(&decoded.list.addons, &client, &tukui);
     let checked = Instant::now();
     let mut installer = CommandInstaller {
         installation: &installation,

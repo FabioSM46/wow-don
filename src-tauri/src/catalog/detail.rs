@@ -1,6 +1,6 @@
-//! Il dettaglio di un addon del catalogo: descrizione in testo, immagini della gallery, file
-//! recenti e dipendenze obbligatorie, per decidere se installarlo e quale versione arriverà. Bloccante: va
-//! chiamato fuori dal thread principale.
+//! The detail of a catalog addon: text description, gallery images, recent files and
+//! required dependencies, to decide whether to install it and which version will arrive.
+//! Blocking: it must be called off the main thread.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,19 +16,20 @@ use crate::sources::curseforge::{
 use crate::store::InstalledRecords;
 use crate::updates::VersionOverrides;
 
-/// I file mostrati nel dettaglio, al massimo.
+/// The maximum number of files shown in the detail.
 pub const MAX_FILES: usize = 20;
-/// I file chiesti all'API per pagina: il massimo, perché gli Alpha si scartano dopo.
+/// The files requested from the API per page: the maximum, because Alpha files are discarded
+/// later.
 const FILES_PAGE_SIZE: u32 = 50;
 
-/// Un file del progetto nel dettaglio.
+/// A project file in the detail.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetailFile {
     pub id: u32,
-    /// Il nome mostrato da CurseForge, altrimenti quello dello zip; vuoto se mancano entrambi.
+    /// The name shown by CurseForge, otherwise the zip's; empty if both are missing.
     pub name: String,
-    /// Data ISO 8601 del file.
+    /// ISO 8601 date of the file.
     pub date: String,
     /// 1 Release, 2 Beta.
     pub release_type: u8,
@@ -50,32 +51,32 @@ impl From<&File> for DetailFile {
     }
 }
 
-/// Una dipendenza obbligatoria.
+/// A required dependency.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dependency {
     pub id: u32,
-    /// Vuoto se CurseForge non restituisce il progetto.
+    /// Empty if CurseForge does not return the project.
     pub name: String,
 }
 
-/// Un'immagine della gallery. Gli URL sono indirizzi pubblici del CDN di CurseForge (vedi
-/// [`is_media_url`]): il frontend li carica con `<img src>`, il backend non li scarica.
+/// A gallery image. The URLs are public addresses on the CurseForge CDN (see
+/// [`is_media_url`]): the frontend loads them with `<img src>`, the backend does not download them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Screenshot {
-    /// Testo semplice, vuoto se manca; si mostra solo come testo, come `description`.
+    /// Plain text, empty if missing; shown only as text, like `description`.
     pub title: String,
-    /// Testo semplice, vuoto se manca; si mostra solo come testo.
+    /// Plain text, empty if missing; shown only as text.
     pub description: String,
-    /// L'anteprima, oppure `url` se l'anteprima manca o non è sul CDN.
+    /// The thumbnail, or `url` if the thumbnail is missing or not on the CDN.
     pub thumbnail_url: String,
-    /// L'immagine intera.
+    /// The full image.
     pub url: String,
 }
 
 impl Screenshot {
-    /// L'immagine se `url` è sul CDN, altrimenti niente.
+    /// The image if `url` is on the CDN, otherwise nothing.
     fn from_asset(asset: &ModAsset) -> Option<Self> {
         let url = asset.url.as_deref().filter(|url| is_media_url(url))?;
         let thumbnail_url = asset
@@ -92,38 +93,38 @@ impl Screenshot {
     }
 }
 
-/// Le immagini della gallery mostrabili, nell'ordine dell'API.
+/// The gallery images that can be shown, in the API's order.
 fn screenshots(assets: &[ModAsset]) -> Vec<Screenshot> {
     assets.iter().filter_map(Screenshot::from_asset).collect()
 }
 
-/// Il dettaglio per il frontend: i campi di [`CatalogAddon`] più descrizione, gallery, file e
-/// dipendenze.
+/// The detail for the frontend: the fields of [`CatalogAddon`] plus description, gallery, files
+/// and dependencies.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddonDetail {
     #[serde(flatten)]
     pub addon: CatalogAddon,
-    /// La versione del gioco usata per i file e le dipendenze.
+    /// The game version used for the files and the dependencies.
     pub version_type: u32,
-    /// La descrizione in testo semplice: nessun HTML dell'autore arriva al frontend. Può
-    /// contenere `<` e `>` decodificati dalle entità, quindi si mostra solo come testo, mai
-    /// con `innerHTML` (vedi `text::plain_text`).
+    /// The description as plain text: no author HTML reaches the frontend. It may contain
+    /// `<` and `>` decoded from entities, so it is shown only as text, never with
+    /// `innerHTML` (see `text::plain_text`).
     pub description: String,
-    /// Le immagini della gallery, dalla stessa `get_mod`: nessuna richiesta in più.
+    /// The gallery images, from the same `get_mod`: no extra request.
     pub screenshots: Vec<Screenshot>,
-    /// I file Release e Beta per la versione, dal più recente, al massimo [`MAX_FILES`].
+    /// The Release and Beta files for the version, newest first, at most [`MAX_FILES`].
     pub files: Vec<DetailFile>,
-    /// Le dipendenze obbligatorie dell'ultimo file Release: quello di `latestFile` se c'è,
-    /// altrimenti il Release più recente tra tutti i file letti, anche quelli non mostrati.
+    /// The required dependencies of the latest Release file: the one in `latestFile` if
+    /// present, otherwise the newest Release among all the files read, including those not shown.
     pub dependencies: Vec<Dependency>,
 }
 
-/// Il dettaglio del progetto `mod_id` per l'installazione. La versione del gioco è quella
-/// chiesta, altrimenti quella forzata per il progetto, altrimenti quella dell'installazione.
-/// Al massimo sei richieste: il mod, la descrizione, una o due pagine di file, il file
-/// dell'ultimo Release se non è tra quelli letti e, se ci sono dipendenze, i loro nomi con una
-/// sola `get_mods`.
+/// The detail of project `mod_id` for the installation. The game version is the requested
+/// one, otherwise the one forced for the project, otherwise the installation's.
+/// At most six requests: the mod, the description, one or two pages of files, the latest
+/// Release file if it is not among those read and, if there are dependencies, their names with
+/// a single `get_mods`.
 pub fn addon_detail<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
@@ -142,8 +143,8 @@ pub fn addon_detail<T: Transport>(
     let addon = CatalogAddon::new(&found, version_type, allow_beta, &installed);
     let screenshots = screenshots(&found.screenshots);
     let latest = addon.latest_file.as_ref().map(|file| file.id);
-    // Le dipendenze si leggono dalla lista intera: tagliarla prima perderebbe l'ultimo
-    // Release dietro più di [`MAX_FILES`] Beta.
+    // The dependencies are read from the full list: truncating it first would lose the latest
+    // Release behind more than [`MAX_FILES`] Betas.
     let dependencies = required_dependencies(client, mod_id, latest, &files)?;
     files.truncate(MAX_FILES);
     Ok(AddonDetail {
@@ -156,13 +157,13 @@ pub fn addon_detail<T: Transport>(
     })
 }
 
-/// I file Release e Beta per la versione, dal più recente, senza ripetizioni.
+/// The Release and Beta files for the version, newest first, without duplicates.
 ///
-/// L'ordine della risposta di `/files` non è documentato, quindi non conta: si legge la
-/// prima pagina e, se `totalCount` ne supera una, anche l'ultima (con `index + pageSize` al
-/// massimo [`MAX_RESULTS`], come nella ricerca). I file più recenti stanno in una delle due
-/// sia con un ordine crescente sia con uno decrescente; poi decide l'id, che CurseForge
-/// assegna in ordine crescente, come per l'ultimo file della ricerca.
+/// The order of the `/files` response is not documented, so it does not matter: the first
+/// page is read and, if `totalCount` exceeds one page, the last one too (with `index + pageSize`
+/// at most [`MAX_RESULTS`], as in the search). The newest files are in one of the two with
+/// both an ascending and a descending order; then the id decides, which CurseForge assigns
+/// in ascending order, as for the latest file in the search.
 fn recent_files<T: Transport>(
     client: &CurseForgeClient<T>,
     mod_id: u32,
@@ -176,12 +177,12 @@ fn recent_files<T: Transport>(
     let page = u64::from(FILES_PAGE_SIZE);
     if total > page {
         let last_reachable = MAX_RESULTS - FILES_PAGE_SIZE;
-        // Il `min` con un `u32` rende la conversione esatta.
+        // The `min` with a `u32` makes the conversion exact.
         let index = (total - page).min(u64::from(last_reachable)) as u32;
         let last = client
             .mod_files(mod_id, version_type, index, FILES_PAGE_SIZE)
             .map_err(|e| e.to_string())?;
-        // Con meno di due pagine piene le due letture si sovrappongono.
+        // With fewer than two full pages the two reads overlap.
         let mut seen: HashSet<u32> = files.iter().map(|file| file.id).collect();
         files.extend(last.data.into_iter().filter(|file| seen.insert(file.id)));
     }
@@ -190,10 +191,10 @@ fn recent_files<T: Transport>(
     Ok(files)
 }
 
-/// Le dipendenze obbligatorie dell'ultimo file Release, senza ripetizioni e senza il progetto
-/// stesso, con i nomi letti da una sola `get_mods`. L'ultimo Release è `latest`, quello che
-/// `latestFilesIndexes` indica per la versione, letto con `get_file` se non è tra `files`;
-/// senza indice è il Release più recente tra `files` (già ordinati).
+/// The required dependencies of the latest Release file, without duplicates and without the
+/// project itself, with the names read by a single `get_mods`. The latest Release is `latest`,
+/// the one `latestFilesIndexes` points to for the version, read with `get_file` if it is not
+/// among `files`; without an index it is the newest Release among `files` (already sorted).
 fn required_dependencies<T: Transport>(
     client: &CurseForgeClient<T>,
     mod_id: u32,
@@ -245,7 +246,7 @@ fn required_dependencies<T: Transport>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::curseforge::{ApiKey, BytesResponse, HttpResponse, TransportError};
+    use crate::sources::curseforge::{BytesResponse, HttpResponse, TransportError};
     use crate::test_support::TempDir;
     use crate::updates::{CLASSIC_ERA, FOREVER, RETAIL};
     use std::collections::HashMap;
@@ -253,17 +254,17 @@ mod tests {
     use std::path::Path;
     use std::sync::Mutex;
 
-    /// Risponde in base all'URL e registra le richieste (URL e corpo).
+    /// Answers based on the URL and records the requests (URL and body).
     struct Fake {
         project: String,
-        /// Le pagine di `/files`, per `index`.
+        /// The `/files` pages, by `index`.
         pages: HashMap<u32, String>,
-        /// La risposta di `/files/{fileId}`.
+        /// The response of `/files/{fileId}`.
         file: String,
         seen: Mutex<Vec<(String, Option<String>)>>,
     }
 
-    /// L'indice dice che l'ultimo Release per Retail (517) è il file 30.
+    /// The index says the latest Release for Retail (517) is file 30.
     const MOD: &str = r#"{"data": {"id": 61284, "name": "Details!", "summary": "Meter",
       "allowModDistribution": true,
       "screenshots": [
@@ -277,16 +278,17 @@ mod tests {
         {"fileId": 30, "filename": "details-30.zip", "releaseType": 1, "gameVersion": "12.1.5", "gameVersionTypeId": 517},
         {"fileId": 29, "filename": "details-29.zip", "releaseType": 2, "gameVersion": "12.1.5", "gameVersionTypeId": 517}
       ]}}"#;
-    /// Un progetto senza `latestFilesIndexes`: l'ultimo Release si cerca tra i file letti.
+    /// A project without `latestFilesIndexes`: the latest Release is looked up among the files
+    /// read.
     const BARE_MOD: &str = r#"{"data": {"id": 61284, "name": "Details!"}}"#;
-    /// Il file letto con `get_file`.
+    /// The file read with `get_file`.
     const FILE_30: &str = r#"{"data": {"id": 30, "modId": 61284, "displayName": "Details 30",
       "releaseType": 1, "dependencies": [{"modId": 3358, "relationType": 3}]}}"#;
     const DESCRIPTION: &str =
         r#"{"data": "<p>A meter.</p><script>alert(1)</script><ul><li>Fast</li></ul>"}"#;
     const DEPENDENCY_NAMES: &str = r#"{"data": [{"id": 3358, "name": "DBM"}]}"#;
 
-    /// File 30 Release con dipendenze, 31 Alpha, 29 Beta, 28 Release più vecchio.
+    /// File 30 Release with dependencies, 31 Alpha, 29 Beta, 28 older Release.
     const FILES: &str = r#"{"data": [
       {"id": 29, "modId": 61284, "displayName": "Details Beta", "fileDate": "2026-10-02T00:00:00Z", "releaseType": 2,
        "dependencies": [{"modId": 77, "relationType": 3}]},
@@ -301,7 +303,7 @@ mod tests {
       {"id": 28, "modId": 61284, "displayName": "Details 28", "releaseType": 1, "dependencies": null}
     ], "pagination": {"index": 0, "pageSize": 50, "resultCount": 4, "totalCount": 4}}"#;
 
-    /// Una pagina di `/files` con i file Release `ids` (senza dipendenze) e il totale.
+    /// A `/files` page with the Release files `ids` (without dependencies) and the total.
     fn page(ids: impl IntoIterator<Item = u32>, total: u64) -> String {
         let files: Vec<String> = ids
             .into_iter()
@@ -314,7 +316,7 @@ mod tests {
         )
     }
 
-    /// L'`index` della richiesta di `/files`.
+    /// The `index` of the `/files` request.
     fn index_of(url: &str) -> u32 {
         let start = url.find("index=").expect("index") + "index=".len();
         url[start..]
@@ -325,7 +327,7 @@ mod tests {
     }
 
     impl Transport for Fake {
-        fn get(&self, url: &str, _key: &ApiKey) -> Result<HttpResponse, TransportError> {
+        fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
             self.seen.lock().unwrap().push((url.to_owned(), None));
             let body = if url.ends_with("/description") {
                 DESCRIPTION
@@ -346,12 +348,7 @@ mod tests {
             })
         }
 
-        fn post_json(
-            &self,
-            url: &str,
-            _key: &ApiKey,
-            body: String,
-        ) -> Result<HttpResponse, TransportError> {
+        fn post_json(&self, url: &str, body: String) -> Result<HttpResponse, TransportError> {
             self.seen.lock().unwrap().push((url.to_owned(), Some(body)));
             Ok(HttpResponse {
                 status: 200,
@@ -379,7 +376,7 @@ mod tests {
                 file: FILE_30.to_owned(),
                 seen: Mutex::new(Vec::new()),
             },
-            Some("test-key-7f3a9c".to_owned()),
+            Some("https://proxy.example.com".to_owned()),
         )
     }
 
@@ -447,7 +444,8 @@ mod tests {
         assert_eq!(detail.addon.latest_file.as_ref().unwrap().id, 30);
         assert_eq!(detail.version_type, RETAIL);
         assert_eq!(detail.description, "A meter.\n\nFast");
-        // Dalla stessa `get_mod`: l'immagine su `http` si scarta, l'anteprima mancante è l'URL.
+        // From the same `get_mod`: the image on `http` is discarded, the missing thumbnail is
+        // the URL.
         assert_eq!(
             detail.screenshots,
             [
@@ -479,8 +477,8 @@ mod tests {
             ]
         );
         assert_eq!(detail.files[0].date, "2026-10-03T00:00:00Z");
-        // Solo le obbligatorie del file 30, senza ripetizioni né il progetto stesso; il nome
-        // di un progetto che CurseForge non restituisce resta vuoto.
+        // Only the required ones of file 30, without duplicates or the project itself; the name
+        // of a project CurseForge does not return stays empty.
         assert_eq!(
             detail.dependencies,
             [
@@ -500,10 +498,10 @@ mod tests {
         assert_eq!(
             urls,
             [
-                "https://api.curseforge.com/v1/mods/61284",
-                "https://api.curseforge.com/v1/mods/61284/description",
-                "https://api.curseforge.com/v1/mods/61284/files?gameVersionTypeId=517&index=0&pageSize=50",
-                "https://api.curseforge.com/v1/mods",
+                "https://proxy.example.com/v1/mods/61284",
+                "https://proxy.example.com/v1/mods/61284/description",
+                "https://proxy.example.com/v1/mods/61284/files?gameVersionTypeId=517&index=0&pageSize=50",
+                "https://proxy.example.com/v1/mods",
             ]
         );
         assert_eq!(seen[3].1.as_deref(), Some(r#"{"modIds":[3358,404]}"#));
@@ -525,7 +523,7 @@ mod tests {
         let detail = self::detail(&forever, &client, &forced, None).unwrap();
         assert_eq!(detail.version_type, CLASSIC_ERA);
         assert!(files_url(&client).contains(&format!("gameVersionTypeId={CLASSIC_ERA}&")));
-        // L'indice della ricerca non ha un file Release per Classic Era.
+        // The search index has no Release file for Classic Era.
         assert_eq!(detail.addon.latest_file, None);
 
         let client = self::client(FILES);
@@ -556,7 +554,7 @@ mod tests {
         .unwrap();
         assert_eq!(detail.files.len(), 1);
         assert!(detail.dependencies.is_empty());
-        // Nessuna `get_mods` senza dipendenze.
+        // No `get_mods` without dependencies.
         assert_eq!(seen(&client).len(), 3);
     }
 
@@ -581,7 +579,7 @@ mod tests {
     #[test]
     fn dependencies_come_from_the_full_list_before_truncation() {
         let tmp = TempDir::new();
-        // Venticinque Beta più recenti del Release 50, che non entra nei venti mostrati.
+        // Twenty-five Betas newer than Release 50, which does not make it into the twenty shown.
         let betas: Vec<String> = (100..125)
             .map(|id| format!(r#"{{"id": {id}, "modId": 61284, "releaseType": 2}}"#))
             .collect();
@@ -607,7 +605,8 @@ mod tests {
     #[test]
     fn the_indexed_release_is_read_when_it_is_not_among_the_files() {
         let tmp = TempDir::new();
-        // L'indice dice 30; tra i file letti c'è solo il Release 28, con un'altra dipendenza.
+        // The index says 30; among the files read there is only Release 28, with another
+        // dependency.
         let files = r#"{"data": [
           {"id": 29, "modId": 61284, "releaseType": 2},
           {"id": 28, "modId": 61284, "releaseType": 1, "dependencies": [{"modId": 77, "relationType": 3}]}
@@ -619,7 +618,7 @@ mod tests {
         let seen = seen(&client);
         assert_eq!(
             seen[3].0,
-            "https://api.curseforge.com/v1/mods/61284/files/30"
+            "https://proxy.example.com/v1/mods/61284/files/30"
         );
         assert_eq!(seen[4].1.as_deref(), Some(r#"{"modIds":[3358]}"#));
     }
@@ -627,7 +626,7 @@ mod tests {
     #[test]
     fn the_last_page_is_read_whatever_the_order() {
         let tmp = TempDir::new();
-        // In ordine crescente i più recenti stanno nell'ultima pagina (index = 120 - 50).
+        // In ascending order the newest are on the last page (index = 120 - 50).
         let client = client_with(
             BARE_MOD,
             [(0, page(1..=50, 120)), (70, page(71..=120, 120))],
@@ -642,7 +641,7 @@ mod tests {
         assert_eq!(files_urls.len(), 2);
         assert!(files_urls[1].contains("&index=70&pageSize=50"));
 
-        // In ordine decrescente bastava la prima: l'ultima non aggiunge niente di nuovo.
+        // In descending order the first was enough: the last adds nothing new.
         let client = client_with(
             BARE_MOD,
             [
@@ -655,14 +654,14 @@ mod tests {
             (101..=120).rev().collect::<Vec<_>>()
         );
 
-        // Due pagine che si sovrappongono non ripetono i file.
+        // Two overlapping pages do not repeat files.
         let client = client_with(BARE_MOD, [(0, page(1..=50, 70)), (20, page(21..=70, 70))]);
         assert_eq!(
             file_ids(&retail(&tmp, &client)),
             (51..=70).rev().collect::<Vec<_>>()
         );
 
-        // Oltre i 10.000 file l'ultima pagina raggiungibile finisce a 10.000.
+        // Beyond 10,000 files the last reachable page ends at 10,000.
         let client = client_with(
             BARE_MOD,
             [
@@ -672,7 +671,7 @@ mod tests {
         );
         assert_eq!(retail(&tmp, &client).files[0].id, 10_000);
 
-        // Con una sola pagina non c'è una seconda richiesta.
+        // With a single page there is no second request.
         let client = client_with(BARE_MOD, [(0, page(1..=50, 50))]);
         retail(&tmp, &client);
         assert_eq!(
@@ -744,7 +743,7 @@ mod tests {
             asset(Some(thumb), Some("")),
             asset(Some(thumb), Some("not a url")),
             asset(Some(thumb), None),
-            // Senza anteprima, o con un'anteprima fuori dal CDN, vale l'URL.
+            // Without a thumbnail, or with a thumbnail outside the CDN, the URL is used.
             asset(None, Some(cdn)),
             asset(Some(""), Some(cdn)),
             asset(Some("https://example.com/t.png"), Some(cdn)),

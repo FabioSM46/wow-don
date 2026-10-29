@@ -1,6 +1,6 @@
-//! Avanzamento di installazioni e aggiornamenti (issue #127): le fasi di un progetto e i byte
-//! scaricati, consegnati a un callback. I moduli che installano non conoscono Tauri: il comando
-//! collega il callback all'evento `install-progress` della finestra.
+//! Progress of installs and updates (issue #127): a project's phases and the downloaded bytes,
+//! delivered to a callback. The modules that install do not know Tauri: the command connects the
+//! callback to the window's `install-progress` event.
 
 use std::cell::Cell;
 use std::time::{Duration, Instant};
@@ -9,51 +9,51 @@ use serde::Serialize;
 
 use crate::sources::SourceKind;
 
-/// Nome dell'evento Tauri che porta un [`Progress`] al frontend.
+/// Name of the Tauri event that carries a [`Progress`] to the frontend.
 pub const EVENT: &str = "install-progress";
 
-/// Tempo minimo tra due avanzamenti del download dello stesso progetto: al massimo circa dieci
-/// eventi al secondo, più quello finale.
+/// Minimum time between two download progress steps of the same project: at most about ten
+/// events per second, plus the final one.
 pub const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
-/// La fase di un progetto.
+/// The phase of a project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
-    /// Lettura dell'installazione e delle informazioni del progetto, prima del download.
+    /// Reading the installation and the project's information, before the download.
     Checking,
-    /// Download dello zip: `received` e `total` valgono solo qui.
+    /// Downloading the zip: `received` and `total` are meaningful only here.
     Downloading,
-    /// Zip scaricato, in attesa del suo turno: solo l'import, che scarica più voci insieme e le
-    /// installa una alla volta nell'ordine della lista (issue #180).
+    /// Zip downloaded, waiting for its turn: only the import, which downloads several entries at
+    /// once and installs them one at a time in list order (issue #180).
     Downloaded,
-    /// Estrazione e controllo dello zip in una cartella temporanea.
+    /// Extracting and checking the zip in a temporary folder.
     Extracting,
-    /// Sostituzione delle cartelle in `AddOns`.
+    /// Replacing the folders in `AddOns`.
     Installing,
 }
 
-/// Un passo dell'avanzamento. Contiene solo l'identità del progetto e i conteggi: niente URL,
-/// chiavi, header o percorsi del disco.
+/// A progress step. It holds only the project's identity and the counts: no URLs, keys,
+/// headers or disk paths.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
-    /// La fonte del progetto; `None` per uno zip scelto dall'utente, che non ha fonte.
+    /// The project's source; `None` for a zip chosen by the user, which has no source.
     pub source: Option<SourceKind>,
-    /// L'id del progetto nella fonte (vuoto per uno zip scelto dall'utente).
+    /// The project's id in the source (empty for a zip chosen by the user).
     pub key: String,
-    /// Il nome del progetto, vuoto finché non è noto.
+    /// The project's name, empty until it is known.
     pub name: String,
     pub phase: Phase,
-    /// Byte ricevuti, solo in [`Phase::Downloading`].
+    /// Bytes received, only in [`Phase::Downloading`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub received: Option<u64>,
-    /// Byte attesi, solo in [`Phase::Downloading`] e solo se il server li dichiara.
+    /// Bytes expected, only in [`Phase::Downloading`] and only if the server declares them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total: Option<u64>,
 }
 
-/// Il payload dell'evento [`EVENT`]: l'avanzamento con l'installazione a cui appartiene.
+/// The payload of the [`EVENT`] event: the progress with the installation it belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressEvent<'a> {
@@ -62,22 +62,22 @@ pub struct ProgressEvent<'a> {
     pub progress: Progress,
 }
 
-/// Dove vanno gli avanzamenti.
+/// Where the progress steps go.
 pub type ProgressSink<'a> = dyn Fn(Progress) + 'a;
 
-/// Un callback che non fa niente, per i test che non guardano l'avanzamento.
+/// A callback that does nothing, for tests that do not look at progress.
 #[cfg(test)]
 pub fn ignore(_: Progress) {}
 
-/// L'avanzamento di un progetto: chiama `sink` con la sua identità e limita la frequenza degli
-/// avanzamenti del download.
+/// The progress of one project: calls `sink` with its identity and limits the rate of the
+/// download progress steps.
 pub struct Reporter<'a> {
     sink: &'a ProgressSink<'a>,
     source: Option<SourceKind>,
     key: &'a str,
     name: &'a str,
     throttle: Throttle,
-    /// L'ultimo `total` ricevuto dal download: quello che il server ha dichiarato, se l'ha fatto.
+    /// The last `total` received from the download: the one the server declared, if it did.
     declared_total: Cell<Option<u64>>,
 }
 
@@ -98,17 +98,17 @@ impl<'a> Reporter<'a> {
         }
     }
 
-    /// Una fase senza conteggi.
+    /// A phase without counts.
     pub fn phase(&self, phase: Phase) {
         self.send(phase, None, None);
     }
 
-    /// Byte ricevuti finora, se è passato abbastanza tempo dall'ultimo avanzamento.
+    /// Bytes received so far, if enough time has passed since the last progress step.
     pub fn download(&self, received: u64, total: Option<u64>) {
         self.download_at(Instant::now(), received, total);
     }
 
-    /// Come [`download`](Self::download), con l'orologio passato dal chiamante.
+    /// Like [`download`](Self::download), with the clock passed by the caller.
     pub fn download_at(&self, now: Instant, received: u64, total: Option<u64>) {
         self.declared_total.set(total);
         if self.throttle.ready(now) {
@@ -116,8 +116,8 @@ impl<'a> Reporter<'a> {
         }
     }
 
-    /// Download finito: sempre consegnato, con il `total` dichiarato dal server se c'era. Senza
-    /// `Content-Length` resta assente anche qui: la lunghezza non era nota.
+    /// Download finished: always delivered, with the `total` declared by the server if there was
+    /// one. Without `Content-Length` it stays absent here too: the length was not known.
     pub fn downloaded(&self, len: u64) {
         self.send(Phase::Downloading, Some(len), self.declared_total.get());
     }
@@ -134,9 +134,9 @@ impl<'a> Reporter<'a> {
     }
 }
 
-/// Lascia passare un avanzamento al primo colpo e poi solo quando è passato `interval`
-/// dall'ultimo che ha lasciato passare. L'orologio lo passa il chiamante, così i test non
-/// dipendono dal tempo.
+/// Lets a progress step through on the first call and then only when `interval` has passed
+/// since the last one it let through. The caller passes the clock, so the tests do not depend
+/// on time.
 pub struct Throttle {
     interval: Duration,
     last: Cell<Option<Instant>>,
@@ -167,7 +167,7 @@ pub(crate) mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    /// Raccoglie gli avanzamenti consegnati, per i test degli altri moduli.
+    /// Collects the delivered progress steps, for the other modules' tests.
     #[derive(Default)]
     pub struct Collected(pub RefCell<Vec<Progress>>);
 
@@ -176,8 +176,8 @@ pub(crate) mod tests {
             |progress| self.0.borrow_mut().push(progress)
         }
 
-        /// (key, fase) degli avanzamenti nell'ordine, con i passi consecutivi uguali uniti: quanti
-        /// passi del download passano dipende dal tempo.
+        /// (key, phase) of the progress steps in order, with equal consecutive steps merged: how
+        /// many download steps get through depends on time.
         pub fn phases(&self) -> Vec<(String, Phase)> {
             let mut phases: Vec<(String, Phase)> = Vec::new();
             for p in self.0.borrow().iter() {
@@ -189,7 +189,7 @@ pub(crate) mod tests {
             phases
         }
 
-        /// L'ultimo passo del download di `key`: (ricevuti, attesi).
+        /// The last download step of `key`: (received, expected).
         pub fn last_download(&self, key: &str) -> Option<(Option<u64>, Option<u64>)> {
             self.0
                 .borrow()
@@ -223,7 +223,7 @@ pub(crate) mod tests {
         }
         reporter.downloaded(100);
         let steps = collected.0.borrow();
-        // Il primo passa, i successivi entro 100 ms no, quello finale sempre.
+        // The first gets through, the next ones within 100 ms do not, the final one always does.
         assert_eq!(steps.len(), 2);
         assert_eq!((steps[0].received, steps[0].total), (Some(10), Some(100)));
         assert_eq!((steps[1].received, steps[1].total), (Some(100), Some(100)));

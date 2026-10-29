@@ -54,15 +54,15 @@ grep -qF 'Bash(mktemp *) Bash(trap *)' "$dev_skill" || {
 # The iteration loop must actively route a conflicting PR into remediation. Merely making the
 # frozen rule fail closed leaves the orchestrator waiting forever because a conflicting PR has no
 # merge ref and therefore no CI run that could wake it up.
-grep -qF 'o `mergeable == CONFLICTING`' "$iteration_skill" || {
+grep -qF 'or `mergeable == CONFLICTING`' "$iteration_skill" || {
   echo "FAIL: develop-iteration no longer routes merge conflicts through process-pr" >&2
   exit 1
 }
-grep -qF 'Un conflitto è una correzione da fare' "$process_skill" || {
+grep -qF 'A conflict is a fix to make' "$process_skill" || {
   echo "FAIL: process-pr no longer owns base-conflict remediation" >&2
   exit 1
 }
-grep -qF 'Fallo a ogni esecuzione.' "$process_skill" || {
+grep -qF 'Do it on every run.' "$process_skill" || {
   echo "FAIL: process-pr only reconciles a moved base after it becomes conflicting" >&2
   exit 1
 }
@@ -84,10 +84,10 @@ python3 - <<'PY'
 from pathlib import Path
 
 text = Path('.claude/skills/process-pr/SKILL.md').read_text()
-round_flow = text[text.index('#### 4c — Gestire il feedback del round') :]
+round_flow = text[text.index("#### 4c — Handle the round's feedback") :]
 push = round_flow.index('git push origin HEAD')
 verify = round_flow.index('Confirm the PR is still open at REMOTE_HEAD')
-publish = round_flow.index('#### 4f — Pubblicare le risposte dopo il push')
+publish = round_flow.index('#### 4f — Publish the replies after the push')
 reply = round_flow.index('comments/<comment-databaseId>/replies')
 resolve = round_flow.index('resolveReviewThread')
 ack = round_flow.index('add DEEPSEEK_REVIEW_READ')
@@ -117,11 +117,11 @@ grep -qF '[ "$(echo "$CURRENT_PR" | jq -r '\''.state'\'')" = "OPEN" ] || exit 1'
 # A moving base invalidates its children's evidence even when their own head SHA did not move,
 # and develop has no post-merge verification here: both the instruction and the merge helper
 # binding must remain visible.
-grep -qF 'la cui **testa o base** è il branch' "$iteration_skill" || {
+grep -qF 'whose **head or base** is the branch' "$iteration_skill" || {
   echo "FAIL: develop-iteration does not refresh PRs whose base moved" >&2
   exit 1
 }
-grep -qF 'unisci in `develop` **una PR alla' "$iteration_skill" || {
+grep -qF 'merge into `develop` **one PR at a' "$iteration_skill" || {
   echo "FAIL: develop-iteration no longer serializes merges into develop" >&2
   exit 1
 }

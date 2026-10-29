@@ -1,525 +1,530 @@
 # WoW-don — Tauri 2 (Rust + React)
 
-Gestore di addon per World of Warcraft per **Linux, Windows e macOS**: su Linux il gioco gira
-dentro un prefisso Wine, su Windows e su macOS è il client nativo installato normalmente. App
-desktop nativa: backend **Rust**
-con **Tauri 2**, frontend **React + TypeScript** (Vite, pnpm). Contesto, decisioni,
-architettura e roadmap sono in `docs/`.
+Addon manager for World of Warcraft on **Linux, Windows and macOS**: on Linux the game runs
+inside a Wine prefix, on Windows and on macOS it is the native client installed normally.
+Native desktop app: **Rust** backend
+with **Tauri 2**, **React + TypeScript** frontend (Vite, pnpm). Context, decisions,
+architecture and roadmap are in `docs/`.
 
-## Struttura del repository
+## Repository structure
 
 ```
 wow-don/
-├── AGENTS.md             # Questo file — regole globali (autorevole per la pipeline)
-├── CLAUDE.md             # Rimando a questo file per Claude Code
-├── README.md             # Panoramica del progetto
-├── src/                  # Frontend React + TypeScript
-├── src-tauri/            # Backend Rust e configurazione Tauri
+├── AGENTS.md             # This file — global rules (authoritative for the pipeline)
+├── CLAUDE.md             # Points Claude Code to this file
+├── README.md             # Project overview
+├── src/                  # React + TypeScript frontend
+├── src-tauri/            # Rust backend and Tauri configuration
 ├── docs/                 # context, decisions, architecture, roadmap
-├── scripts/              # gh-automation.sh, classificatore e gate della CI, test dell'automazione
-├── .github/              # CI, review DeepSeek, labeler delle PR, ciclo di vita delle iterazioni
-├── .claude/skills/       # Skill Claude canoniche (/dev-issue, /process-pr, /develop-iteration, /scrum-master)
-├── .agents/skills/       # Adapter Codex generati ($dev-issue, $process-pr, $develop-iteration, $scrum-master)
-└── .opencode/skills/     # Adapter OpenCode generati (/dev-issue, /process-pr, /develop-iteration, /scrum-master)
+├── scripts/              # gh-automation.sh, CI classifier and gate, automation tests
+├── .github/              # CI, DeepSeek review, PR labeler, iteration lifecycle
+├── .claude/skills/       # Canonical Claude skills (/dev-issue, /process-pr, /develop-iteration, /scrum-master)
+├── .agents/skills/       # Generated Codex adapters ($dev-issue, $process-pr, $develop-iteration, $scrum-master)
+└── .opencode/skills/     # Generated OpenCode adapters (/dev-issue, /process-pr, /develop-iteration, /scrum-master)
 ```
 
-## Aree
+## Areas
 
-| Area       | Cartelle | Tecnologia | Responsabilità |
+| Area       | Folders | Technology | Responsibility |
 | ---------- | -------- | ---------- | -------------- |
-| `backend`  | `src-tauri/` | Rust (edition 2024), Tauri 2 | Comandi Tauri, configurazione, installazioni di WoW, lettura dei `.toc`, fingerprint, client delle fonti, download ed estrazione, stato locale |
-| `frontend` | `src/`, `public/`, `index.html`, `vite.config.ts`, `tsconfig*.json` | React 19, TypeScript, Vite | Liste, ricerca, filtri, ordinamento, chiamate `invoke()` |
-| `shared`   | radice | — | Modifiche che toccano entrambe le aree o la configurazione comune (`package.json`, `pnpm-lock.yaml`) |
+| `backend`  | `src-tauri/` | Rust (edition 2024), Tauri 2 | Tauri commands, configuration, WoW installations, reading `.toc` files, fingerprints, source clients, download and extraction, local state |
+| `frontend` | `src/`, `public/`, `index.html`, `vite.config.ts`, `tsconfig*.json` | React 19, TypeScript, Vite | Lists, search, filters, sorting, `invoke()` calls |
+| `shared`   | root | — | Changes that touch both areas or the common configuration (`package.json`, `pnpm-lock.yaml`) |
 
-### Rete, disco e chiavi stanno nel backend — sempre
+### Network and disk live in the backend; the app holds no third-party key — always
 
-Il frontend mostra dati e chiama comandi Tauri; non conosce la chiave API e non parla con le
-fonti. Tutto quello che tocca rete, file system o segreti è nel backend. Un comando che
-restituisce la chiave al frontend, o un `fetch` verso CurseForge dal frontend, è un bug anche
-quando "funziona".
+The frontend shows data and calls Tauri commands; it does not talk to the sources. Everything
+that touches the network or the file system is in the backend. The CurseForge key is not in the
+app at all (D44): the backend reaches CurseForge through the wow-don-proxy Worker, which keeps
+the key in Cloudflare secrets. A `fetch` to the sources from the frontend, or key plumbing in
+the app (a config field, an environment variable, an `x-api-key` header built locally), is a
+bug even when it "works".
 
-### Le regole delle fonti
+### Source rules
 
-- La chiave CurseForge resta nel backend: non va al frontend, non finisce nei log, negli errori
-  restituiti o nei test.
-- Niente scraping del sito CurseForge e niente riuso di chiavi di altre app.
-- Gli addon con `allowModDistribution = false` non si scaricano in automatico.
-- Gli zip si estraggono in una cartella temporanea e si controlla che nessun percorso esca da
-  `Interface/AddOns` prima di spostarli.
+- The CurseForge key never reaches the app: it stays in the proxy's Cloudflare secrets, and no
+  key appears in logs, in returned errors or in tests.
+- No scraping of the CurseForge site and no reuse of other apps' keys.
+- Addons with `allowModDistribution = false` are not downloaded automatically.
+- Zips are extracted into a temporary folder, and before they are moved it is checked that no
+  path leaves `Interface/AddOns`.
 
-### Cambiamenti che toccano entrambe le aree
+### Changes that touch both areas
 
-1. Prima il backend: tipi serializzati (`serde`) e comando Tauri.
-2. Poi il frontend, contro il comportamento reale del comando.
-3. Esegui i gate di entrambe le aree prima di aprire la PR.
+1. Backend first: serialized types (`serde`) and the Tauri command.
+2. Then the frontend, against the command's real behaviour.
+3. Run the gates of both areas before opening the PR.
 
-### Piattaforme: Linux, Windows e macOS
+### Platforms: Linux, Windows and macOS
 
-L'app deve funzionare su **Linux, Windows e macOS** (D23, estesa da D29) e si distribuisce come
-**`.deb`** su Linux e come **installer NSIS** su Windows, mai come versione portable (D24); su
-macOS il client del gioco è nativo, senza Wine, e il pacchetto non c'è ancora. Ogni modifica
-deve valere su tutte e tre:
+The app must work on **Linux, Windows and macOS** (D23, extended by D29) and is distributed as
+a **`.deb`** on Linux and as an **NSIS installer** on Windows, never as a portable version
+(D24); on macOS the game client is native, without Wine, and there is no package yet. Every
+change must hold on all three:
 
-- **Percorsi solo con `Path`/`PathBuf`** e `join`: mai separatori scritti a mano, mai
-  confronti tra percorsi come stringhe. Le cartelle di config e dati si chiedono a Tauri
-  (`app.path()`), mai `~` o `%APPDATA%` scritti nel codice.
-- **Maiuscole e minuscole**: Windows (e il gioco sotto Wine) non le distingue nei nomi dei
-  file, Linux sì, macOS di norma no (APFS non distingue, salvo volumi formattati apposta). I
-  confronti sui nomi dei file del gioco (`.toc`, cartelle `_<flavor>_`) si fanno senza
-  distinguere maiuscole e minuscole quando il gioco fa lo stesso. Un test che crea due nomi
-  diversi solo per le maiuscole gira solo su Linux.
-- **`canonicalize` su Windows** restituisce percorsi `\\?\C:\...`: vanno mostrati e salvati
-  senza quel prefisso.
-- **Niente comandi di shell o strumenti di una sola piattaforma** (`sh`, `xdg-open`,
-  `cmd`): per aprire file e link c'è il plugin `opener`.
-- **I test girano su tutte e tre**: niente percorsi assoluti Unix nei test che toccano il
-  disco; si costruiscono sotto una cartella temporanea.
-- Le funzioni solo per una piattaforma stanno dietro `#[cfg(target_os = "...")]`, con un
-  comportamento definito anche per le altre due. `not(target_os = "windows")` vale per Linux
-  **e** macOS: il commento non deve dare per scontato "non Windows = Linux sotto Wine", e
-  `cfg(unix)` comprende macOS. Le funzioni legate a Wine e Lutris sono solo Linux.
+- **Paths only with `Path`/`PathBuf`** and `join`: never hand-written separators, never
+  comparing paths as strings. Config and data folders are asked of Tauri
+  (`app.path()`), never `~` or `%APPDATA%` written in the code.
+- **Upper and lower case**: Windows (and the game under Wine) does not distinguish them in
+  file names, Linux does, macOS usually does not (APFS does not distinguish, except on volumes
+  formatted to do so). Comparisons on the game's file names (`.toc`, `_<flavor>_` folders) are
+  made case-insensitively when the game does the same. A test that creates two names differing
+  only in case runs only on Linux.
+- **`canonicalize` on Windows** returns `\\?\C:\...` paths: they must be shown and saved
+  without that prefix.
+- **No shell commands or single-platform tools** (`sh`, `xdg-open`,
+  `cmd`): to open files and links there is the `opener` plugin.
+- **Tests run on all three**: no absolute Unix paths in tests that touch the
+  disk; they are built under a temporary folder.
+- Platform-specific functions sit behind `#[cfg(target_os = "...")]`, with defined
+  behaviour on the other two as well. `not(target_os = "windows")` covers Linux **and**
+  macOS: the comment must not assume "not Windows = Linux under Wine", and
+  `cfg(unix)` includes macOS. Functions tied to Wine and Lutris are Linux only.
 
-### Interfaccia: minimale e moderna
+### Interface: minimal and modern
 
-La UI deve essere **minimale e moderna** (decisione D20 in `docs/decisions.md`). In pratica:
+The UI must be **minimal and modern** (decision D20 in `docs/decisions.md`). In practice:
 
-- **Poche superfici.** Una schermata fa una cosa; niente pannelli, barre e finestre accessorie
-  che non servono al compito. Le azioni secondarie stanno dietro un menu o compaiono al
-  passaggio del mouse, non tutte in vista.
-- **Spazio e gerarchia, non decorazione.** Spaziatura generosa e regolare, tipografia pulita
-  (font di sistema), al massimo due pesi e pochi corpi. Niente gradienti, ombre pesanti, bordi
-  doppi, icone decorative o animazioni che non comunicano uno stato.
-- **Colore con parsimonia.** Una palette neutra con un solo colore d'accento; il colore segnala
-  stato (errore, avviso, selezione), non abbellisce. Chiaro e scuro sono entrambi obbligatori:
-  i colori nuovi vanno definiti come variabili CSS in `:root`, con il valore scuro come
-  `--dark-*` assegnato nei due blocchi del tema scuro di `src/App.css`, invece di essere scritti
-  nei singoli componenti.
-- **Token, non valori (D42).** Corpi, pesi, altezze dei controlli, raggi, spaziature e colori
-  sono le variabili in testa a `src/App.css`, elencate nel commento che le apre insieme alle
-  classi dei controlli (`.button` e varianti, `.switch`, `.segmented`, `.pill`). Ogni
-  `font-size` è un token `--text-*` o `inherit`, e `src/styleTokens.test.ts` lo verifica.
-- **I dati in primo piano.** Ricerca, filtri e ordinamento sono il punto di forza dell'app (D4):
-  la casella di ricerca è sempre visibile, i filtri sono compatti, le tabelle sono dense ma
-  leggibili.
-- **Stati sempre gestiti**: caricamento, lista vuota (con una frase che dice cosa fare) ed
-  errore, senza dialoghi bloccanti del browser.
-- **Nessuna libreria di componenti o di stile** senza decisione esplicita: CSS semplice finché
-  basta.
+- **Few surfaces.** A screen does one thing; no panels, bars and accessory windows that the
+  task does not need. Secondary actions sit behind a menu or appear on hover, not all in
+  view.
+- **Space and hierarchy, not decoration.** Generous and regular spacing, clean typography
+  (system font), at most two weights and few sizes. No gradients, heavy shadows, double
+  borders, decorative icons or animations that do not communicate a state.
+- **Colour sparingly.** A neutral palette with a single accent colour; colour signals
+  state (error, warning, selection), it does not embellish. Light and dark are both mandatory:
+  new colours are defined as CSS variables in `:root`, with the dark value as `--dark-*`
+  assigned in the two dark-theme blocks of `src/App.css`, instead of being written in the
+  individual components.
+- **Tokens, not values (D42).** Sizes, weights, control heights, radii, spacing and colours
+  are the variables at the top of `src/App.css`, listed in the comment that opens them along
+  with the control classes (`.button` and variants, `.switch`, `.segmented`, `.pill`). Every
+  `font-size` is a `--text-*` token or `inherit`, and `src/styleTokens.test.ts` verifies it.
+- **Data first.** Search, filters and sorting are the app's strong point (D4):
+  the search box is always visible, filters are compact, tables are dense but
+  readable.
+- **States always handled**: loading, empty list (with a sentence saying what to do) and
+  error, without blocking browser dialogs.
+- **No component or style library** without an explicit decision: plain CSS as long as it
+  is enough.
 
-Una PR che tocca `src/` descrive in una riga come rispetta queste regole.
+A PR that touches `src/` describes in one line how it respects these rules.
 
-## Confine di privacy: scrivere come se il repository fosse pubblico
+## Privacy boundary: write as if the repository were public
 
-Il repository oggi è privato e potrebbe diventare pubblico. Quando succede, tutto quello che è
-già stato pubblicato diventa leggibile per sempre: file, metadati dei commit (autore e
-committer), nomi dei branch, messaggi di commit e di PR, commenti di review, log della CI,
-artifact. Per questo valgono già adesso le regole di un repository pubblico.
+The repository is private today and may become public. When that happens, everything that has
+already been published becomes readable forever: files, commit metadata (author and
+committer), branch names, commit and PR messages, review comments, CI logs,
+artifacts. That is why the rules of a public repository already apply now.
 
-- **Mai un indirizzo email reale.** I commit usano l'indirizzo `noreply` fornito da GitHub
-  (copialo da Settings → Emails, non scrivere il numero a mano). Codice, fixture e messaggi
-  possono contenere solo identità `noreply` di GitHub e indirizzi su domini di esempio riservati.
-- **Mai percorsi della propria macchina.** Niente nomi utente, home directory, mount point o
-  posizioni dei checkout. La documentazione usa segnaposto come `<repo-root>`, `<worktree>` e
-  `<workspace>`; i test usano percorsi chiaramente sintetici.
-- **Mai dati personali** nelle issue, nelle PR o nel codice: nomi reali, numeri di telefono,
-  posizioni, identificativi di account. L'identità pubblica del progetto è l'handle `@FabioSM46`.
-- **Mai segreti o identificativi operativi.** Chiavi API, token, credenziali, hostname interni e
-  endpoint non pubblici stanno nei GitHub Secrets o in file locali ignorati (`.env`), mai in git,
-  nei log, nelle issue o nelle PR.
-- **Mai un riferimento a una sessione di un agente.** Un trailer `Claude-Session:` o un link
-  `claude.ai/code/session_…` in un messaggio è un endpoint legato a un account.
-- **Mai attribuire un commit a un account che non è il tuo.** Un indirizzo
-  `<id>+<login>@users.noreply.github.com` accredita chi possiede `<id>`, non `<login>`: il numero
-  sbagliato accanto al nome giusto accredita uno sconosciuto. I tre script di privacy tengono una
-  tabella login → id per le identità che il repository pubblica.
+- **Never a real email address.** Commits use the `noreply` address provided by GitHub
+  (copy it from Settings → Emails, do not type the number by hand). Code, fixtures and messages
+  may contain only GitHub `noreply` identities and addresses on reserved example domains.
+- **Never paths from your own machine.** No usernames, home directories, mount points or
+  checkout locations. Documentation uses placeholders such as `<repo-root>`, `<worktree>` and
+  `<workspace>`; tests use clearly synthetic paths.
+- **Never personal data** in issues, PRs or code: real names, phone numbers,
+  locations, account identifiers. The project's public identity is the `@FabioSM46` handle.
+- **Never secrets or operational identifiers.** API keys, tokens, credentials, internal
+  hostnames and non-public endpoints live in GitHub Secrets or in ignored local files (`.env`),
+  never in git, logs, issues or PRs.
+- **Never a reference to an agent session.** A `Claude-Session:` trailer or a
+  `claude.ai/code/session_…` link in a message is an endpoint tied to an account.
+- **Never attribute a commit to an account that is not yours.** An address
+  `<id>+<login>@users.noreply.github.com` credits whoever owns `<id>`, not `<login>`: the wrong
+  number next to the right name credits a stranger. The three privacy scripts keep a
+  login → id table for the identities the repository publishes.
 
-**Tre script dividono il lavoro, e condividono le stesse tre categorie** (email non pubblica,
-percorso della macchina, indirizzo di rete privato), copiate in ciascuno e tenute uguali da
+**Three scripts split the work, and share the same three categories** (non-public email,
+machine path, private network address), copied into each one and kept identical by
 `scripts/test/commit-privacy.test.sh`:
 
-- `bash scripts/check-publication-privacy.sh` legge il contenuto dei file nell'indice (quello che
-  un push pubblica, non la cartella di lavoro); con `<base> <head>` legge anche l'albero di ogni
-  commit del range, perché un dato aggiunto in un commit e tolto in quello dopo lascia pulita la
-  punta ma resta nella storia pubblicata; con `--all-history` legge ogni commit raggiungibile;
-- `bash scripts/check-commit-privacy.sh <base> <head>` legge autore, committer e messaggio di ogni
-  commit che il branch aggiunge;
-- `bash scripts/check-body-privacy.sh` legge un corpo di issue o PR da stdin. Usalo prima di
-  pubblicare: `bash scripts/check-body-privacy.sh < corpo.md`.
+- `bash scripts/check-publication-privacy.sh` reads the content of the files in the index (what
+  a push publishes, not the working folder); with `<base> <head>` it also reads the tree of every
+  commit in the range, because data added in one commit and removed in the next leaves the tip
+  clean but stays in the published history; with `--all-history` it reads every reachable commit;
+- `bash scripts/check-commit-privacy.sh <base> <head>` reads the author, committer and message of
+  every commit the branch adds;
+- `bash scripts/check-body-privacy.sh` reads an issue or PR body from stdin. Use it before
+  publishing: `bash scripts/check-body-privacy.sh < body.md`.
 
-Esegui i primi due prima di ogni push, entrambi con il range del branch
-(`"origin/$BASE_BRANCH" HEAD`): la CI li esegue nel job `detect` sul range della PR, e una violazione blocca la
-PR anche con tutto il resto verde. Le diagnostiche nominano solo posizione e categoria, mai il
-valore trovato; quando un controllo fallisce, togli il dato prima di continuare invece di
-ristamparlo in un altro messaggio.
+Run the first two before every push, both with the branch range
+(`"origin/$BASE_BRANCH" HEAD`): CI runs them in the `detect` job on the PR range, and a violation
+blocks the PR even with everything else green. Diagnostics name only the location and category,
+never the value found; when a check fails, remove the data before continuing instead of
+reprinting it in another message.
 
-**Il corpo di una issue o di una PR si può controllare solo dopo.** `.github/workflows/body-privacy.yml`
-gira su `issues` e `pull_request_target` (`opened`, `edited`): se trova qualcosa aggiunge la label
-`needs-privacy-review` e un commento con categoria e riga; non chiude, non modifica e non
-nasconde niente. **Non può impedire una fuga, può solo accorciare il tempo in cui nessuno lo sa**:
-un run verde significa "niente è pubblicato ora", mai "niente è mai stato pubblicato". È la
-superficie che una macchina scrive più spesso: un agente che scrive il corpo di una PR trascrive
-quello che ha appena fatto, e l'ha fatto in una cartella con un nome.
+**An issue or PR body can only be checked afterwards.** `.github/workflows/body-privacy.yml`
+runs on `issues` and `pull_request_target` (`opened`, `edited`): if it finds something it adds
+the `needs-privacy-review` label and a comment with category and line; it does not close, edit or
+hide anything. **It cannot prevent a leak, it can only shorten the time nobody knows about it**:
+a green run means "nothing is published now", never "nothing was ever published". It is the
+surface a machine writes most often: an agent writing a PR body transcribes what it has just
+done, and it did it in a folder with a name.
 
-**Prima di rendere pubblico il repository**: esegui `check-publication-privacy.sh --all-history`
-e `check-commit-privacy.sh` su tutta la storia. Gli script riconoscono solo le tre categorie
-(email, percorsi, indirizzi di rete privati) e i file `.env`: non sono uno scanner di segreti.
-Chiavi API e token con altre forme non li vedono, quindi passa anche uno scanner dedicato
-(per esempio gitleaks) su tutta la storia. Poi rileggi a mano titoli e corpi di issue e PR già
-aperte, controlla i secret e verifica che i ruleset siano ancora attivi dopo il cambio di
-visibilità.
+**Before making the repository public**: run `check-publication-privacy.sh --all-history`
+and `check-commit-privacy.sh` over the whole history. The scripts recognise only the three
+categories (emails, paths, private network addresses) and `.env` files: they are not a secret
+scanner. API keys and tokens of other shapes are invisible to them, so also run a dedicated
+scanner (for example gitleaks) over the whole history. Then reread by hand the titles and bodies
+of issues and PRs already open, check the secrets and verify that the rulesets are still active
+after the visibility change.
 
-## Convenzioni comuni
+## Common conventions
 
-- **Niente segreti nel codice**: chiavi, token e credenziali stanno nei GitHub Secrets o in file
-  locali ignorati, mai in git, nei log, nelle issue o nelle PR.
-- **Commit**: mai committare senza richiesta esplicita; stile conventional commit (`feat:`,
+- **No secrets in code**: keys, tokens and credentials live in GitHub Secrets or in ignored
+  local files, never in git, logs, issues or PRs.
+- **English everywhere**: everything in the repository is written in English — code, comments,
+  documentation, skills, templates — and so are commit messages, branch names, PR and issue
+  titles and bodies, and review replies (D43).
+- **Commits**: never commit without an explicit request; conventional commit style (`feat:`,
   `fix:`, `refactor:`, `docs:`, `ci:`).
-- **Prima leggere, poi scrivere**: cerca i pattern esistenti prima di implementare.
-- **Nessuna nuova dipendenza** (crate o pacchetti npm) senza istruzione esplicita.
-- **Mai leggere i file `.env`**: gli agenti AI NON devono leggere, aprire o ispezionare nessun
-  file `.env`. Per sapere quali variabili servono si usa solo `.env.example`. `.env` contiene la
-  chiave API reale.
-- **Nessuna firma degli strumenti**: niente trailer `Co-Authored-By` di agenti, niente
-  "Generated with ..." nelle PR, niente link `claude.ai/code/session_…` nei messaggi.
-- **MAI push o merge su `main`**: `main` è il branch di rilascio e resta solo umano. L'AI non
-  deve mai fare `git push origin main` né unire una PR in `main`. Le PR verso `main` sono
-  ammesse; il merge lo fa l'umano.
-- **Il merge verso basi diverse da `main` spetta all'AI**, a suo giudizio. `READY TO MERGE` è un
-  segnale da leggere, non una precondizione. Il merge si fa con
-  **`bash scripts/gh-automation.sh pr-merge <pr>`**, che rifiuta una base `main` per nome e
-  fallisce chiuso su una base illeggibile. Vedi "Cosa ferma davvero un merge" più sotto.
-- **Isolamento con git worktree**: ogni modifica e ogni operazione git avviene in un
-  `git worktree` isolato, mai nella cartella principale. Usa
-  `<cartella-padre>/wow-don-issue-<numero>` quando il lavoro è legato a una issue; se non c'è una
-  issue non inventare un numero, usa `<cartella-padre>/wow-don-issue-<slug-descrittivo>`. I
-  worktree di `/process-pr` sono `wow-don-pr-<numero>`. Verifica di essere nel worktree prima di
-  modificare (`git rev-parse --show-toplevel`). Dopo l'apertura della PR rimuovilo con
-  `git worktree remove` e `git worktree prune`. Riusa un worktree esistente per lo stesso branch.
+- **Read first, then write**: look for existing patterns before implementing.
+- **No new dependencies** (crates or npm packages) without an explicit instruction.
+- **Never read `.env` files**: AI agents must NOT read, open or inspect any
+  `.env` file. The app no longer uses one (D44: the CurseForge key lives only in the
+  wow-don-proxy Worker's secrets), but a leftover local `.env` can still hold a real key.
+- **No tool signatures**: no agent `Co-Authored-By` trailers, no
+  "Generated with ..." in PRs, no `claude.ai/code/session_…` links in messages.
+- **NEVER push or merge to `main`**: `main` is the release branch and stays human only. The AI
+  must never run `git push origin main` nor merge a PR into `main`. PRs targeting `main` are
+  allowed; the human does the merge.
+- **Merging into bases other than `main` is up to the AI**, at its own judgement. `READY TO
+  MERGE` is a signal to read, not a precondition. The merge is done with
+  **`bash scripts/gh-automation.sh pr-merge <pr>`**, which refuses a `main` base by name and
+  fails closed on an unreadable base. See "What actually stops a merge" below.
+- **Isolation with git worktree**: every change and every git operation happens in an isolated
+  `git worktree`, never in the main folder. Use
+  `<parent-folder>/wow-don-issue-<number>` when the work is tied to an issue; if there is no
+  issue do not invent a number, use `<parent-folder>/wow-don-issue-<descriptive-slug>`. The
+  `/process-pr` worktrees are `wow-don-pr-<number>`. Check that you are in the worktree before
+  editing (`git rev-parse --show-toplevel`). After opening the PR remove it with
+  `git worktree remove` and `git worktree prune`. Reuse an existing worktree for the same branch.
 
-## Strategia dei branch
+## Branch strategy
 
-- `main` — branch di rilascio
-- `develop` — branch di integrazione e base di default (branch predefinito del repository); i
-  sotto-branch impilati possono partire dal loro branch di feature
-- `feature/<issue>-<slug>` — funzionalità e miglioramenti
-- `fix/<issue>-<slug>` — correzioni
-- `refactor/<issue>-<slug>` — ristrutturazioni senza cambi di comportamento
+- `main` — release branch
+- `develop` — integration branch and default base (the repository's default branch); stacked
+  sub-branches may start from their feature branch
+- `feature/<issue>-<slug>` — features and improvements
+- `fix/<issue>-<slug>` — fixes
+- `refactor/<issue>-<slug>` — restructuring without behaviour changes
 
-Per lavoro autorizzato senza issue, ometti il numero invece di inventarlo:
-`<tipo>/<slug-descrittivo>` (per esempio `refactor/estrai-config`).
+For authorised work without an issue, omit the number instead of inventing it:
+`<type>/<descriptive-slug>` (for example `refactor/extract-config`).
 
-## Pipeline di sviluppo guidata dall'AI
+## AI-driven development pipeline
 
-Il repository ha una pipeline che porta le issue dalla creazione a PR pronte per il merge, su tre
-livelli:
+The repository has a pipeline that takes issues from creation to merge-ready PRs, on three
+levels:
 
-| Livello      | Tecnologia                              | Responsabilità |
+| Level        | Technology                              | Responsibility |
 | ------------ | --------------------------------------- | -------------- |
-| **Skill**    | Skill per Claude, Codex e OpenCode      | Implementazione, gestione delle PR, consegna delle iterazioni, cerimonie scrum |
-| **Workflow** | GitHub Actions (`.github/workflows/`)   | CI, review delle PR, etichettatura, transizioni delle iterazioni |
-| **Helper**   | `scripts/gh-automation.sh`              | Wrapper comune per le API REST e GraphQL |
+| **Skill**    | Skills for Claude, Codex and OpenCode   | Implementation, PR handling, iteration delivery, scrum ceremonies |
+| **Workflow** | GitHub Actions (`.github/workflows/`)   | CI, PR review, labelling, iteration transitions |
+| **Helper**   | `scripts/gh-automation.sh`              | Common wrapper for the REST and GraphQL APIs |
 
-L'intera infrastruttura è portata da voxelheim-v2; i commenti nel codice dei workflow e degli
-script citano numeri di issue e PR di quel repository, dove si trova la storia completa.
+The whole infrastructure is ported from voxelheim-v2; comments in the workflow and script code
+cite issue and PR numbers from that repository, where the full history lives.
 
-### Sincronizzazione delle skill tra runtime
+### Skill sync across runtimes
 
-`.claude/skills/` è la fonte canonica. Codex usa gli adapter generati in `.agents/skills/`,
-OpenCode quelli in `.opencode/skills/`. Quando una skill canonica cambia:
+`.claude/skills/` is the canonical source. Codex uses the adapters generated in `.agents/skills/`,
+OpenCode those in `.opencode/skills/`. When a canonical skill changes:
 
-1. Modifica solo `.claude/skills/<skill>/SKILL.md`.
-2. Esegui `bash scripts/sync-agent-skills.sh` dalla radice.
-3. Esegui `bash scripts/test/agent-skills-sync.test.sh` e committa le tre versioni insieme.
+1. Edit only `.claude/skills/<skill>/SKILL.md`.
+2. Run `bash scripts/sync-agent-skills.sh` from the root.
+3. Run `bash scripts/test/agent-skills-sync.test.sh` and commit the three versions together.
 
-Non modificare mai a mano gli adapter generati. La CI fallisce se un adapter è vecchio.
+Never edit the generated adapters by hand. CI fails if an adapter is stale.
 
-### Flusso
+### Flow
 
 ```
-Issue aperta dal template
+Issue opened from the template
         │
         ▼
-/dev-issue <numero> in Claude/OpenCode, oppure $dev-issue <numero> in Codex
+/dev-issue <number> in Claude/OpenCode, or $dev-issue <number> in Codex
         │
         ▼
-skill: legge la issue → valida l'area → legge AGENTS.md e docs/
+skill: reads the issue → validates the area → reads AGENTS.md and docs/
         │
         ▼
-skill: worktree + branch dalla base (develop di default) → implementa → gate (fmt, clippy, build, test)
+skill: worktree + branch from the base (develop by default) → implements → gates (fmt, clippy, build, test)
         │
         ▼
-skill: apre la PR verso quella base → ESCE (senza stato)
+skill: opens the PR against that base → EXITS (stateless)
         │
         ▼
-deepseek-pr-review.yml: commenti di review inline sul diff ─────────┐
+deepseek-pr-review.yml: inline review comments on the diff ─────────┐
         │                                                           │
-        ▼                                                           ▼ (in parallelo)
-pr-labeler.yml (a fine CI/review + giro ogni 6h): legge ci-gate e thread
+        ▼                                                           ▼ (in parallel)
+pr-labeler.yml (at the end of CI/review + a pass every 6h): reads ci-gate and threads
         │
     ┌───┴──────────────┐
-    │ Regola congelata? │──sì──→ label READY TO MERGE
-    │ CI rossa?         │──sì──→ label needs-work
-    │ altrimenti        │──────→ needs-review
+    │ Frozen rule?      │──yes─→ label READY TO MERGE
+    │ CI red?           │──yes─→ label needs-work
+    │ otherwise         │──────→ needs-review
     └───────────────────┘
         │
         ▼
-/process-pr (Claude/OpenCode) o $process-pr (Codex): conflitti, CI, feedback
+/process-pr (Claude/OpenCode) or $process-pr (Codex): conflicts, CI, feedback
         │
         ▼
-L'AI legge il risultato e i vincoli d'ordine → merge verso basi diverse da main
+The AI reads the result and the ordering constraints → merge into bases other than main
 ```
 
-`/develop-iteration` (Claude/OpenCode) o `$develop-iteration` (Codex) esegue tutto questo per
-le issue già assegnate a una milestone: un agente per issue con `/dev-issue`, ondate parallele
-solo per lavoro indipendente, `/process-pr` sulle PR da correggere e merge delle foglie pronte in
-ordine di dipendenza. Su `develop` non c'è una verifica dopo il merge (la CI gira solo su
-`pull_request`): per questo la skill unisce in `develop` una PR alla volta e riallinea alla nuova
-punta ogni altra PR prima di unirla.
+`/develop-iteration` (Claude/OpenCode) or `$develop-iteration` (Codex) runs all of this for
+the issues already assigned to a milestone: one agent per issue with `/dev-issue`, parallel
+waves only for independent work, `/process-pr` on the PRs that need fixing, and merging of the
+ready leaves in dependency order. On `develop` there is no post-merge verification (CI runs only
+on `pull_request`): that is why the skill merges one PR at a time into `develop` and realigns
+every other PR to the new tip before merging it.
 
-### Skill
+### Skills
 
-| Skill          | Claude / OpenCode         | Codex                     | Comportamento |
+| Skill          | Claude / OpenCode         | Codex                     | Behaviour |
 | -------------- | ------------------------- | ------------------------- | ------------- |
-| `dev-issue`    | `/dev-issue <numero>`     | `$dev-issue <numero>`     | Senza stato: issue → PR → esce |
-| `process-pr`   | `/process-pr <numero-pr>` | `$process-pr <numero-pr>` | Correzione attiva: conflitti, CI, feedback di review |
-| `develop-iteration` | `/develop-iteration [iterazione]` | `$develop-iteration [iterazione]` | Agenti paralleli per issue → correzioni → merge delle PR verso basi diverse da main |
-| `scrum-master` | `/scrum-master <cerimonia>` | `$scrum-master <cerimonia>` | backlog-refine, iteration-plan, feature-spec |
+| `dev-issue`    | `/dev-issue <number>`     | `$dev-issue <number>`     | Stateless: issue → PR → exits |
+| `process-pr`   | `/process-pr <pr-number>` | `$process-pr <pr-number>` | Active fixing: conflicts, CI, review feedback |
+| `develop-iteration` | `/develop-iteration [iteration]` | `$develop-iteration [iteration]` | Parallel agents per issue → fixes → merge of PRs into bases other than main |
+| `scrum-master` | `/scrum-master <ceremony>` | `$scrum-master <ceremony>` | backlog-refine, iteration-plan, feature-spec |
 
-Le skill possono essere avviate da un agente oltre che da una persona: non usare
-`disable-model-invocation`. Tieni stretti gli `allowed-tools`: sono il motivo per preferire una
-skill a un agente costruito a mano.
+Skills can be started by an agent as well as by a person: do not use
+`disable-model-invocation`. Keep `allowed-tools` tight: they are the reason to prefer a
+skill over a hand-built agent.
 
-Le cerimonie delle iterazioni restano con l'umano nel ciclo: scegliere quali issue entrano nella
-prossima iterazione è una decisione dell'utente. `/develop-iteration` consegna lo scope scelto e
-si ferma: non chiude la milestone e non esegue le cerimonie.
+Iteration ceremonies keep the human in the loop: choosing which issues enter the
+next iteration is the user's decision. `/develop-iteration` delivers the chosen scope and
+stops: it does not close the milestone and does not run the ceremonies.
 
-#### Cosa ferma davvero un merge
+#### What actually stops a merge
 
-**Verso `develop`: i ruleset e il giudizio dell'AI.** Il ruleset del branch richiede una PR, i
-thread di review risolti e (una volta attivato il secondo ruleset) `ci-gate` verde. La regola
-congelata calcola `READY TO MERGE`; è un segnale, non un blocco.
+**Into `develop`: the rulesets and the AI's judgement.** The branch ruleset requires a PR,
+resolved review threads and (once the second ruleset is activated) a green `ci-gate`. The
+frozen rule computes `READY TO MERGE`; it is a signal, not a block.
 
-**Verso un altro branch di feature: il controllo fresco di chi fa il merge.** I ruleset coprono
-solo `develop` e `main`. Prima del merge esegui `is-ready-to-merge` subito prima di `pr-merge`,
-e passa `--head <sha-osservato>` e `--base-head <sha-base-osservato>` così che una testa o una
-base mosse invalidino la lettura.
+**Into another feature branch: the fresh check by whoever merges.** The rulesets cover
+only `develop` and `main`. Before the merge run `is-ready-to-merge` right before `pr-merge`,
+and pass `--head <observed-sha>` and `--base-head <observed-base-sha>` so that a moved head or
+base invalidates the read.
 
-**Verso `main`: l'istruzione, più un controllo sul percorso designato.** Un deny può bloccare
-`git push origin main` perché il comando nomina il ref. **`gh pr merge <n>` non nomina nessun
-branch**: la base è una proprietà della PR, quindi nessun prefisso `Bash(...)` distingue un merge
-verso `develop` da uno verso `main`. Al suo posto c'è `pr-merge`, che legge `baseRefName` e
-rifiuta `main`, fallendo chiuso su una base vuota o illeggibile senza tentare il merge
+**Into `main`: the instruction, plus a check on the designated path.** A deny can block
+`git push origin main` because the command names the ref. **`gh pr merge <n>` names no
+branch**: the base is a property of the PR, so no `Bash(...)` prefix tells a merge into
+`develop` from one into `main`. In its place there is `pr-merge`, which reads `baseRefName` and
+refuses `main`, failing closed on an empty or unreadable base without attempting the merge
 (`scripts/test/pr-merge-guard.test.sh`).
 
-**Ferma un incidente, non una decisione.** `gh pr merge` e
-`gh api -X PUT repos/OWNER/REPO/pulls/N/merge` aggirano l'helper, e niente ferma un agente che
-vuole usarli. L'allowlist non è una sandbox: le skill hanno `Bash(gh *)` e `Bash(bash *)`, ed
-entrambi sono necessari. Quello che tiene `main` è l'istruzione.
+**It stops an accident, not a decision.** `gh pr merge` and
+`gh api -X PUT repos/OWNER/REPO/pulls/N/merge` bypass the helper, and nothing stops an agent that
+wants to use them. The allowlist is not a sandbox: the skills have `Bash(gh *)` and
+`Bash(bash *)`, and both are necessary. What holds `main` is the instruction.
 
-Le voci `deny` in `.claude/settings.json` per `git push origin main` (e le varianti `--force`,
-`-f`, `+main`) restano come comodità: sotto c'è un blocco completo lato remoto.
+The `deny` entries in `.claude/settings.json` for `git push origin main` (and the variants
+`--force`, `-f`, `+main`) remain as a convenience: underneath there is a full server-side block.
 
-**Rischio residuo.** Niente legge una PR prima che arrivi su `develop` se non lo fa l'AI.
-`unresolved_threads == 0` non significa che una persona abbia guardato: l'AI può risolvere un
-thread a cui ha risposto, anche respingendo il suggerimento, e quella risposta è l'intera traccia
-di audit. L'ordine tra PR è invisibile alla regola congelata: un ordine scritto nel corpo di una
-PR vincola chi fa il merge. **Leggi i corpi.**
+**Residual risk.** Nothing reads a PR before it reaches `develop` unless the AI does.
+`unresolved_threads == 0` does not mean a person has looked: the AI can resolve a
+thread it has replied to, even when rejecting the suggestion, and that reply is the whole audit
+trail. Ordering between PRs is invisible to the frozen rule: an order written in a PR body binds
+whoever merges. **Read the bodies.**
 
-### Regola congelata di accettazione
+### Frozen acceptance rule
 
-**La label `READY TO MERGE` si aggiunge solo quando: il check stabile `ci-gate` è presente e
-verde sul commit di testa, nessun check è fallito o in corso, la PR è mergiabile, nessuna review
-richiede modifiche, i thread di review non risolti sono zero, nessuna review DeepSeek ha finding
-non letti nel corpo (si chiudono con la label `DEEPSEEK_REVIEW_READ`) e la review DeepSeek è
-definitivamente finita (verdetto pulito, round esauriti o esenzione `NO_DEEPSEEK_REVIEW`).**
+**The `READY TO MERGE` label is added only when: the stable `ci-gate` check is present and
+green on the head commit, no check has failed or is in progress, the PR is mergeable, no review
+requests changes, unresolved review threads are zero, no DeepSeek review has unread findings in
+its body (they are closed with the `DEEPSEEK_REVIEW_READ` label) and the DeepSeek review is
+definitively finished (clean verdict, rounds exhausted or `NO_DEEPSEEK_REVIEW` exemption).**
 
-La regola ha una sola implementazione, `cmd_pr_status_json` in `scripts/gh-automation.sh`, usata
-da `pr-labeler.yml` e da `pr-status`. Ogni condizione fallisce chiusa: un conteggio illeggibile è
-`-1`, mai `0`.
+The rule has a single implementation, `cmd_pr_status_json` in `scripts/gh-automation.sh`, used
+by `pr-labeler.yml` and by `pr-status`. Every condition fails closed: an unreadable count is
+`-1`, never `0`.
 
-"Verde" non è "non rosso". Una PR **senza nessun check** soddisfa "zero falliti, zero in corso",
-ed è uno stato raggiungibile: una PR in conflitto non ha un merge ref e quindi non esegue nessun
-workflow `pull_request`. Per questo l'helper richiede `ci-gate` **presente e verde** e
+"Green" is not "not red". A PR **with no checks at all** satisfies "zero failed, zero in
+progress", and it is a reachable state: a PR in conflict has no merge ref and therefore runs no
+`pull_request` workflow. That is why the helper requires `ci-gate` **present and green** and
 `mergeable == MERGEABLE`.
 
-Il labeler gira su `workflow_run` quando finiscono la CI o la review DeepSeek, più un giro ogni
-sei ore per le transizioni senza evento (risoluzione dell'ultimo thread, mergeabilità ricalcolata
-dopo un merge sulla base). `workflow_dispatch` o `/process-pr` forzano un passaggio. Non
-aggiungere un trigger `pull_request` al labeler.
+The labeler runs on `workflow_run` when CI or the DeepSeek review finishes, plus a pass every
+six hours for transitions without an event (resolution of the last thread, mergeability
+recomputed after a merge on the base). `workflow_dispatch` or `/process-pr` force a pass. Do not
+add a `pull_request` trigger to the labeler.
 
-**Una scrittura di label fallita fa fallire il labeler.** `pr-label` esce non zero se la
-scrittura non arriva, e `pr-check-label` risponde **0 presente / 1 assente / 2 non
-determinabile**. Un run rosso del labeler significa che una scrittura è fallita: leggi il log.
+**A failed label write makes the labeler fail.** `pr-label` exits non-zero if the
+write does not land, and `pr-check-label` answers **0 present / 1 absent / 2 not
+determinable**. A red labeler run means a write failed: read the log.
 
-#### Il conteggio dei thread vede solo metà della review
+#### The thread count sees only half the review
 
-DeepSeek consegna i finding in due forme. I commenti inline creano **thread**, che la regola
-conta. I commenti generali stanno nel **corpo** della review e non creano thread: una review
-fatta solo di quelli conta `0 non risolti` pur avendo finding reali. Per questo `pr-status-json`
-conta anche `deepseek_unread_findings`. Il verdetto pulito si riconosce dal marcatore
-`<!-- deepseek:no-findings -->` all'inizio del corpo, senza `<!-- deepseek:full-review -->`.
+DeepSeek delivers findings in two forms. Inline comments create **threads**, which the rule
+counts. General comments sit in the review **body** and create no threads: a review made only of
+those counts `0 unresolved` while having real findings. That is why `pr-status-json` also counts
+`deepseek_unread_findings`. The clean verdict is recognised by the
+`<!-- deepseek:no-findings -->` marker at the start of the body, without `<!-- deepseek:full-review -->`.
 
-**Il riconoscimento è la label `DEEPSEEK_REVIEW_READ`, ed è datata**: contano come lette solo le
-review inviate prima che la label fosse applicata. Una seconda review forzata blocca di nuovo;
-togliere la label annulla il riconoscimento. Un umano la può applicare dopo aver letto i finding.
-L'AI solo dopo aver letto **ogni** finding, corretto quelli validi o respinto gli altri con prove,
-e pubblicato le risposte sulla PR; la sua scrittura deve essere più recente delle review che
-riconosce. `NO_DEEPSEEK_REVIEW` resta solo umana.
+**The acknowledgement is the `DEEPSEEK_REVIEW_READ` label, and it is dated**: only reviews
+submitted before the label was applied count as read. A second forced review blocks
+again; removing the label cancels the acknowledgement. A human can apply it after reading the
+findings. The AI only after reading **every** finding, fixing the valid ones or rejecting the
+others with evidence, and posting the replies on the PR; its write must be more recent than the
+reviews it acknowledges. `NO_DEEPSEEK_REVIEW` remains human only.
 
-### Ciclo di vita delle iterazioni guidato dal completamento
+### Completion-driven iteration lifecycle
 
-Non c'è un calendario e le milestone non hanno scadenza. `iteration-lifecycle.yml` gira quando
-si chiude una issue con milestone o con label `ceremony`, individua la milestone attiva e la
-valuta:
+There is no calendar and milestones have no due date. `iteration-lifecycle.yml` runs when
+an issue with a milestone or with the `ceremony` label is closed, identifies the active milestone
+and evaluates it:
 
-1. Finché l'iterazione attiva ha issue aperte, non fa niente.
-2. Quando si chiude l'ultima issue, crea una cerimonia di backlog refinement per quella
+1. As long as the active iteration has open issues, it does nothing.
+2. When the last issue is closed, it creates a backlog refinement ceremony for that
    milestone.
-3. La chiusura di quella cerimonia crea una cerimonia di iteration planning.
-4. `/scrum-master iteration-plan` sceglie un lotto di lavoro, crea e popola la milestone
-   `Iteration N` successiva, poi chiude quella completata.
+3. Closing that ceremony creates an iteration planning ceremony.
+4. `/scrum-master iteration-plan` picks a batch of work, creates and populates the next
+   `Iteration N` milestone, then closes the completed one.
 
-**Possono esserci più iterazioni aperte**: l'attiva è la milestone aperta con la sequenza **più
-bassa** (da `Iteration N` / `Sprint N`, altrimenti dal numero della milestone), confrontata come
-numero. Due milestone aperte con la stessa sequenza più bassa fanno fallire il run.
+**There can be several open iterations**: the active one is the open milestone with the
+**lowest** sequence (from `Iteration N` / `Sprint N`, otherwise from the milestone number),
+compared as a number. Two open milestones with the same lowest sequence make the run fail.
 
-**Avvio a freddo**: senza nessuna milestone, `iteration-advance` non fa niente. Il primo
-`/scrum-master iteration-plan` crea direttamente `Iteration 1`.
+**Cold start**: with no milestone at all, `iteration-advance` does nothing. The first
+`/scrum-master iteration-plan` creates `Iteration 1` directly.
 
-### Review automatica (DeepSeek)
+### Automated review (DeepSeek)
 
-`deepseek-pr-review.yml` fa la review del codice con l'API DeepSeek (`deepseek-flash`,
+`deepseek-pr-review.yml` reviews the code with the DeepSeek API (`deepseek-flash`,
 `reasoning_effort=high`):
 
-| Modo | Trigger | Comportamento |
+| Mode | Trigger | Behaviour |
 |------|---------|---------------|
-| **A — Review completa** | PR aperta o nuovo commit | Legge tutto il diff e pubblica commenti inline con suggerimenti. Un finding che nomina un file va ancorato a quel file; il corpo è riservato alle osservazioni che non appartengono a un singolo file. |
-| **B — Risposta** | Risposta a un commento di DeepSeek | Legge diff e thread, risponde nello stesso thread. Non tocca mai il codice. |
+| **A — Full review** | PR opened or new commit | Reads the whole diff and posts inline comments with suggestions. A finding that names a file must be anchored to that file; the body is reserved for observations that do not belong to a single file. |
+| **B — Reply** | Reply to a DeepSeek comment | Reads the diff and the thread, replies in the same thread. Never touches the code. |
 
-**Nessuna approvazione**: GitHub non permette ad Actions di approvare PR. Il verdetto pulito è
-una review COMMENT che inizia con `<!-- deepseek:no-findings -->`.
+**No approval**: GitHub does not let Actions approve PRs. The clean verdict is
+a COMMENT review that starts with `<!-- deepseek:no-findings -->`.
 
-**Limite di round**: le review complete automatiche sono al massimo **1** per PR (`MAX_ROUNDS`).
-Dopo, i push non fanno partire altre review e viene pubblicato un avviso una volta sola. Le
-risposte (Modo B) continuano senza limite. Per forzare un altro passaggio:
-`bash scripts/gh-automation.sh pr-deepseek-force-review <pr> [ref]` (`ref` di default `develop`).
-Con `--measure-only` rifà la review di un diff senza pubblicare niente.
+**Round limit**: automatic full reviews are at most **1** per PR (`MAX_ROUNDS`).
+After that, pushes trigger no further reviews and a notice is posted once. Replies (Mode B)
+continue without limit. To force another pass:
+`bash scripts/gh-automation.sh pr-deepseek-force-review <pr> [ref]` (`ref` defaults to `develop`).
+With `--measure-only` it re-reviews a diff without publishing anything.
 
-**Quale copia della configurazione vale**: i run `pull_request` usano il merge ref, quindi
-eseguono workflow e script del **branch base**.
+**Which copy of the configuration applies**: `pull_request` runs use the merge ref, so they
+execute the workflow and scripts of the **base branch**.
 
-**Limite del diff: 90,000 caratteri** (`DEEPSEEK_MAX_DIFF_CHARS`, misurato in voxelheim-v2 con
-diciassette repliche a `high`). Oltre, il diff viene troncato, ogni file non letto viene nominato
-nel log **e nella review come finding**, e la PR resta bloccata finché qualcuno non lo riconosce.
-Una review troncata non può tornare pulita. Dividere la PR è la soluzione affidabile; meglio
-ancora dimensionare la issue prima (vedi `/scrum-master` e `/dev-issue` Passo 5). Il limite e
-l'effort sono una sola misura: cambiare uno dei due fa fallire `deepseek-budget.test.sh` finché
-il limite non viene rimisurato.
+**Diff limit: 90,000 characters** (`DEEPSEEK_MAX_DIFF_CHARS`, measured in voxelheim-v2 with
+seventeen replays at `high`). Beyond that, the diff is truncated, every unread file is named
+in the log **and in the review as a finding**, and the PR stays blocked until someone
+acknowledges it. A truncated review cannot come back clean. Splitting the PR is the reliable
+solution; better still, size the issue beforehand (see `/scrum-master` and `/dev-issue` Step 5).
+The limit and the effort are a single measurement: changing either makes
+`deepseek-budget.test.sh` fail until the limit is re-measured.
 
-Codice generato (cartelle `gen/`, `*_generated.*`) e lockfile (`Cargo.lock`, `pnpm-lock.yaml`,
-`go.sum`, per nome esatto) sono esclusi dal diff. I manifest (`Cargo.toml`, `package.json`)
-restano: una nuova dipendenza è proprio quello che un reviewer deve vedere.
+Generated code (`gen/` folders, `*_generated.*`) and lockfiles (`Cargo.lock`, `pnpm-lock.yaml`,
+`go.sum`, by exact name) are excluded from the diff. Manifests (`Cargo.toml`, `package.json`)
+stay: a new dependency is exactly what a reviewer must see.
 
-**Budget e tempi**: `DEEPSEEK_MAX_OUTPUT_TOKENS=384000`; il budget di richiesta è
-`DEEPSEEK_REQUEST_TIMEOUT_SECONDS` × (`DEEPSEEK_MAX_RETRIES` + 1) = 2700s × 2 = 90 minuti, e il
-job ha `timeout-minutes: 100`. **Il budget deve restare sotto il limite del job**:
-`scripts/test/deepseek-budget.test.sh` lo verifica. Se vince il limite del job, lo step risulta
-`cancelled` senza output e `pr-status-json` conta `CANCELLED` come fallito.
+**Budget and timing**: `DEEPSEEK_MAX_OUTPUT_TOKENS=384000`; the request budget is
+`DEEPSEEK_REQUEST_TIMEOUT_SECONDS` × (`DEEPSEEK_MAX_RETRIES` + 1) = 2700s × 2 = 90 minutes, and the
+job has `timeout-minutes: 100`. **The budget must stay below the job limit**:
+`scripts/test/deepseek-budget.test.sh` verifies it. If the job limit wins, the step ends up
+`cancelled` with no output and `pr-status-json` counts `CANCELLED` as failed.
 
-**Un diff illeggibile fa fallire il run** (errore di fetch, file senza patch, errori di rete), e
-un conteggio dei round illeggibile non vale zero.
+**An unreadable diff makes the run fail** (fetch error, file without a patch, network errors),
+and an unreadable round count is not zero.
 
-**Sicurezza**: DeepSeek non crea commit, non fa push e non modifica file. Ignora i propri
-commenti. Non dichiara mai di aver fatto azioni che il suo script non può fare (come risolvere un
-thread).
+**Security**: DeepSeek creates no commits, does not push and does not edit files. It ignores
+its own comments. It never claims to have taken actions its script cannot take (such as
+resolving a thread).
 
-### Prerequisiti
+### Prerequisites
 
-0. **Strumenti locali**: `gh` (2.18.0 o successivo) e `jq`, vedi la tabella in `README.md`.
-   `scripts/gh-automation.sh` li richiede entrambi.
-1. **Token GitHub**: un PAT fine-grained con `contents: read/write`, `pull_requests: read/write`,
-   `issues: read/write` su questo repository, salvato come secret `GH_PIPELINE_TOKEN`. Serve al
-   labeler e al ciclo di vita delle iterazioni (le scritture fatte con `GITHUB_TOKEN` non
-   attivano altri workflow).
+0. **Local tools**: `gh` (2.18.0 or later) and `jq`, see the table in `README.md`.
+   `scripts/gh-automation.sh` requires both.
+1. **GitHub token**: a fine-grained PAT with `contents: read/write`, `pull_requests: read/write`,
+   `issues: read/write` on this repository, saved as the `GH_PIPELINE_TOKEN` secret. The
+   labeler and the iteration lifecycle need it (writes made with `GITHUB_TOKEN` do not
+   trigger other workflows).
 
-   **Questo token non legge lo stato della CI, e nessun permesso lo risolve**: la Checks API è
-   solo per GitHub App. `pr-labeler.yml` passa `GH_CI_TOKEN: ${{ secrets.GITHUB_TOKEN }}` con
-   `checks: read`, `statuses: read` e `actions: read`, e `gh_ci()` instrada lì quella sola
-   lettura. **Ogni nuovo chiamante che legge i check deve usare `gh_ci`, non `gh`.**
-2. **Chiave API DeepSeek**: secret `DEEPSEEK_API_KEY` (`Settings → Secrets and variables →
+   **This token does not read the CI state, and no permission fixes that**: the Checks API is
+   GitHub App only. `pr-labeler.yml` passes `GH_CI_TOKEN: ${{ secrets.GITHUB_TOKEN }}` with
+   `checks: read`, `statuses: read` and `actions: read`, and `gh_ci()` routes that single
+   read there. **Every new caller that reads checks must use `gh_ci`, not `gh`.**
+2. **DeepSeek API key**: `DEEPSEEK_API_KEY` secret (`Settings → Secrets and variables →
    Actions`).
-3. **Protezione dei merge**: due ruleset su `develop` e `main`, vedi
-   `.github/branch-protection.md`. Il secondo (`ci-gate` obbligatorio) si attiva solo dopo che
-   `ci-gate` ha girato su una PR vera.
-4. **Label**: `READY TO MERGE`, `needs-review`, `needs-work`, `DEEPSEEK_REVIEW_READ`,
+3. **Merge protection**: two rulesets on `develop` and `main`, see
+   `.github/branch-protection.md`. The second one (`ci-gate` required) is activated only after
+   `ci-gate` has run on a real PR.
+4. **Labels**: `READY TO MERGE`, `needs-review`, `needs-work`, `DEEPSEEK_REVIEW_READ`,
    `NO_DEEPSEEK_REVIEW`, `ceremony`, `feature`, `bug`, `needs-refinement`, `needs-triage`,
    `ready-for-dev`, `needs-privacy-review`.
 
 ## Definition of Done
 
-**Ogni PR aperta dalla pipeline DEVE verificare TUTTO questo prima di essere creata:**
+**Every PR opened by the pipeline MUST verify ALL of this before it is created:**
 
-- [ ] **Formattazione** — `cargo fmt --all --check` (in `src-tauri/`)
+- [ ] **Formatting** — `cargo fmt --all --check` (in `src-tauri/`)
 - [ ] **Lint** — `cargo clippy --all-targets --locked -- -D warnings`
-- [ ] **Build** — `cargo build --locked` e `pnpm build` (`tsc && vite build`)
-- [ ] **Test** — `cargo test --locked` e `pnpm test` (`node --test`, test delle funzioni pure del frontend)
-- [ ] **Automazione** — `scripts/test/*.test.sh` e `python3 .github/scripts/test_deepseek_review.py`
-- [ ] **Nessuna stampa di debug** nei percorsi di produzione
-- [ ] **Nessun segreto** — niente chiavi, token, password o credenziali nel codice o nei test
-- [ ] **Chiave API solo nel backend** — mai nel frontend né nei log
-- [ ] **Privacy di pubblicazione pulita** — nessuna email reale, dato personale, percorso della
-      macchina, hostname o endpoint privato; `scripts/check-publication-privacy.sh` passa
-      sull'albero e `scripts/check-commit-privacy.sh` sui commit che il branch aggiunge
+- [ ] **Build** — `cargo build --locked` and `pnpm build` (`tsc && vite build`)
+- [ ] **Tests** — `cargo test --locked` and `pnpm test` (`node --test`, tests of the frontend's pure functions)
+- [ ] **Automation** — `scripts/test/*.test.sh` and `python3 .github/scripts/test_deepseek_review.py`
+- [ ] **No debug prints** in production paths
+- [ ] **No secrets** — no keys, tokens, passwords or credentials in code or tests
+- [ ] **No CurseForge key in the app** — not in the frontend, the backend, the logs or the tests (D44)
+- [ ] **Clean publication privacy** — no real email, personal data, machine path, hostname or
+      private endpoint; `scripts/check-publication-privacy.sh` passes on the tree and
+      `scripts/check-commit-privacy.sh` on the commits the branch adds
 
-Se un gate fallisce, l'implementazione non è finita.
+If a gate fails, the implementation is not finished.
 
-### Cosa impone la CI
+### What CI enforces
 
-`.github/workflows/ci.yml` esegue:
+`.github/workflows/ci.yml` runs:
 
 | Job          | Gate |
 | ------------ | ---- |
-| `detect`     | Controlli di privacy sull'albero e sui commit della PR, poi classifica i file cambiati con `scripts/changed-areas.sh` |
-| `backend`    | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` (con le librerie di sistema di Tauri) |
-| `backend-windows` | `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` su `windows-latest` (D23); stesso selettore di `backend` |
-| `backend-macos` | Gli stessi gate di `backend-windows` su `macos-latest` (D29), con un selettore proprio (`macos`): gira solo sulle PR verso `main` e sulle PR che modificano `ci.yml` |
+| `detect`     | Privacy checks on the PR's tree and commits, then classifies the changed files with `scripts/changed-areas.sh` |
+| `backend`    | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` (with Tauri's system libraries) |
+| `backend-windows` | `cargo clippy -D warnings`, `cargo build --locked`, `cargo test --locked` on `windows-latest` (D23); same selector as `backend` |
+| `backend-macos` | The same gates as `backend-windows` on `macos-latest` (D29), with its own selector (`macos`): it runs only on PRs targeting `main` and on PRs that modify `ci.yml` |
 | `frontend`   | `pnpm install --frozen-lockfile`, `pnpm build`, `pnpm test` |
-| `automation` | Tutta la suite `scripts/test/*.test.sh` più `test_deepseek_review.py` |
-| `ci-gate`    | L'unico check stabile: verifica che ogni job selezionato abbia avuto successo e ogni salto fosse autorizzato |
+| `automation` | The whole `scripts/test/*.test.sh` suite plus `test_deepseek_review.py` |
+| `ci-gate`    | The only stable check: verifies that every selected job succeeded and every skip was authorised |
 
-Su una PR verso una base diversa da `main`, `detect` seleziona i job dal diff: `src-tauri/**`
-attiva `backend` e `backend-windows`, `src/**` e i file di toolchain del frontend attivano `frontend`,
-`package.json`/`pnpm-lock.yaml` attivano entrambi, `ci.yml` attiva tutto, la documentazione non
-attiva niente. `automation` gira sempre. Un percorso non riconosciuto o un diff illeggibile
-attivano tutto (fallimento aperto). Su una PR verso `main` gira tutto.
+On a PR targeting a base other than `main`, `detect` selects the jobs from the diff: `src-tauri/**`
+activates `backend` and `backend-windows`, `src/**` and the frontend toolchain files activate
+`frontend`, `package.json`/`pnpm-lock.yaml` activate both, `ci.yml` activates everything,
+documentation activates nothing. `automation` always runs. An unrecognised path or an unreadable
+diff activates everything (failing open). On a PR targeting `main` everything runs.
 
-`backend-macos` è più stretto per scelta dell'utente: in un repository privato i minuti macOS
-costano dieci volte quelli Linux. Su una base diversa da `main` gira solo se il diff tocca
-`ci.yml`, così si vede girare ogni volta che cambia la sua definizione; altrove il salto è
-autorizzato e `ci-gate` lo accetta. Un percorso non riconosciuto non lo attiva (ci pensano già
-`backend` e `backend-windows`), un diff illeggibile sì. Un cambio al backend che rompe solo
-macOS si scopre quindi alla PR di rilascio verso `main`.
+`backend-macos` is narrower by the user's choice: in a private repository macOS minutes
+cost ten times Linux ones. On a base other than `main` it runs only if the diff touches
+`ci.yml`, so it can be seen running every time its definition changes; elsewhere the skip is
+authorised and `ci-gate` accepts it. An unrecognised path does not activate it (`backend` and
+`backend-windows` already take care of that), an unreadable diff does. A backend change that
+breaks only macOS is therefore discovered at the release PR to `main`.
 
-Due trappole:
+Two traps:
 
-1. **Mai filtri `paths:` a livello di workflow o di job.** Un workflow filtrato non produce un
-   risultato che `ci-gate` possa verificare. Lo strumento giusto è `if:` a livello di job.
-2. **`cancel-in-progress` produce job CANCELLED, che `pr-status-json` conta come falliti.** In
-   `ci.yml` la cancellazione vale solo per eventi `pull_request`, dove la run cancellata
-   appartiene sempre a un commit che non è più la testa.
+1. **Never `paths:` filters at workflow or job level.** A filtered workflow does not produce a
+   result `ci-gate` can verify. The right tool is a job-level `if:`.
+2. **`cancel-in-progress` produces CANCELLED jobs, which `pr-status-json` counts as failed.** In
+   `ci.yml` cancellation applies only to `pull_request` events, where the cancelled run always
+   belongs to a commit that is no longer the head.
 
-### Rilascio
+### Release
 
-`.github/workflows/release.yml` parte con un tag `v*`, accettato **solo su un commit già in
-`main`** (quindi passato da una PR con `ci-gate` verde): il job `verify` lo controlla prima di
-costruire. Poi costruisce il `.deb` su `ubuntu-latest`, l'installer NSIS su `windows-latest` e il
-`.dmg` universale (`universal-apple-darwin`) su `macos-latest` (D24)
-e crea una **release in bozza** con i tre pacchetti; se la bozza esiste già ne sostituisce i
-pacchetti, mentre una release già pubblicata non viene mai toccata.
-La pubblicazione resta umana. Solo il job che crea la bozza ha `contents: write`. Nessun pacchetto
-è firmato: Windows mostra l'avviso di SmartScreen e macOS quello di Gatekeeper (il `.dmg` non è
-nemmeno notarizzato) finché non si decide come firmarli.
+`.github/workflows/release.yml` starts on a `v*` tag, accepted **only on a commit already in
+`main`** (hence one that went through a PR with a green `ci-gate`): the `verify` job checks it
+before building. It then builds the `.deb` on `ubuntu-latest`, the NSIS installer on
+`windows-latest` and the universal `.dmg` (`universal-apple-darwin`) on `macos-latest` (D24)
+and creates a **draft release** with the three packages; if the draft already exists it replaces
+its packages, while an already published release is never touched.
+Publishing stays human. Only the job that creates the draft has `contents: write`. No package
+is signed: Windows shows the SmartScreen warning and macOS the Gatekeeper one (the `.dmg` is not
+even notarised) until a signing approach is decided.
 
-Le action sono fissate per SHA completo con l'etichetta della release, e il checkout non
-conserva le credenziali (`scripts/test/actions-hardening.test.sh`). Il toolchain Rust è fissato
-in `src-tauri/rust-toolchain.toml`, allineato a `dtolnay/rust-toolchain` in CI.
+Actions are pinned by full SHA with the release label, and checkout does not
+persist credentials (`scripts/test/actions-hardening.test.sh`). The Rust toolchain is pinned
+in `src-tauri/rust-toolchain.toml`, aligned with `dtolnay/rust-toolchain` in CI.

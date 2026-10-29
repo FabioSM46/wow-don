@@ -7,165 +7,166 @@ metadata:
 ---
 
 
-# develop-iteration — consegna di un'iterazione
+# develop-iteration — delivering an iteration
 
-Trigger: `/develop-iteration <numero-iterazione-o-milestone>` oppure `/develop-iteration` (usa
-l'iterazione attiva).
+Trigger: `/develop-iteration <iteration-number-or-milestone>` or `/develop-iteration` (uses the
+active iteration).
 
-## Scopo
+## Purpose
 
-Consegna le issue già assegnate a un'iterazione. Questa skill **non** sceglie lo scope
-dell'iterazione: quella decisione è di `/scrum-master iteration-plan` e dell'utente. Coordina un
-agente per issue, usa `/dev-issue` per l'implementazione e `/process-pr` per le correzioni, e fa
-il merge di ogni PR che soddisfa la regola congelata.
+Delivers the issues already assigned to an iteration. This skill does **not** choose the
+iteration's scope: that decision belongs to `/scrum-master iteration-plan` and to the user. It
+coordinates one agent per issue, uses `/dev-issue` for implementation and `/process-pr` for
+fixes, and merges every PR that satisfies the frozen rule.
 
-L'esecuzione si può riprendere. Milestone, issue, branch, PR, check, review e commenti di GitHub
-sono lo stato: non affidarti mai a una coda in memoria come unica traccia dell'avanzamento. A una
-ripartenza, ricostruisci il piano da GitHub e continua senza duplicare branch o PR.
+The run can be resumed. GitHub's milestones, issues, branches, PRs, checks, reviews and comments
+are the state: never rely on an in-memory queue as the only record of progress. On a restart,
+rebuild the plan from GitHub and continue without duplicating branches or PRs.
 
-## Confini non negoziabili
+## Non-negotiable boundaries
 
-- Mai creare, ridirigere o unire una PR con base `main`.
-- Mai push diretto su `main` o su `develop`.
-- Il merge può andare verso `develop` o verso qualunque altro branch che non sia `main`. I branch
-  di feature e i loro sotto-branch sono topologia normale, non una pulizia eccezionale.
-- Ogni merge passa da `bash scripts/gh-automation.sh pr-merge <pr> --head <sha-osservato>
-  --base-head <sha-base-osservato>`. L'helper rifiuta `main` e una testa o una base cambiate, ma
-  non decide se la PR è pronta: il controllo fresco del Passo 5 è obbligatorio.
-- `NO_DEEPSEEK_REVIEW` resta solo umana. I finding nel corpo di una review DeepSeek si
-  riconoscono solo con la sequenza di `/process-pr` (lettura, decisione, risposta pubblica,
-  label fresca `DEEPSEEK_REVIEW_READ`).
-- Le cerimonie delle iterazioni restano con l'umano nel ciclo. Fermati dopo la consegna: non
-  eseguire in automatico né backlog refinement né iteration planning.
-- Le regole di `AGENTS.md` valgono per ogni agente: worktree isolati, nessuna lettura di `.env`,
-  nessuna dipendenza nuova senza richiesta esplicita, controlli di privacy prima di ogni push e di
-  ogni corpo pubblicato.
+- Never create, retarget or merge a PR with base `main`.
+- Never push directly to `main` or to `develop`.
+- The merge can go into `develop` or into any other branch that is not `main`. Feature branches
+  and their sub-branches are normal topology, not an exceptional cleanup.
+- Every merge goes through `bash scripts/gh-automation.sh pr-merge <pr> --head <observed-sha>
+  --base-head <observed-base-sha>`. The helper refuses `main` and a changed head or base, but
+  it does not decide whether the PR is ready: the fresh check in Step 5 is mandatory.
+- `NO_DEEPSEEK_REVIEW` stays human-only. Findings in the body of a DeepSeek review are
+  acknowledged only with the `/process-pr` sequence (read, decision, public reply, fresh
+  `DEEPSEEK_REVIEW_READ` label).
+- Iteration ceremonies keep the human in the loop. Stop after delivery: do not automatically
+  run either backlog refinement or iteration planning.
+- The rules of `AGENTS.md` apply to every agent: isolated worktrees, no reading of `.env`, no
+  new dependency without explicit request, privacy checks before every push and every published
+  body.
 
-## 1. Risolvere l'iterazione e ricostruire lo stato
+## 1. Resolve the iteration and rebuild the state
 
-Con un argomento, risolvilo in **esattamente una** milestone aperta. Accetta il numero della
-milestone, `Iteration N` o `Sprint N`. Senza argomento usa la stessa regola di
-`iteration-advance`: la milestone aperta con la sequenza **più bassa**, letta dal titolo e in
-mancanza dal numero della milestone. Se due milestone aperte hanno la stessa sequenza più bassa,
-fermati e nominale entrambe: scegliere è una decisione di prodotto.
+With an argument, resolve it to **exactly one** open milestone. Accept the milestone number,
+`Iteration N` or `Sprint N`. Without an argument use the same rule as `iteration-advance`: the
+open milestone with the **lowest** sequence, read from the title and failing that from the
+milestone number. If two open milestones have the same lowest sequence, stop and name both:
+choosing is a product decision.
 
-Leggi ogni issue non di cerimonia (senza label `ceremony`) assegnata alla milestone, **comprese
-quelle chiuse**, e trova ogni PR che la cita. Per ogni issue registra:
+Read every non-ceremony issue (without the `ceremony` label) assigned to the milestone,
+**including closed ones**, and find every PR that references it. For each issue record:
 
-- stato e campi obbligatori di `/dev-issue` (letti dal **corpo**, come li legge `/dev-issue`);
-- dipendenze dichiarate (`### Dipendenze`) e vincoli d'ordine scritti nel corpo;
-- branch e PR esistenti, con la **base reale** della PR;
-- stato di CI, DeepSeek, thread di review e mergeabilità;
-- l'area (`backend`, `frontend`, `shared`) e i file probabili da `### Riferimenti nel codice` e
-  `### Contesto tecnico`.
+- state and the required `/dev-issue` fields (read from the **body**, as `/dev-issue` reads
+  them);
+- declared dependencies (`### Dependencies`, or `### Dipendenze` on older issues) and ordering
+  constraints written in the body;
+- existing branches and PRs, with the PR's **real base**;
+- state of CI, DeepSeek, review threads and mergeability;
+- the area (`backend`, `frontend`, `shared`) and the likely files from `### Code pointers` and
+  `### Technical context` (older issues: `### Riferimenti nel codice`, `### Contesto tecnico`).
 
-Il lavoro già unito è completo. Riusa le PR aperte e i worktree esistenti invece di aprirne di
-duplicati. Una PR chiusa senza merge, o un branch il cui legame con la issue è ambiguo, è una
-condizione di stop per quella issue, non un permesso di indovinare.
+Work already merged is complete. Reuse open PRs and existing worktrees instead of opening
+duplicates. A PR closed without merge, or a branch whose link to the issue is ambiguous, is a
+stop condition for that issue, not permission to guess.
 
-Una dipendenza **fuori** dall'iterazione che non è ancora su `develop` blocca la issue che ne
-dipende: segnalala, non anticiparla.
+A dependency **outside** the iteration that is not yet on `develop` blocks the issue that
+depends on it: report it, do not pull it forward.
 
-## 2. Costruire il grafo delle dipendenze e dei branch prima di assegnare il lavoro
+## 2. Build the dependency and branch graph before assigning work
 
-Costruisci un grafo diretto aciclico da: dipendenze esplicite delle issue, l'ordine tra aree di
-`AGENTS.md` (**prima il backend** con i tipi `serde` e il comando Tauri, **poi il frontend** che
-lo usa), corpi delle PR e relazioni di base tra PR già aperte. Una PR verso un altro branch di
-feature dipende da quel branch e deve essere unita prima che la PR finale del branch padre possa
-salire.
+Build a directed acyclic graph from: explicit issue dependencies, the area ordering in
+`AGENTS.md` (**backend first** with the `serde` types and the Tauri command, **then the
+frontend** that uses it), PR bodies and base relations between PRs already open. A PR into
+another feature branch depends on that branch and must be merged before the parent branch's
+final PR can move up.
 
-Scegli la base di ogni issue nuova:
+Choose the base of each new issue:
 
-- `develop` per una issue indipendente (il default);
-- il branch di feature pertinente quando la issue è una figlia di un lavoro assemblato lì
-  apposta;
-- la base reale di ogni PR già esistente, senza cambiarla;
-- rifiuta `main` in fase di piano e ricontrollalo subito prima di creare la PR e prima del merge.
+- `develop` for an independent issue (the default);
+- the relevant feature branch when the issue is a child of work deliberately assembled there;
+- the real base of every already existing PR, without changing it;
+- refuse `main` at planning time and check it again right before creating the PR and before
+  the merge.
 
-Passa una base diversa dal default in modo esplicito all'agente della issue:
-`/dev-issue <issue> --base <branch>`. La base fa parte del piano: non ridirigere in silenzio una
-PR esistente per semplificare il grafo.
+Pass a non-default base explicitly to the issue's agent: `/dev-issue <issue> --base <branch>`.
+The base is part of the plan: do not silently retarget an existing PR to simplify the graph.
 
-Quando più PR figlie hanno bisogno di una nuova base aggregata, creala senza aprire la PR padre:
+When several child PRs need a new aggregate base, create it without opening the parent PR:
 
-1. Scegli un nome `feature/<slug-descrittivo>` (mai `main`) e verifica che non esista già.
-2. In un worktree temporaneo `<cartella-padre-del-repo>/wow-don-issue-iteration-<N>-aggregate`,
-   crea il branch da `origin/develop` aggiornato, verifica la radice del worktree, fai push del
-   branch, poi rimuovi il worktree.
-3. Passa quella base agli agenti delle issue figlie.
-4. Quando ogni PR figlia prevista è unita, crea la PR aggregata dal branch di feature verso
-   `develop`. Controlla il corpo completo con `bash scripts/check-body-privacy.sh` prima di
-   pubblicarlo, metti `Closes #N` per ogni issue contenuta, poi verifica base e corpo su GitHub.
+1. Choose a name `feature/<descriptive-slug>` (never `main`) and verify that it does not
+   already exist.
+2. In a temporary worktree `<repo-parent-folder>/wow-don-issue-iteration-<N>-aggregate`,
+   create the branch from an up-to-date `origin/develop`, verify the worktree root, push the
+   branch, then remove the worktree.
+3. Pass that base to the agents of the child issues.
+4. When every planned child PR is merged, create the aggregate PR from the feature branch into
+   `develop`. Check the full body with `bash scripts/check-body-privacy.sh` before publishing
+   it, put `Closes #N` for every contained issue, then verify base and body on GitHub.
 
-Usa una base aggregata solo quando la PR finale combinata resta plausibilmente sotto il limite di
-90,000 caratteri della review e la funzionalità si legge bene come un tutto. Altrimenti usa PR
-in ordine di dipendenza direttamente verso `develop`.
+Use an aggregate base only when the final combined PR plausibly stays under the review's
+90,000-character limit and the feature reads well as a whole. Otherwise use PRs in dependency
+order directly into `develop`.
 
-Aprire la PR padre solo dopo l'assemblaggio dà alla CI e al round automatico di DeepSeek il diff
-finale combinato. Se una PR padre era già aperta quando il merge di una figlia ne ha cambiato la
-testa, aspetta una CI nuova e chiedi esplicitamente un'ultima review DeepSeek della testa
-assemblata (`bash scripts/gh-automation.sh pr-deepseek-force-review <pr>`) prima di
-considerarla pronta.
+Opening the parent PR only after assembly gives CI and the automatic DeepSeek round the final
+combined diff. If a parent PR was already open when a child's merge changed its head, wait for
+new CI and explicitly request a last DeepSeek review of the assembled head
+(`bash scripts/gh-automation.sh pr-deepseek-force-review <pr>`) before considering it ready.
 
-## 3. Decidere l'ondata parallela
+## 3. Decide the parallel wave
 
-Il parallelismo è il default, ma solo per lavoro davvero indipendente. Due issue possono stare
-nella stessa ondata quando valgono **tutte** queste condizioni:
+Parallelism is the default, but only for truly independent work. Two issues can be in the same
+wave when **all** these conditions hold:
 
-- nessuna delle due raggiunge l'altra nel grafo delle dipendenze;
-- nessuna produce un contratto pubblico (tipi serializzati, comando Tauri, formato di un file di
-  stato) usato dall'altra;
-- i loro riferimenti nel codice e le superfici che modificheranno non si sovrappongono in modo
-  sostanziale (in questo repository `src-tauri/src/commands.rs`, `src-tauri/src/lib.rs`,
-  `src-tauri/src/store.rs` e `src/api.ts` sono punti di contatto frequenti: due issue che li
-  modificano entrambe sono di norma da serializzare);
-- unire una delle due per prima non può invalidare i criteri di accettazione dell'altra;
-- le basi previste esistono già e non aspettano un'altra ondata.
+- neither reaches the other in the dependency graph;
+- neither produces a public contract (serialized types, Tauri command, state file format) used
+  by the other;
+- their code pointers and the surfaces they will modify do not overlap substantially (in this
+  repository `src-tauri/src/commands.rs`, `src-tauri/src/lib.rs`, `src-tauri/src/store.rs` and
+  `src/api.ts` are frequent contact points: two issues that both modify them are normally to be
+  serialized);
+- merging one of them first cannot invalidate the other's acceptance criteria;
+- the planned bases already exist and are not waiting for another wave.
 
-Quando le prove non bastano, serializza e di' perché. Non trasformare l'incertezza in lavoro
-parallelo. Ricalcola il grafo dopo ogni merge: un confine scoperto durante l'implementazione o un
-corpo di PR possono aggiungere un vincolo d'ordine.
+When the evidence is not enough, serialize and say why. Do not turn uncertainty into parallel
+work. Recompute the graph after every merge: a boundary discovered during implementation or a PR
+body can add an ordering constraint.
 
-Usa lo **strumento Task** per avviare esattamente un agente proprietario per ogni issue dell'ondata
-pronta, fino agli slot di concorrenza disponibili. Avvia insieme l'intero insieme massimo così
-che giri in parallelo; le altre issue sicure aspettano l'ondata successiva. Dai a ogni agente il
-numero della issue, la base prevista, le dipendenze rilevanti e questa istruzione:
+Use the **Task tool** to start exactly one owning agent for every issue in the ready wave, up
+to the available concurrency slots. Start the whole maximal set together so that it runs in
+parallel; the other safe issues wait for the next wave. Give each agent the issue number, the
+planned base, the relevant dependencies and this instruction:
 
-> Esegui `/dev-issue <issue> --base <base-prevista>` e seguila fino in fondo. Riporta ogni PR
-> creata (comprese quelle divise o impilate), con base, branch e URL di ognuna, e ogni nuova
-> dipendenza scoperta. Non fare merge. Resti l'agente proprietario per il lavoro successivo di
-> `/process-pr` su quelle PR.
+> Run `/dev-issue <issue> --base <planned-base>` and follow it to the end. Report every PR
+> created (including split or stacked ones), with the base, branch and URL of each, and every
+> new dependency discovered. Do not merge. You remain the owning agent for the later
+> `/process-pr` work on those PRs.
 
-Mai due agenti sulla stessa issue. Se una issue va divisa in più PR, il suo agente ne resta
-proprietario mentre l'orchestratore aggiunge quelle PR e i loro archi di base al grafo. Quando
-l'agente proprietario ha già restituito il suo report, il lavoro successivo va a quello stesso
-agente, con il suo contesto intatto: in Claude Code con `SendMessage`, in un altro runtime con il
-meccanismo equivalente per riprendere un sotto-agente. Solo se il runtime non permette di
-riprenderlo, avvia un agente nuovo per la stessa issue, dopo che il precedente ha finito, e
-passagli il report del precedente.
+Never two agents on the same issue. If an issue must be split into several PRs, its agent stays
+their owner while the orchestrator adds those PRs and their base edges to the graph. When the
+owning agent has already returned its report, later work goes to that same agent, with its
+context intact: in Claude Code with `SendMessage`, in another runtime with the equivalent
+mechanism for resuming a sub-agent. Only if the runtime does not allow resuming it, start a new
+agent for the same issue, after the previous one has finished, and pass it the previous one's
+report.
 
-## 4. Sorvegliare e correggere l'insieme delle PR aperte
+## 4. Watch and fix the set of open PRs
 
-Quando un'ondata di implementazione torna, sorveglia tutte le sue PR aperte come un insieme.
-Prima di aspettare una PR, verifica che sia ancora aperta. Una CI in corso o una prima review
-DeepSeek ancora in corso sono un'attesa, non un motivo per chiamare `/process-pr`. La review
-DeepSeek può durare decine di minuti (vedi "Tempi reali" in `/process-pr`).
+When an implementation wave returns, watch all its open PRs as a set. Before waiting for a PR,
+verify that it is still open. CI in progress or a first DeepSeek review still in progress are a
+wait, not a reason to call `/process-pr`. The DeepSeek review can take tens of minutes (see
+"Real timings" in `/process-pr`).
 
-**Sorveglia l'insieme con una sola sorveglianza persistente costruita su `pr-status-json`.**
-Avviala appena esiste la prima PR dell'esecuzione: in Claude Code con lo strumento `Monitor` e
-`persistent: true`, che esegue il ciclo in background e consegna ogni riga di stdout come
-notifica mentre il ciclo continua; in un altro runtime con un processo in background di cui leggi
-l'output. **Mai eseguire il ciclo come un normale comando di shell in primo piano**: non ritorna
-mai, viene troncato al timeout e le righe non arrivano mentre vengono emesse. Il `sleep 60` del
-ciclo gira solo dentro quel processo in background; l'orchestratore non aspetta con `sleep` in
-primo piano, e tra un evento e l'altro il controllo torna all'utente. Lo stato `last` vive per
-tutta la durata del processo, quindi ogni PR esce solo quando cambia. Agisci su ogni riga: `ready:true` va al Passo 5; thread, finding non letti,
-CI rossa o `CONFLICTING` vanno al `/process-pr` dell'agente proprietario; solo uno stato in
-corso aspetta.
+**Watch the set with a single persistent watch built on `pr-status-json`.**
+Start it as soon as the run's first PR exists: in Claude Code with the `Monitor` tool and
+`persistent: true`, which runs the loop in the background and delivers every stdout line as a
+notification while the loop continues; in another runtime with a background process whose
+output you read. **Never run the loop as a normal foreground shell command**: it never returns,
+it is truncated at the timeout and the lines do not arrive as they are emitted. The loop's
+`sleep 60` runs only inside that background process; the orchestrator does not wait with a
+foreground `sleep`, and between one event and the next control returns to the user. The `last`
+state lives for the whole life of the process, so each PR is emitted only when it changes. Act on every line: `ready:true` goes to Step 5; threads, unread findings,
+red CI or `CONFLICTING` go to the owning agent's `/process-pr`; only an in-progress state
+waits.
 
-Imposta `ISSUES` con i numeri delle issue dell'iterazione, che ogni branch di `/dev-issue` porta
-nel nome, e `EXTRA_PRS` con i numeri delle PR il cui branch non porta il numero di una issue (la
-PR aggregata `feature/<slug>`, vuoto se non ce ne sono):
+Set `ISSUES` to the iteration's issue numbers, which every `/dev-issue` branch carries in its
+name, and `EXTRA_PRS` to the numbers of the PRs whose branch does not carry an issue number (the
+aggregate `feature/<slug>` PR, empty if there are none):
 
 ```bash
 cd <repo-root>
@@ -199,147 +200,146 @@ while true; do
 done
 ```
 
-Emette ogni PR corrispondente una volta al primo passaggio e di nuovo quando cambiano la testa o
-lo stato; uno stato che non si legge esce come `status-unreadable`, mai come silenzio. Lo stesso
-vale per un campo di `pr-status-json` rinominato o sparito: `jq -e` senza risultato fallisce, e
-la riga esce come `status-unreadable` invece che come `null` muto
-(`scripts/test/agent-skills-sync.test.sh` lega i nomi all'helper). Ogni
-lettura che può fallire è protetta (`|| continue`, `|| true`, `|| s=""`, `${last[$n]:-}`), così
-il ciclo mantiene questa promessa anche sotto `set -euo pipefail`: un'assegnazione fallita non
-protetta chiuderebbe il ciclo senza una riga, che è proprio il silenzio che questa sorveglianza
-deve evitare. Per la stessa ragione il ciclo controlla prima la versione di bash: `declare -A`
-richiede bash 4, e il `/bin/bash` di serie su macOS è il 3.2, dove fallirebbe senza una riga;
-così esce subito con un messaggio (su macOS: `brew install bash`, poi lancia il ciclo con quel
-bash). Il filtro sui branch si àncora a `/<issue>-` e non dice niente sul prefisso
-(`feature/`, `fix/`, `refactor/`). **Guarda il primo passaggio prima di fidarti:** una
-sorveglianza che non ha stampato niente per una PR che esiste è rotta, non tranquilla; finché non
-ha stampato, leggi `pr-status-json` a mano dopo ogni ondata.
+It emits every matching PR once on the first pass and again when the head or the state changes;
+a state that cannot be read comes out as `status-unreadable`, never as silence. The same goes
+for a `pr-status-json` field that was renamed or disappeared: `jq -e` with no result fails, and
+the line comes out as `status-unreadable` instead of a mute `null`
+(`scripts/test/agent-skills-sync.test.sh` ties the names to the helper). Every
+read that can fail is guarded (`|| continue`, `|| true`, `|| s=""`, `${last[$n]:-}`), so the
+loop keeps this promise even under `set -euo pipefail`: an unguarded failed assignment would
+close the loop without a line, which is exactly the silence this watch must avoid. For the same
+reason the loop checks the bash version first: `declare -A` requires bash 4, and the stock
+`/bin/bash` on macOS is 3.2, where it would fail without a line; so it exits immediately with a
+message (on macOS: `brew install bash`, then launch the loop with that bash). The branch filter
+anchors on `/<issue>-` and says nothing about the prefix (`feature/`, `fix/`, `refactor/`).
+**Look at the first pass before trusting it:** a watch that has printed nothing for a PR that
+exists is broken, not calm; until it has printed, read `pr-status-json` by hand after every
+wave.
 
-Quando una PR aggregata nasce dopo l'avvio, ferma la sorveglianza (in Claude Code con
-`TaskStop`, altrove fermando il processo in background) e riavviala con il suo numero in
-`EXTRA_PRS`. A consegna finita fermala: un ciclo persistente non si chiude da
-solo.
+When an aggregate PR is born after the start, stop the watch (in Claude Code with `TaskStop`,
+elsewhere by stopping the background process) and restart it with its number in `EXTRA_PRS`.
+When delivery is finished stop it: a persistent loop does not close on its own.
 
-**Mai costruire la sorveglianza su `gh pr checks --json`.** Il `gh` minimo del repository
-(2.18.0, `GH_MIN_VERSION` in `scripts/gh-automation.sh`) non ha `--json` su `pr checks`: la
-chiamata esce con `unknown flag: --json`, e un ciclo che scarta stderr legge l'output vuoto come
-"ancora nessun check" e salta la PR a ogni passaggio. In voxelheim-v2 (Iteration 60) proprio un
-ciclo così è rimasto muto per ore mentre due PR erano `ready_to_merge`. `pr-status-json` legge lo
-stesso rollup della regola congelata, quindi la sorveglianza e la decisione di merge non possono
-divergere.
+**Never build the watch on `gh pr checks --json`.** The repository's minimum `gh` (2.18.0,
+`GH_MIN_VERSION` in `scripts/gh-automation.sh`) has no `--json` on `pr checks`: the call exits
+with `unknown flag: --json`, and a loop that discards stderr reads the empty output as "no
+checks yet" and skips the PR on every pass. In voxelheim-v2 (Iteration 60) exactly such a loop
+stayed mute for hours while two PRs were `ready_to_merge`. `pr-status-json` reads the same
+rollup as the frozen rule, so the watch and the merge decision cannot diverge.
 
-Quando una PR ha CI rossa da correggere, thread DeepSeek non risolti, finding non letti nel corpo
-o `mergeable == CONFLICTING`, manda al suo agente proprietario un compito: eseguire
-`/process-pr <pr>`. `ci-gate` assente insieme a `CONFLICTING` è una correzione di conflitti, non
-un'attesa della CI: nessun workflow `pull_request` può partire finché non esiste il merge ref.
-Tieni un agente per issue anche quando la issue ha più PR. Non eseguire cicli forzati in
-parallelo su più PR della stessa issue, ed evita il polling DeepSeek concorrente non necessario,
-per i limiti di frequenza di GraphQL.
+When a PR has red CI to fix, unresolved DeepSeek threads, unread findings in the body
+or `mergeable == CONFLICTING`, send its owning agent a task: run `/process-pr <pr>`. A missing
+`ci-gate` together with `CONFLICTING` is a conflict fix, not a wait for CI: no `pull_request`
+workflow can start until the merge ref exists. Keep one agent per issue even when the issue has
+several PRs. Do not run forced loops in parallel on several PRs of the same issue, and avoid
+unnecessary concurrent DeepSeek polling, because of GraphQL rate limits.
 
-Salva il conteggio delle correzioni in commenti pubblici sulla PR, così una ripartenza non
-azzera il limite di sicurezza. Prima di ogni ciclo forzato conta i commenti con il marcatore
-`<!-- develop-iteration:remediation:pr-N:attempt-K -->`, rifiuta il tentativo quattro, controlla
-il nuovo commento con `bash scripts/check-body-privacy.sh` e pubblicalo prima di mandare l'agente.
-Rileggi lo stato dopo ogni push. Ferma prima quella PR quando `/process-pr` riporta un guasto
-dell'infrastruttura, un finding poco chiaro senza una decisione basata su prove, un rebase non
-sicuro o un'altra condizione che richiede il giudizio dell'utente. Mai forzare un round DeepSeek
-in più solo per far muovere il ciclo: il limite è **un** round automatico per PR (`MAX_ROUNDS`).
+Store the fix count in public comments on the PR, so a restart does not reset the safety limit.
+Before every forced loop count the comments with the marker
+`<!-- develop-iteration:remediation:pr-N:attempt-K -->`, refuse attempt four, check the new
+comment with `bash scripts/check-body-privacy.sh` and publish it before sending the agent.
+Reread the state after every push. Stop that PR earlier when `/process-pr` reports an
+infrastructure failure, an unclear finding without an evidence-based decision, an unsafe rebase
+or another condition that requires the user's judgement. Never force an extra DeepSeek round
+just to make the loop move: the limit is **one** automatic round per PR (`MAX_ROUNDS`).
 
-## 5. Unire le foglie pronte in ordine di dipendenza
+Remediation comments, replies and PR text are written in English.
 
-Sono candidate solo le PR foglia le cui dipendenze sono già unite. I comandi qui sotto usano
-`REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)`: definiscilo prima, anche quando
-riprendi da questo passo. Subito prima di ogni merge:
+## 5. Merge the ready leaves in dependency order
 
-1. Rileggi stato della PR, `headRefOid`, branch base e **corpo completo**. Leggi lo SHA della
-   base dalla forma REST della PR (`gh api "repos/$REPO/pulls/<pr>" --jq '.base.sha'`), perché
-   il `gh` minimo non espone `baseRefOid` in `gh pr view --json`. Tieni i due SHA come
-   `OBSERVED_HEAD` e `OBSERVED_BASE_HEAD`.
-2. Verifica che sia ancora aperta e che la base non sia vuota e non sia `main`.
-3. Verifica che la testa osservata contenga la base osservata, sugli stessi due SHA che il passo 6
-   passa a `pr-merge`, senza dipendere dai ref del clone locale:
-   `gh api "repos/$REPO/compare/$OBSERVED_BASE_HEAD...$OBSERVED_HEAD" --jq '.status'`. Solo
-   `ahead` o `identical` vanno avanti; `behind`, `diverged`, un errore o un output vuoto vogliono
-   dire che la PR non è candidata: vedi "Dopo un merge" qui sotto.
-4. Rispetta ogni vincolo d'ordine scritto nella sua issue e nel corpo della PR.
-5. Esegui `bash scripts/gh-automation.sh is-ready-to-merge <pr>` sulla testa attuale.
-6. Se riesce, esegui
+Only leaf PRs whose dependencies are already merged are candidates. The commands below use
+`REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)`: define it first, even when
+resuming from this step. Right before every merge:
+
+1. Reread the PR's state, `headRefOid`, base branch and **full body**. Read the base SHA from
+   the PR's REST form (`gh api "repos/$REPO/pulls/<pr>" --jq '.base.sha'`), because the
+   minimum `gh` does not expose `baseRefOid` in `gh pr view --json`. Keep the two SHAs as
+   `OBSERVED_HEAD` and `OBSERVED_BASE_HEAD`.
+2. Verify that it is still open and that the base is not empty and not `main`.
+3. Verify that the observed head contains the observed base, on the same two SHAs that step 6
+   passes to `pr-merge`, without depending on the local clone's refs:
+   `gh api "repos/$REPO/compare/$OBSERVED_BASE_HEAD...$OBSERVED_HEAD" --jq '.status'`. Only
+   `ahead` or `identical` go ahead; `behind`, `diverged`, an error or an empty output mean
+   that the PR is not a candidate: see "After a merge" below.
+4. Respect every ordering constraint written in its issue and in the PR body.
+5. Run `bash scripts/gh-automation.sh is-ready-to-merge <pr>` on the current head.
+6. If it succeeds, run
    `bash scripts/gh-automation.sh pr-merge <pr> --head "$OBSERVED_HEAD" --base-head "$OBSERVED_BASE_HEAD"`.
 
-`READY TO MERGE` è una prova utile ma può essere in ritardo rispetto allo stato attuale: non
-sostituire mai il passo 5 con una label vecchia. Al contrario, una valutazione fresca della
-regola congelata riuscita basta anche se il labeler a eventi non ha ancora messo la label.
+`READY TO MERGE` is useful evidence but can lag behind the current state: never replace step 5
+with a stale label. Conversely, a successful fresh evaluation of the frozen rule is enough even
+if the event-driven labeler has not yet applied the label.
 
-I branch di feature non sono coperti dai ruleset di `develop` e `main`. Per loro il controllo
-fresco della regola congelata è l'unica protezione sui check che l'orchestratore controlla: non
-saltarlo mai.
+Feature branches are not covered by the `develop` and `main` rulesets. For them the fresh check
+of the frozen rule is the only protection on the checks the orchestrator controls: never skip
+it.
 
-### Dopo un merge
+### After a merge
 
-**Il branch che si è mosso invalida le prove delle PR che ci poggiano sopra**, anche se la loro
-testa non è cambiata. Dopo un merge rileggi ogni PR aperta la cui **testa o base** è il branch
-appena mosso, `develop` compreso. Ogni PR con base sul branch mosso passa dal suo agente
-proprietario con `/process-pr`: il Passo 2b fa merge della nuova base nella testa senza rebase né
-force-push, esegue i gate delle aree coinvolte e fa push; poi serve una CI nuova prima che la PR
-torni candidata. Rileggi lo stato DeepSeek: se il round è già speso, non aspettare una review
-automatica che non partirà mai, perché i commit della base sono stati revisionati nelle loro PR.
-Una testa verde prima non dice niente su una base appena cambiata. Per una PR padre la cui testa
-è il branch di feature vale la regola della testa assemblata del Passo 2, compresa la review
-forzata esplicita.
+**The branch that moved invalidates the evidence of the PRs that sit on it**, even if their
+head has not changed. After a merge reread every open PR whose **head or base** is the branch
+that just moved, `develop` included. Every PR based on the moved branch goes through its owning
+agent with `/process-pr`: Step 2b merges the new base into the head without rebase or
+force-push, runs the gates of the areas involved and pushes; then new CI is needed before the PR
+becomes a candidate again. Reread the DeepSeek state: if the round is already spent, do not wait
+for an automatic review that will never start, because the base's commits were reviewed in
+their own PRs. A head that was green before says nothing about a base that just changed. For a
+parent PR whose head is the feature branch, the assembled-head rule of Step 2 applies, including
+the explicit forced review.
 
-**Su `develop` non c'è una verifica dopo il merge.** In questo repository la CI gira solo su
-`pull_request` e non esiste un workflow di integrazione su `develop`: l'unica prova che due PR
-stanno bene insieme è la CI della seconda, rifatta dopo aver incorporato la prima. Per questo il
-riallineamento qui sopra vale anche per `develop` ed è obbligatorio: mai unire in `develop` una PR
-la cui testa non contiene la punta attuale di `develop`, e unisci in `develop` **una PR alla
-volta**, aspettando la CI fresca della successiva.
+**On `develop` there is no post-merge verification.** In this repository CI runs only on
+`pull_request` and there is no integration workflow on `develop`: the only evidence that two PRs
+go well together is the second one's CI, rerun after incorporating the first. For this reason
+the catch-up above also applies to `develop` and is mandatory: never merge into `develop` a PR
+whose head does not contain the current tip of `develop`, and merge into `develop` **one PR at a
+time**, waiting for the next one's fresh CI.
 
-Una PR figlia unita solo in un branch di feature non chiude in modo affidabile la sua issue, e il
-suo `Closes #N` non passa alla PR padre. Tieni quelle issue in sospeso finché il branch di
-feature non arriva su `develop`, e assicurati che il corpo della PR padre porti `Closes #N` per
-ogni issue di cui contiene i commit. Per una PR padre già aperta, scrivi il corpo completo
-corretto in un file temporaneo, controllalo con `bash scripts/check-body-privacy.sh`, usa
-`bash scripts/gh-automation.sh pr-edit <pr> --body-file <path>` (mai `gh pr edit`, che fallisce
-con il `gh` 2.45), poi rileggi il corpo completo e tutti i vincoli d'ordine. Chiudi una issue a
-mano solo dopo aver verificato che `develop` contiene i suoi commit.
+A child PR merged only into a feature branch does not reliably close its issue, and its
+`Closes #N` does not carry over to the parent PR. Keep those issues pending until the feature
+branch reaches `develop`, and make sure the parent PR's body carries `Closes #N` for every issue
+whose commits it contains. For a parent PR already open, write the full corrected body to a
+temporary file, check it with `bash scripts/check-body-privacy.sh`, use
+`bash scripts/gh-automation.sh pr-edit <pr> --body-file <path>` (never `gh pr edit`, which fails
+with `gh` 2.45), then reread the full body and all ordering constraints. Close an issue by hand
+only after verifying that `develop` contains its commits.
 
-## 6. Continuare finché l'iterazione non è consegnata
+## 6. Continue until the iteration is delivered
 
-Dopo ogni merge ricostruisci il grafo issue/PR e avvia la successiva ondata sicura massima.
-Continua finché ogni issue non di cerimonia della milestone è chiusa da una PR unita e non resta
-aperta nessuna PR figlia o padre prevista.
+After every merge rebuild the issue/PR graph and start the next maximal safe wave. Continue
+until every non-ceremony issue of the milestone is closed by a merged PR and no planned child or
+parent PR remains open.
 
-Non chiudere la milestone e non eseguire le cerimonie create da `iteration-lifecycle.yml`: sono
-decisioni di prodotto fuori dalla consegna. La chiusura dell'ultima issue fa partire da sola la
-cerimonia di backlog refinement.
+Do not close the milestone and do not run the ceremonies created by `iteration-lifecycle.yml`:
+they are product decisions outside delivery. Closing the last issue starts the backlog
+refinement ceremony on its own.
 
-## Condizioni di stop
+## Stop conditions
 
-Quando puoi, ferma solo il ramo di lavoro colpito; ferma tutta l'esecuzione quando continuare
-potrebbe rompere l'ordine o la base comune. Riporta lo stato esatto e il comando per riprendere
-quando succede una di queste cose:
+When you can, stop only the affected line of work; stop the whole run when continuing could
+break the ordering or the common base. Report the exact state and the command to resume when
+one of these things happens:
 
-- campi obbligatori mancanti nel corpo di una issue, o dati ambigui su iterazione o dipendenze;
-- una base `main` richiesta o già presente su una PR;
-- una dipendenza fuori dall'iterazione non ancora su `develop`;
-- un guasto dell'infrastruttura o uno stato di GitHub non leggibile;
-- una modifica che supera il limite della review e non si può dividere;
-- tre cicli di correzione falliti sulla stessa PR;
-- una PR che `/process-pr` non riesce a riallineare alla base senza un giudizio sull'intento;
-- una decisione che cambia lo scope dell'iterazione o richiede una nuova dipendenza.
+- required fields missing from an issue body, or ambiguous data about the iteration or
+  dependencies;
+- a `main` base requested or already present on a PR;
+- a dependency outside the iteration not yet on `develop`;
+- an infrastructure failure or an unreadable GitHub state;
+- a change that exceeds the review limit and cannot be split;
+- three failed fix loops on the same PR;
+- a PR that `/process-pr` cannot catch up with its base without a judgement about intent;
+- a decision that changes the iteration's scope or requires a new dependency.
 
-## Report finale
+## Final report
 
-Riporta la milestone, quale agente possiede quale issue, la topologia di branch e PR, i merge in
-ordine, gli esiti di CI e DeepSeek, lo stato di `develop` dopo l'ultimo merge (l'ultima CI verde
-della PR unita per ultima) e ogni lavoro fermato. Se tutte le issue sono arrivate, di' che la
-consegna è completa e che la prossima transizione spetta al ciclo di vita delle iterazioni
-guidato dal completamento.
+Report the milestone, which agent owns which issue, the branch and PR topology, the merges in
+order, the CI and DeepSeek outcomes, the state of `develop` after the last merge (the last green
+CI of the PR merged last) and any stopped work. If all issues have landed, say that delivery is
+complete and that the next transition belongs to the completion-driven iteration lifecycle.
 
-## Riferimenti
+## References
 
-- Implementazione di una issue: `/dev-issue`
-- Correzione di una PR: `/process-pr`
-- Stato congelato e merge protetto: `scripts/gh-automation.sh`
-- Scelta dell'iterazione e ciclo di vita: `AGENTS.md`
+- Implementing an issue: `/dev-issue`
+- Fixing a PR: `/process-pr`
+- Frozen state and protected merge: `scripts/gh-automation.sh`
+- Iteration choice and lifecycle: `AGENTS.md`
 - CI: `.github/workflows/ci.yml`

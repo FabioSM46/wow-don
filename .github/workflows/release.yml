@@ -179,5 +179,5 @@ jobs:
               --draft \
               --verify-tag \
               --title "WoW-don $TAG" \
-              --notes "Pacchetti per Linux (.deb), Windows (installer) e macOS (.dmg universale, non firmato). Bozza da rivedere prima della pubblicazione."
+              --notes "Packages for Linux (.deb), Windows (installer) and macOS (universal .dmg, unsigned). Draft to review before publishing."
           fi

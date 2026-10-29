@@ -1,15 +1,15 @@
-//! Avvio automatico con il sistema (issue #159, D36).
+//! Start automatically with the system (issue #159, D36).
 //!
-//! Il plugin ufficiale `tauri-plugin-autostart` scrive la voce del sistema operativo: su Linux
-//! un file `.desktop` in `~/.config/autostart`, su Windows un valore `Run` nel registro, su
-//! macOS un LaunchAgent in `~/Library/LaunchAgents`. La voce lancia l'app con
-//! [`AUTOSTART_ARG`]. Lo stato si legge sempre dal sistema operativo: nessuna copia in
-//! `settings.json`, così una voce tolta a mano (o disattivata nel Task Manager di Windows) non
-//! risulta attiva.
+//! The official `tauri-plugin-autostart` plugin writes the operating system entry: on Linux a
+//! `.desktop` file in `~/.config/autostart`, on Windows a `Run` value in the registry, on
+//! macOS a LaunchAgent in `~/Library/LaunchAgents`. The entry launches the app with
+//! [`AUTOSTART_ARG`]. The state is always read from the operating system: no copy in
+//! `settings.json`, so an entry removed by hand (or disabled in the Windows Task Manager) does
+//! not show as active.
 //!
-//! All'avvio la finestra principale è invisibile (`"visible": false` in `tauri.conf.json`,
-//! senza lampo e senza toccare lo stato di D28) e [`show_main_window_unless_hidden_start`] la
-//! mostra, salvo quando [`start_hidden`] dice di partire nella tray.
+//! At startup the main window is invisible (`"visible": false` in `tauri.conf.json`, with no
+//! flash and without touching the D28 state) and [`show_main_window_unless_hidden_start`] shows
+//! it, except when [`start_hidden`] says to start in the tray.
 
 use std::ffi::OsStr;
 
@@ -19,17 +19,17 @@ use tauri_plugin_autostart::{AutoLaunchManager, MacosLauncher, ManagerExt};
 
 use crate::tray::{self, TrayStatus};
 
-/// L'argomento con cui la voce del sistema operativo lancia l'app.
+/// The argument the operating system entry launches the app with.
 pub const AUTOSTART_ARG: &str = "--autostart";
 
-/// Il plugin, registrato solo per il backend: nessun permesso `autostart:*` va al frontend, che
-/// passa da `get_autostart` e `set_autostart`.
+/// The plugin, registered for the backend only: no `autostart:*` permission goes to the
+/// frontend, which goes through `get_autostart` and `set_autostart`.
 pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
     tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![AUTOSTART_ARG]))
 }
 
-/// Le tre operazioni del plugin sulla voce del sistema operativo. Separate dal plugin per
-/// provare [`read`] e [`write`] senza scrivere la voce vera.
+/// The plugin's three operations on the operating system entry. Kept apart from the plugin to
+/// test [`read`] and [`write`] without writing the real entry.
 trait Launcher {
     fn enable(&self) -> Result<(), String>;
     fn disable(&self) -> Result<(), String>;
@@ -50,13 +50,13 @@ impl Launcher for AutoLaunchManager {
     }
 }
 
-/// Se l'app parte con il sistema, letto dal sistema operativo.
+/// Whether the app starts with the system, read from the operating system.
 pub fn is_enabled<R: Runtime>(app: &AppHandle<R>) -> Result<bool, String> {
     read(&*app.autolaunch())
 }
 
-/// Attiva o disattiva l'avvio con il sistema e restituisce lo stato riletto dal sistema
-/// operativo, non quello richiesto.
+/// Turns starting with the system on or off and returns the state read back from the
+/// operating system, not the requested one.
 pub fn set_enabled<R: Runtime>(app: &AppHandle<R>, enabled: bool) -> Result<bool, String> {
     write(&*app.autolaunch(), enabled)
 }
@@ -80,15 +80,15 @@ fn write(launcher: &impl Launcher, enabled: bool) -> Result<bool, String> {
     read(launcher)
 }
 
-/// Se l'app deve partire con la finestra nascosta e solo l'icona nella tray: solo se l'ha
-/// lanciata la voce dell'avvio automatico (`args` senza il nome del programma), `closeToTray`
-/// è letta e attiva e in questo momento qualcuno mostra l'icona. `tray_available` si chiede
-/// per ultima: su Linux interroga il bus di sessione, e un avvio a mano non deve aspettarla.
+/// Whether the app should start with the window hidden and only the icon in the tray: only if
+/// the autostart entry launched it (`args` without the program name), `closeToTray` was read and
+/// is on, and someone is showing the icon right now. `tray_available` is asked last: on Linux
+/// it queries the session bus, and a manual launch must not wait for it.
 ///
-/// Si chiede una volta sola, senza riprovare: se la shell non ha ancora registrato chi mostra
-/// l'icona, la finestra si apre. Una finestra in più si chiude con la X; una finestra nascosta
-/// senza icona sarebbe irraggiungibile, e riprovare per qualche secondo lascerebbe l'app
-/// invisibile e irraggiungibile proprio in quei secondi, senza garanzia che la shell arrivi.
+/// It is asked once, without retrying: if the shell has not yet registered who shows the icon,
+/// the window opens. An extra window is closed with the X; a hidden window with no icon would
+/// be unreachable, and retrying for a few seconds would leave the app invisible and unreachable
+/// exactly in those seconds, with no guarantee that the shell arrives.
 pub fn start_hidden<I, S>(
     args: I,
     close_to_tray: Option<bool>,
@@ -104,8 +104,8 @@ where
     autostarted && close_to_tray == Some(true) && tray_available()
 }
 
-/// Mostra la finestra principale, invisibile all'avvio, salvo quando [`start_hidden`] dice di
-/// restare nella tray. Va chiamata in `setup` dopo [`tray::create`].
+/// Shows the main window, invisible at startup, except when [`start_hidden`] says to stay in
+/// the tray. It must be called in `setup` after [`tray::create`].
 pub fn show_main_window_unless_hidden_start<R: Runtime>(app: &AppHandle<R>) {
     let hidden = start_hidden(
         std::env::args_os().skip(1),

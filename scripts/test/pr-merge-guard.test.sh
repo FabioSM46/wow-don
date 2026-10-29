@@ -254,7 +254,7 @@ DOC=$(cat "$ROOT/AGENTS.md")
 assert_contains "AGENTS.md still says gh api reaches a merge another way" "$DOC" \
   'gh api -X PUT repos/OWNER/REPO/pulls/N/merge'
 assert_contains "AGENTS.md still says the allowlist is not a sandbox" "$DOC" \
-  "L'allowlist non è una sandbox"
+  "The allowlist is not a sandbox"
 
 echo
 echo "── ${pass} passed, ${fail} failed ──"

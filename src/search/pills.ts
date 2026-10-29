@@ -1,16 +1,16 @@
-// Le pastiglie di stato della tab Search (issue #229): quale classe `.pill` (D42) mostra lo stato
-// di un progetto bloccato da CurseForge. Testo e suggerimento restano quelli di `blockedHint`;
-// qui si sceglie solo il colore. Funzioni pure, senza React né I/O.
+// The state pills of the Search tab (issue #229): which `.pill` class (D42) shows the state
+// of a project blocked by CurseForge. Text and hint stay those of `blockedHint`; here only
+// the color is chosen. Pure functions, no React or I/O.
 
 import { blockedHint, mirrorName, type BlockedHint, type MirrorCheck } from "./mirror.ts";
 
-/** Una pastiglia: il testo, il suggerimento e la classe con la variante di colore. */
+/** A pill: the text, the hint and the class with the color variant. */
 export type StatePill = BlockedHint & { className: string };
 
 /**
- * La pastiglia di un progetto bloccato: d'accento con un mirror GitHub utilizzabile ("via
- * GitHub"), neutra altrimenti ("website only", "checking GitHub…", "blocked on CurseForge"). Il
- * colore segnala lo stato che lascia installare, non abbellisce.
+ * The pill of a blocked project: accent with a usable GitHub mirror ("via GitHub"), neutral
+ * otherwise ("website only", "checking GitHub…", "blocked on CurseForge"). The color
+ * signals the state that allows installing, it does not decorate.
  */
 export function blockedPill(check: MirrorCheck | undefined): StatePill {
   const hint = blockedHint(check);

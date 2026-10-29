@@ -6,17 +6,17 @@ import { blockedPill, type StatePill } from "./pills";
 
 type Props = {
   addons: CatalogAddon[];
-  /** Con un gestore la riga si sceglie con un clic o con Invio (vista di dettaglio). */
+  /** With a handler the row is chosen with a click or with Enter (detail view). */
   onSelect?: (addon: CatalogAddon) => void;
   selectedId?: number | null;
-  /** Le azioni di una riga (per esempio Install), in un'ultima colonna sempre visibile. */
+  /** A row's actions (for example Install), in a last column that is always visible. */
   renderActions?: (addon: CatalogAddon) => ReactNode;
-  /** La pastiglia di un addon che CurseForge non lascia scaricare, con l'esito del mirror
-   *  GitHub se è stato controllato (issue #165, #229). */
+  /** The pill of an addon CurseForge does not let you download, with the outcome of the GitHub
+   *  mirror if it has been checked (issue #165, #229). */
   pillFor?: (addon: CatalogAddon) => StatePill;
 };
 
-/** La tabella dei risultati del catalogo: logo, nome, sommario, autore, download, data. */
+/** The catalog results table: logo, name, summary, author, downloads, date. */
 export function CatalogTable({
   addons,
   onSelect,
@@ -96,8 +96,8 @@ export function CatalogTable({
   );
 }
 
-/** Il nome e, sotto, le pastiglie di stato: "Installed" e quella di un addon che CurseForge non
- *  lascia scaricare. La pagina su CurseForge si apre dal dettaglio (issue #229). */
+/** The name and, below it, the state pills: "Installed" and the one for an addon CurseForge
+ *  does not let you download. The CurseForge page opens from the detail (issue #229). */
 function NameCell({ addon, pill }: { addon: CatalogAddon; pill: StatePill | null }) {
   const name = addon.name || `#${addon.id}`;
   return (

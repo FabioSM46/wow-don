@@ -1,9 +1,9 @@
-//! Backup delle cartelle `WTF` e `Interface` di un'installazione in uno zip.
+//! Backup of an installation's `WTF` and `Interface` folders into a zip.
 //!
-//! Solo funzioni su percorsi: niente Tauri. La cartella dei backup la sceglie il chiamante
-//! (`app_data_dir()/backups/<id-installazione>/`). Lo zip si scrive in streaming, file per file,
-//! in un file temporaneo nascosto nella stessa cartella e si rinomina solo a scrittura finita:
-//! un backup interrotto non lascia mai uno zip a metà con un nome valido.
+//! Path functions only: no Tauri. The caller chooses the backups folder
+//! (`app_data_dir()/backups/<installation-id>/`). The zip is written as a stream, file by file,
+//! into a hidden temporary file in the same folder and renamed only once writing is done:
+//! an interrupted backup never leaves a half-written zip with a valid name.
 
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
@@ -18,32 +18,32 @@ use zip::{CompressionMethod, DateTime, ZipWriter};
 
 use crate::installations::{Installation, strip_verbatim_prefix};
 
-/// Le cartelle salvate, con il nome che hanno nel gioco.
+/// The saved folders, with the name they have in the game.
 const BACKUP_FOLDERS: [&str; 2] = ["WTF", "Interface"];
 
-/// Il prefisso delle cartelle di lavoro dell'app dentro `Interface`: la versione precedente
-/// degli addon (`previous::GENERATION_DIR`) e le cartelle d'appoggio di `install::WorkDir`.
-/// Sono dati dell'app, non dell'utente: al primo livello di `Interface` restano fuori dal
+/// The prefix of the app's work folders inside `Interface`: the previous version of the
+/// addons (`previous::GENERATION_DIR`) and the scratch folders of `install::WorkDir`.
+/// They are app data, not user data: at the top level of `Interface` they are left out of the
 /// backup (D41, issue #213).
 const APP_WORK_DIR_PREFIX: &str = ".wow-don-";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
-    /// Nome del file, per esempio `retail-20261023-142501.zip`.
+    /// File name, for example `retail-20261023-142501.zip`.
     pub name: String,
-    /// Percorso completo dello zip, senza il prefisso `\\?\` di Windows.
+    /// Full path of the zip, without the Windows `\\?\` prefix.
     pub path: PathBuf,
-    /// Dimensione dello zip in byte.
+    /// Size of the zip in bytes.
     pub size: u64,
-    /// Data di modifica dello zip in millisecondi dall'epoca Unix.
+    /// Modification date of the zip in milliseconds since the Unix epoch.
     pub modified_ms: Option<u64>,
 }
 
-/// Crea lo zip di `WTF/` e `Interface/` di `installation` dentro `backups_dir` (creata se
-/// manca). Le voci hanno percorsi relativi alla cartella `_<flavor>_`. Una delle due cartelle
-/// può mancare; se mancano entrambe è un errore. I link simbolici non si seguono e non si
-/// includono.
+/// Creates the zip of `installation`'s `WTF/` and `Interface/` inside `backups_dir` (created if
+/// missing). Entries have paths relative to the `_<flavor>_` folder. One of the two folders
+/// may be missing; if both are missing it is an error. Symbolic links are neither followed nor
+/// included.
 pub fn create_backup(
     installation: &Installation,
     backups_dir: &Path,
@@ -72,8 +72,8 @@ fn create_backup_at(
         .map_err(|error| format!("Could not create the backups folder ({}).", error.kind()))?;
 
     let stem = format!("{}-{}", installation.flavor, timestamp(now));
-    // Il temporaneo ha un nome unico (pid e contatore) e si apre con `create_new`: due backup
-    // contemporanei non scrivono mai nello stesso file.
+    // The temporary file has a unique name (pid and counter) and is opened with `create_new`:
+    // two concurrent backups never write to the same file.
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let temp = TempFile(backups_dir.join(format!(
         ".{stem}-{}-{}.zip.tmp",
@@ -83,21 +83,21 @@ fn create_backup_at(
 
     write_zip(&temp.0, &roots)?;
 
-    // Scelta del nome e `rename` stanno sotto lo stesso lock: due backup finiti nello stesso
-    // secondo non scelgono lo stesso nome, e il secondo non sovrascrive il primo.
+    // Choosing the name and the `rename` sit under the same lock: two backups finished in the
+    // same second do not pick the same name, and the second does not overwrite the first.
     static FINALIZE: Mutex<()> = Mutex::new(());
     let _guard = FINALIZE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let final_path = free_name(backups_dir, &stem);
-    // Il nome finale compare solo a scrittura completa.
+    // The final name appears only once writing is complete.
     fs::rename(&temp.0, &final_path)
         .map_err(|error| format!("Could not complete the backup ({}).", error.kind()))?;
     info_for(&final_path)
 }
 
-/// I backup in `backups_dir`, dal più recente. Una cartella mancante vuol dire zero backup.
-/// Si elencano solo i file `.zip` non nascosti: i temporanei restano fuori.
+/// The backups in `backups_dir`, newest first. A missing folder means zero backups.
+/// Only non-hidden `.zip` files are listed: temporary files are left out.
 pub fn list_backups(backups_dir: &Path) -> Result<Vec<BackupInfo>, String> {
     let entries = match fs::read_dir(backups_dir) {
         Ok(entries) => entries,
@@ -126,7 +126,7 @@ pub fn list_backups(backups_dir: &Path) -> Result<Vec<BackupInfo>, String> {
             backups.push(info);
         }
     }
-    // Il nome contiene la data UTC: a parità di data di modifica decide lui.
+    // The name contains the UTC date: when modification dates are equal, it decides.
     backups.sort_by(|a, b| {
         b.modified_ms
             .cmp(&a.modified_ms)
@@ -135,7 +135,7 @@ pub fn list_backups(backups_dir: &Path) -> Result<Vec<BackupInfo>, String> {
     Ok(backups)
 }
 
-/// Il file temporaneo si cancella da solo se il backup non arriva al `rename`.
+/// The temporary file deletes itself if the backup does not reach the `rename`.
 struct TempFile(PathBuf);
 
 impl Drop for TempFile {
@@ -144,8 +144,8 @@ impl Drop for TempFile {
     }
 }
 
-/// Cerca una sottocartella senza distinguere maiuscole e minuscole, come fa il gioco. Un link
-/// simbolico non conta: non si segue. Restituisce il nome reale e il percorso.
+/// Looks for a subfolder case-insensitively, as the game does. A symbolic link does not
+/// count: it is not followed. Returns the real name and the path.
 fn find_child_dir(parent: &Path, wanted: &str) -> Option<(String, PathBuf)> {
     let mut found: Vec<(String, PathBuf)> = fs::read_dir(parent)
         .ok()?
@@ -157,9 +157,9 @@ fn find_child_dir(parent: &Path, wanted: &str) -> Option<(String, PathBuf)> {
                 .then(|| (name, entry.path()))
         })
         .collect();
-    // Dove il file system distingue le maiuscole (Linux; macOS solo con APFS case-sensitive)
-    // possono esserci due cartelle che differiscono solo per le maiuscole: vince
-    // quella scritta esattamente come la usa il gioco, poi l'ordine alfabetico.
+    // Where the file system is case-sensitive (Linux; macOS only with case-sensitive APFS)
+    // there can be two folders that differ only in case: the one spelled exactly as the
+    // game uses it wins, then alphabetical order.
     found.sort_by(|a, b| (a.0 != wanted).cmp(&(b.0 != wanted)).then(a.0.cmp(&b.0)));
     found.into_iter().next()
 }
@@ -185,9 +185,9 @@ fn write_zip(target: &Path, roots: &[(String, PathBuf)]) -> Result<(), String> {
         .map_err(|error| format!("Could not write the backup ({}).", error.kind()))
 }
 
-/// Aggiunge `dir` come `entry_name/` e tutto il suo contenuto, ricorsivamente. Le voci usano
-/// `/` come separatore, come richiede il formato zip. Con `skip_app_dirs` le sottocartelle
-/// dirette di `dir` che sono cartelle di lavoro dell'app non entrano; più in basso sì.
+/// Adds `dir` as `entry_name/` and all its contents, recursively. Entries use `/` as the
+/// separator, as the zip format requires. With `skip_app_dirs` the direct subfolders of `dir`
+/// that are app work folders are not included; further down they are.
 fn add_dir<W: Write + io::Seek>(
     writer: &mut ZipWriter<W>,
     dir: &Path,
@@ -199,7 +199,7 @@ fn add_dir<W: Write + io::Seek>(
         .map_err(read_error)?
         .collect::<Result<_, _>>()
         .map_err(read_error)?;
-    // Ordine stabile: lo stesso albero dà sempre lo stesso zip.
+    // Stable order: the same tree always gives the same zip.
     children.sort_by_key(|entry| entry.file_name());
 
     writer
@@ -214,7 +214,7 @@ fn add_dir<W: Write + io::Seek>(
             )
         })?;
         let child_entry = format!("{entry_name}/{name}");
-        // `DirEntry::file_type` non segue i link simbolici: un link non è né file né cartella.
+        // `DirEntry::file_type` does not follow symbolic links: a link is neither file nor folder.
         let kind = child
             .file_type()
             .map_err(|error| format!("Could not read {child_entry} ({}).", error.kind()))?;
@@ -231,8 +231,8 @@ fn add_dir<W: Write + io::Seek>(
     Ok(())
 }
 
-/// Una cartella di lavoro dell'app (`.wow-don-*`), senza distinguere maiuscole e minuscole
-/// come fa il file system di Windows e di macOS.
+/// An app work folder (`.wow-don-*`), matched case-insensitively as the Windows and macOS
+/// file systems do.
 fn is_app_work_dir(name: &str) -> bool {
     name.get(..APP_WORK_DIR_PREFIX.len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(APP_WORK_DIR_PREFIX))
@@ -249,7 +249,7 @@ fn add_file<W: Write + io::Seek>(
     writer
         .start_file(entry_name, options_for(path, size))
         .map_err(|error| format!("Could not write {entry_name} to the backup ({error})."))?;
-    // In streaming: un file di WTF da centinaia di MB non passa mai tutto dalla memoria.
+    // Streamed: a WTF file of hundreds of MB never goes through memory all at once.
     io::copy(&mut source, writer)
         .map_err(|error| format!("Could not copy {entry_name} ({}).", error.kind()))?;
     Ok(())
@@ -266,8 +266,8 @@ fn options_for(path: &Path, size: u64) -> SimpleFileOptions {
     options
 }
 
-/// Data e ora UTC di un istante. Senza nuove dipendenze: conversione dei giorni dall'epoca in
-/// data civile (algoritmo `civil_from_days` di Howard Hinnant).
+/// UTC date and time of an instant. Without new dependencies: conversion of days since the
+/// epoch into a civil date (Howard Hinnant's `civil_from_days` algorithm).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct UtcTime {
     year: i64,
@@ -279,7 +279,7 @@ struct UtcTime {
 }
 
 fn utc(time: SystemTime) -> UtcTime {
-    // Un orologio prima del 1970 diventa il 1970: il nome resta comunque valido.
+    // A clock before 1970 becomes 1970: the name stays valid anyway.
     let secs = time
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
@@ -307,7 +307,7 @@ fn utc(time: SystemTime) -> UtcTime {
     }
 }
 
-/// `AAAAMMGG-HHMMSS` in UTC.
+/// `YYYYMMDD-HHMMSS` in UTC.
 fn timestamp(time: SystemTime) -> String {
     let t = utc(time);
     format!(
@@ -316,7 +316,7 @@ fn timestamp(time: SystemTime) -> String {
     )
 }
 
-/// `AAAA-MM-GGTHH:MM:SSZ` in UTC: la data di un file per una fonte che la dà come tempo Unix
+/// `YYYY-MM-DDTHH:MM:SSZ` in UTC: the date of a file for a source that gives it as Unix time
 /// (WoWInterface, issue #107).
 pub(crate) fn iso_utc(time: SystemTime) -> String {
     let t = utc(time);
@@ -326,8 +326,8 @@ pub(crate) fn iso_utc(time: SystemTime) -> String {
     )
 }
 
-/// L'ora di modifica per la voce zip (in UTC: il formato non ha un fuso). Fuori dagli anni
-/// che lo zip sa scrivere resta quella predefinita.
+/// The modification time for the zip entry (in UTC: the format has no time zone). Outside the
+/// years the zip can write, the default one stays.
 fn zip_time(time: SystemTime) -> Option<DateTime> {
     let t = utc(time);
     DateTime::from_date_and_time(
@@ -341,8 +341,8 @@ fn zip_time(time: SystemTime) -> Option<DateTime> {
     .ok()
 }
 
-/// `<stem>.zip`, oppure `<stem>-2.zip`, `<stem>-3.zip`… se due backup cadono nello stesso
-/// secondo: un backup non ne sovrascrive mai un altro.
+/// `<stem>.zip`, or `<stem>-2.zip`, `<stem>-3.zip`… if two backups fall in the same
+/// second: a backup never overwrites another one.
 fn free_name(dir: &Path, stem: &str) -> PathBuf {
     let first = dir.join(format!("{stem}.zip"));
     if !first.exists() {
@@ -402,7 +402,7 @@ mod tests {
         fs::write(path, data).unwrap();
     }
 
-    /// Nomi delle voci e contenuto dei file dello zip.
+    /// Entry names and file contents of the zip.
     fn read_zip(path: &Path) -> Vec<(String, Option<Vec<u8>>)> {
         let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
         let mut out = Vec::new();
@@ -507,9 +507,9 @@ mod tests {
         );
     }
 
-    /// Le cartelle vere di `install::WorkDir` (staging e quelle di `previous`) nascono accanto ad
-    /// `AddOns`, cioè al primo livello di `Interface`, con il prefisso che il backup salta: se
-    /// `install.rs` le spostasse altrove o cambiasse nome, questo test fallirebbe.
+    /// The real `install::WorkDir` folders (staging and those of `previous`) are created next to
+    /// `AddOns`, that is at the top level of `Interface`, with the prefix the backup skips: if
+    /// `install.rs` moved them elsewhere or renamed them, this test would fail.
     #[test]
     fn real_install_work_folders_are_left_out() {
         let tmp = TempDir::new();
@@ -655,7 +655,7 @@ mod tests {
         let first = create_backup_at(&inst, &backups, when).unwrap();
         let second = create_backup_at(&inst, &backups, when).unwrap();
         assert_eq!(first.name, "classic_era-20240229-235958.zip");
-        // Stesso secondo: il primo non viene sovrascritto.
+        // Same second: the first one is not overwritten.
         assert_eq!(second.name, "classic_era-20240229-235958-2.zip");
     }
 
@@ -759,7 +759,7 @@ mod tests {
             inst.path.join("WTF/linked-file"),
         )
         .unwrap();
-        // Una cartella Interface che è un link non si segue: resta solo WTF.
+        // An Interface folder that is a link is not followed: only WTF remains.
         symlink(&outside, inst.path.join("Interface")).unwrap();
 
         let info = create_backup(&inst, &tmp.path().join("backups")).unwrap();

@@ -3,10 +3,10 @@ import { api, errorMessage, type DiscoveredInstallation, type Installation } fro
 import { flavorFolder, pendingDiscoveries } from "./discovery";
 
 type Props = {
-  /** La tab Options è aperta: la prima ricerca parte la prima volta che lo diventa. */
+  /** The Options tab is open: the first scan starts the first time it becomes so. */
   active: boolean;
   installations: Installation[];
-  /** Come l'aggiunta manuale: l'installazione aggiunta diventa quella attiva. */
+  /** Like the manual add: the added installation becomes the active one. */
   onAdded: (id: string) => void;
   onChange: (installations: Installation[]) => void;
 };
@@ -18,17 +18,17 @@ type Scan =
   | { status: "error"; message: string };
 
 /**
- * "Found on this computer", nella scheda Installations di Options: le installazioni che
- * `discover_installations` trova nei percorsi standard, ognuna con il suo "Add". Non aggiunge
- * mai niente da sola.
+ * "Found on this computer", in the Installations panel of Options: the installations that
+ * `discover_installations` finds in the standard paths, each with its own "Add". It never
+ * adds anything on its own.
  */
 export function Discovered({ active, installations, onAdded, onChange }: Props) {
   const [scan, setScan] = useState<Scan>({ status: "idle" });
-  // Le righe aggiunte da qui, nascoste subito anche se la rilettura della lista fallisce.
+  // The rows added from here, hidden at once even if re-reading the list fails.
   const [added, setAdded] = useState<ReadonlySet<string>>(new Set());
   const [addingPath, setAddingPath] = useState<string | null>(null);
   const [addError, setAddError] = useState<string | null>(null);
-  // Solo la risposta dell'ultima ricerca conta.
+  // Only the answer of the latest scan counts.
   const scanId = useRef(0);
 
   async function runScan() {
@@ -46,7 +46,7 @@ export function Discovered({ active, installations, onAdded, onChange }: Props) 
 
   useEffect(() => {
     if (active && scan.status === "idle") void runScan();
-    // La ricerca parte una volta sola da qui (solo da `idle`); le successive con "Scan again".
+    // The scan starts only once from here (only from `idle`); later ones with "Scan again".
   }, [active, scan.status]);
 
   async function add(item: DiscoveredInstallation) {
@@ -55,9 +55,9 @@ export function Discovered({ active, installations, onAdded, onChange }: Props) 
     try {
       const installation = await api.addInstallation(item.path);
       setAdded((previous) => new Set(previous).add(item.path));
-      // Come l'aggiunta manuale: la lista si rilegge dal backend. Se la rilettura fallisce
-      // l'aggiunta è comunque riuscita: la lista mostrata riceve l'installazione restituita,
-      // così diventa attiva lo stesso, e l'errore della rilettura resta in vista.
+      // Like the manual add: the list is read again from the backend. If re-reading fails
+      // the add has still succeeded: the shown list receives the returned installation,
+      // so it becomes active anyway, and the re-read error stays in view.
       let list: Installation[];
       try {
         list = await api.listInstallations();

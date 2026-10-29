@@ -1,14 +1,15 @@
-//! Import di una stringa di addon (issue #134): l'anteprima e l'esecuzione, con le due modalità
-//! scelte dall'utente. *Keep my addons* installa solo i progetti che mancano; *Replace all*
-//! installa i mancanti e poi toglie da `Interface/AddOns` le cartelle che nessun progetto
-//! importato reclama.
+//! Import of an addon string (issue #134): the preview and the execution, with the two modes
+//! chosen by the user. *Keep my addons* installs only the missing projects; *Replace all*
+//! installs the missing ones and then removes from `Interface/AddOns` the folders that no
+//! imported project claims.
 //!
-//! L'ordine "prima installa, poi togli" è voluto: un import fallito a metà non lascia
-//! l'installazione vuota, e se non si installa niente (e qualcosa mancava) non si toglie niente.
-//! *Replace all* non fa un backup (scelta dell'utente): toglie solo le cartelle che il frontend ha
-//! mostrato e l'utente ha confermato (`confirmed`), e solo se dopo le installazioni sono ancora
-//! da togliere. Una cartella dichiarata come dipendenza nel `.toc` di un addon che resta resta
-//! anche lei. `WTF`, le SavedVariables e tutto quello fuori da `AddOns` non si toccano mai.
+//! The order "install first, then remove" is deliberate: an import that fails halfway does not
+//! leave the installation empty, and if nothing gets installed (and something was missing)
+//! nothing is removed. *Replace all* makes no backup (the user's choice): it removes only the
+//! folders the frontend showed and the user confirmed (`confirmed`), and only if they still need
+//! removing after the installations. A folder declared as a dependency in the `.toc` of an addon
+//! that stays also stays. `WTF`, the SavedVariables and everything outside `AddOns` are never
+//! touched.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -20,24 +21,24 @@ use crate::install;
 use crate::store::{SourceKind, SourceRecords};
 use crate::updates::Refresh;
 
-/// Un progetto: fonte e chiave.
+/// A project: source and key.
 type ProjectId = (SourceKind, String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImportMode {
-    /// Aggiunge i progetti che mancano, non toglie niente.
+    /// Adds the missing projects, removes nothing.
     Keep,
-    /// Aggiunge i progetti che mancano e toglie le cartelle che nessuno di loro reclama.
+    /// Adds the missing projects and removes the folders none of them claims.
     Replace,
 }
 
-/// Se un progetto della stringa si può installare, prima di provarci.
+/// Whether a project in the string can be installed, before trying.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Availability {
     Available,
-    /// L'autore non permette i download da app di terzi, la fonte non lo elenca o non è ancora
-    /// supportata: il motivo e, se c'è, la pagina dell'addon.
+    /// The author does not allow downloads from third-party apps, the source does not list it or
+    /// is not supported yet: the reason and, if there is one, the addon's page.
     NotDownloadable {
         message: String,
         url: Option<String>,
@@ -65,27 +66,27 @@ pub struct PreviewEntry {
     pub url: Option<String>,
 }
 
-/// L'anteprima di un import: non scrive niente.
+/// The preview of an import: it writes nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preview {
-    /// Il flavor dell'installazione da cui viene la stringa.
+    /// The flavor of the installation the string comes from.
     pub flavor: String,
     pub entries: Vec<PreviewEntry>,
     pub invalid: Vec<InvalidEntry>,
-    /// Le cartelle che *Replace all* toglierebbe ora, con il nome che hanno sul disco.
+    /// The folders *Replace all* would remove now, with the name they have on disk.
     pub removals: Vec<String>,
-    /// Perché il controllo degli addon installati non è riuscito: senza, un progetto installato
-    /// ma non riconosciuto risulta nuovo.
+    /// Why the check of the installed addons did not succeed: without it, a project that is
+    /// installed but not recognised shows up as new.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub check_error: Option<String>,
-    /// Perché non si è potuto sapere se i progetti nuovi si possono scaricare.
+    /// Why it could not be determined whether the new projects can be downloaded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lookup_error: Option<String>,
 }
 
-/// I progetti presenti nell'installazione: quelli che il controllo riconosce e quelli che l'app
-/// ha registrato con almeno una cartella ancora sul disco.
+/// The projects present in the installation: the ones the check recognises and the ones the app
+/// recorded with at least one folder still on disk.
 pub fn installed_projects(refresh: &Refresh, records: &SourceRecords) -> HashSet<ProjectId> {
     let on_disk = disk_folders(refresh);
     let recognized = refresh
@@ -107,10 +108,10 @@ pub fn installed_projects(refresh: &Refresh, records: &SourceRecords) -> HashSet
     recognized.chain(recorded).collect()
 }
 
-/// Le cartelle che *Replace all* toglierebbe se restassero solo i progetti `keep`: tutte quelle
-/// sul disco che nessuno di loro reclama (dal controllo, dai file riconosciuti o dai record), né
-/// direttamente né come dipendenza dichiarata nel `.toc` di una cartella che resta. Nell'ordine
-/// della scansione, con il nome che hanno sul disco.
+/// The folders *Replace all* would remove if only the `keep` projects stayed: all those on disk
+/// that none of them claims (from the check, from the recognised files or from the records),
+/// neither directly nor as a dependency declared in the `.toc` of a folder that stays. In scan
+/// order, with the name they have on disk.
 pub fn removal_candidates(
     refresh: &Refresh,
     records: &SourceRecords,
@@ -134,7 +135,7 @@ pub fn removal_candidates(
             }
         }
     }
-    // Le dipendenze di quello che resta restano, anche quelle delle dipendenze.
+    // The dependencies of what stays also stay, including the dependencies' dependencies.
     let mut queue: Vec<String> = kept.iter().cloned().collect();
     while let Some(folder) = queue.pop() {
         let Some(&index) = on_disk.get(&folder) else {
@@ -157,7 +158,7 @@ pub fn removal_candidates(
         .collect()
 }
 
-/// Cartella in minuscolo → posizione nella scansione.
+/// Lowercase folder → position in the scan.
 fn disk_folders(refresh: &Refresh) -> HashMap<String, usize> {
     refresh
         .addons
@@ -171,8 +172,8 @@ fn id_of(entry: &ListEntry) -> ProjectId {
     (entry.source, entry.key.clone())
 }
 
-/// L'anteprima di `decoded` per un'installazione letta in `refresh`. `availability` dice se un
-/// progetto nuovo si può scaricare.
+/// The preview of `decoded` for an installation read in `refresh`. `availability` says whether a
+/// new project can be downloaded.
 pub fn preview(
     decoded: &Decoded,
     refresh: &Refresh,
@@ -231,7 +232,7 @@ pub enum EntryStatus {
     Error,
 }
 
-/// L'esito di un progetto della stringa.
+/// The outcome of a project in the string.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntryOutcome {
@@ -255,7 +256,7 @@ impl EntryOutcome {
     }
 }
 
-/// Una cartella che *Replace all* doveva togliere e non ha tolto.
+/// A folder that *Replace all* was supposed to remove and did not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemovalError {
@@ -268,42 +269,42 @@ pub struct RemovalError {
 pub struct ImportResult {
     pub entries: Vec<EntryOutcome>,
     pub invalid: Vec<InvalidEntry>,
-    /// Le cartelle tolte da *Replace all*.
+    /// The folders removed by *Replace all*.
     pub removed: Vec<String>,
-    /// Cartelle che dopo le installazioni sarebbero da togliere ma che l'utente non aveva
-    /// confermato (per esempio comparse dopo l'anteprima): restano.
+    /// Folders that would need removing after the installations but that the user had not
+    /// confirmed (for example ones that appeared after the preview): they stay.
     pub not_confirmed: Vec<String>,
     pub removal_errors: Vec<RemovalError>,
-    /// Perché *Replace all* non ha tolto niente, quando non ci ha nemmeno provato.
+    /// Why *Replace all* removed nothing, when it did not even try.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub removal_skipped: Option<String>,
-    /// Perché non si è potuto sapere prima se i progetti si possono scaricare: gli esiti dei
-    /// singoli progetti dicono poi cosa è successo.
+    /// Why it could not be determined beforehand whether the projects can be downloaded: the
+    /// outcomes of the individual projects then say what happened.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lookup_error: Option<String>,
 }
 
-/// Quante voci si preparano prima di installarle: gli zip di un gruppo restano in memoria
-/// finché non tocca a loro, quindi una lista lunga si fa a gruppi.
+/// How many entries are prepared before installing them: the zips of a group stay in memory
+/// until their turn comes, so a long list is done in groups.
 pub const ENTRIES_PER_GROUP: usize = 4 * crate::parallel::DOWNLOADS_AT_ONCE;
 
-/// Chi installa i progetti della stringa, in due fasi (issue #180). Nel comando sono le fonti
-/// vere; nei test una finta.
+/// What installs the projects of the string, in two phases (issue #180). In the command it is the
+/// real sources; in the tests a fake one.
 pub trait Installer {
-    /// La prima fase per un gruppo di voci da installare: risolvere e scaricare, anche in
-    /// parallelo, senza toccare `AddOns` né i record. Quello che non riesce lo dirà `install`.
+    /// The first phase for a group of entries to install: resolve and download, possibly in
+    /// parallel, without touching `AddOns` or the records. What fails, `install` will report.
     fn prepare(&mut self, entries: &[&ListEntry]) {
         let _ = entries;
     }
 
-    /// La seconda fase per una voce: installarla, con quello che `prepare` ha già scaricato.
-    /// Si chiama una voce alla volta, nell'ordine della lista.
+    /// The second phase for one entry: install it, with what `prepare` already downloaded.
+    /// It is called one entry at a time, in list order.
     fn install(&mut self, entry: &ListEntry) -> EntryOutcome;
 }
 
-/// Esegue l'import. `before` e `records` sono lo stato prima delle installazioni; `rescan`
-/// rilegge disco e record dopo, per *Replace all*. Le cartelle tolte vanno poi dimenticate dal
-/// chiamante (record e cache dei fingerprint).
+/// Runs the import. `before` and `records` are the state before the installations; `rescan`
+/// rereads disk and records afterwards, for *Replace all*. The removed folders must then be
+/// forgotten by the caller (records and fingerprint cache).
 #[allow(clippy::too_many_arguments)]
 pub fn run_import(
     addons_dir: &Path,
@@ -459,8 +460,8 @@ mod tests {
         }
     }
 
-    /// Un'installazione su disco con le cartelle di `addons`, e lo stato letto come lo darebbe
-    /// la scansione: `updates` riconosce i progetti.
+    /// An installation on disk with the folders of `addons`, and the state read as the scan would
+    /// give it: `updates` recognises the projects.
     struct Disk {
         _tmp: TempDir,
         addons_dir: PathBuf,
@@ -489,8 +490,8 @@ mod tests {
         names
     }
 
-    /// Installa scrivendo la cartella `Addon<key>`; le chiavi in `fail` falliscono. `calls`
-    /// sono le installazioni, `prepared` i gruppi preparati, nell'ordine.
+    /// Installs by writing the folder `Addon<key>`; the keys in `fail` fail. `calls` are the
+    /// installations, `prepared` the prepared groups, in order.
     struct FakeInstaller<'a> {
         addons_dir: &'a Path,
         fail: Vec<&'static str>,
@@ -511,7 +512,7 @@ mod tests {
 
     impl Installer for FakeInstaller<'_> {
         fn prepare(&mut self, entries: &[&ListEntry]) {
-            // La prima fase non tocca il disco.
+            // The first phase does not touch the disk.
             assert!(entries.iter().all(|e| !self.calls.contains(&e.key)));
             self.prepared
                 .push(entries.iter().map(|e| e.key.clone()).collect());
@@ -605,13 +606,13 @@ mod tests {
             preview.entries[3].url.as_deref(),
             Some("https://www.curseforge.com/wow/addons/two")
         );
-        // DBM resta con la sua libreria e la sua dipendenza dichiarata; Details e lo zip no.
+        // DBM stays with its library and its declared dependency; Details and the zip do not.
         assert_eq!(preview.removals, ["Details", "ZipAddon"]);
     }
 
     #[test]
     fn a_required_dependency_from_the_toc_stays() {
-        // Dal testo vero del `.toc`: `## RequiredDeps` è un alias di `## Dependencies`.
+        // From the real text of the `.toc`: `## RequiredDeps` is an alias of `## Dependencies`.
         let mut core = listed("DBM-Core", &[]);
         core.addon.toc = crate::addons::toc::parse_toc(
             "## Title: DBM\n## RequiredDeps: LibFoo\n## OptionalDeps: LibBar\n",
@@ -689,7 +690,7 @@ mod tests {
             .iter()
             .map(|key| entry(SourceKind::Curseforge, key))
             .collect();
-        // Uno già installato in mezzo: non si prepara e non si installa.
+        // One already installed in the middle: it is neither prepared nor installed.
         list.insert(3, entry(SourceKind::Curseforge, "61284"));
         let mut installer = FakeInstaller::new(&disk.addons_dir, vec!["2"]);
         let result = run_import(
@@ -710,7 +711,7 @@ mod tests {
                 keys[ENTRIES_PER_GROUP..].to_vec()
             ]
         );
-        // Gli esiti seguono la lista, con l'errore al suo posto.
+        // The outcomes follow the list, with the error in its place.
         let outcomes: Vec<(&str, EntryStatus)> = result
             .entries
             .iter()
@@ -750,7 +751,7 @@ mod tests {
                 entry(SourceKind::Curseforge, "5"),
             ]),
             ImportMode::Replace,
-            // "Late" è comparsa dopo l'anteprima; "Dep" è confermata ma ora è una dipendenza.
+            // "Late" appeared after the preview; "Dep" is confirmed but is now a dependency.
             &["other".to_owned(), "Dep".to_owned(), "Details".to_owned()],
             &before,
             &SourceRecords::new(),
@@ -836,7 +837,7 @@ mod tests {
         let disk = disk(&["Details"]);
         let outside = disk.addons_dir.parent().unwrap().join("Keep");
         fs::create_dir_all(&outside).unwrap();
-        // Una scansione falsata che restituisce nomi ostili come cartelle da togliere.
+        // A rigged scan that returns hostile names as folders to remove.
         let hostile = state(
             vec![
                 listed("..", &[]),

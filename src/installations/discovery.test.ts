@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import type { DiscoveredInstallation } from "../api.ts";
 import { flavorFolder, pendingDiscoveries } from "./discovery.ts";
 
-// Percorsi sintetici: non esistono su nessuna macchina.
+// Synthetic paths: they exist on no machine.
 const retail: DiscoveredInstallation = {
   path: "/synthetic/games/World of Warcraft/_retail_",
   flavor: "retail",

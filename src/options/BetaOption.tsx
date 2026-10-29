@@ -3,15 +3,15 @@ import { api, errorMessage } from "../api";
 import { SettingsSection, SwitchRow } from "./Setting";
 
 type Props = {
-  /** L'opzione salvata; `null` finché `get_settings` non ha risposto o se non si legge. */
+  /** The saved option; `null` until `get_settings` has answered or if it cannot be read. */
   enabled: boolean | null;
-  /** Applica il valore salvato a tutta l'app (ricerca e tab Installed lo rileggono). */
+  /** Applies the saved value to the whole app (search and the Installed tab read it again). */
   onChange: (enabled: boolean) => void;
 };
 
 /**
- * La sezione "Updates" di Options: l'opzione per installare e aggiornare alla Beta quando la
- * versione del gioco non ha una Release (issue #141). La scelta del file resta nel backend.
+ * The "Updates" section of Options: the option to install and update to the Beta when the
+ * game version has no Release (issue #141). The choice of the file stays in the backend.
  */
 export function BetaOption({ enabled, onChange }: Props) {
   const [error, setError] = useState<string | null>(null);

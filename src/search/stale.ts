@@ -1,25 +1,25 @@
-// La tab Search dopo un cambio degli addon fatto altrove (rimozione, reinstallazione, zip,
-// importazione): quali installazioni hanno risultati da rileggere e quale stato della sessione
-// non vale più. Funzioni pure, senza React né I/O.
+// The Search tab after an addon change made elsewhere (removal, reinstall, zip, import):
+// which installations have results to read again and which session state no longer
+// holds. Pure functions, no React or I/O.
 
 import type { InstallRun } from "./InstallAction";
 
-/** Installazioni e progetti installati valgono per installazione: la chiave le tiene insieme. */
+/** Installations and installed projects are per installation: the key holds them together. */
 export function installKey(installationId: string, modId: number): string {
   return `${installationId}:${modId}`;
 }
 
-/** L'installazione della chiave `installKey`: tutto quello che precede l'ultimo `:`. */
+/** The installation of the key `installKey`: everything before the last `:`. */
 function installationOf(key: string): string {
   return key.slice(0, key.lastIndexOf(":"));
 }
 
-/** `stale` con l'installazione `id`; lo stesso insieme se c'era già. */
+/** `stale` with the installation `id`; the same set if it was already there. */
 export function markStale(stale: ReadonlySet<string>, id: string): ReadonlySet<string> {
   return stale.has(id) ? stale : new Set(stale).add(id);
 }
 
-/** `stale` senza le installazioni `done`; lo stesso insieme se non ne toglie nessuna. */
+/** `stale` without the installations `done`; the same set if it removes none. */
 export function clearStale(
   stale: ReadonlySet<string>,
   done: ReadonlySet<string>,
@@ -29,8 +29,8 @@ export function clearStale(
 }
 
 /**
- * I progetti installati nella sessione, senza quelli delle installazioni `stale`: per quelle
- * il segno "installato" torna a darlo la ricerca riletta. Lo stesso insieme se non cambia.
+ * The projects installed in the session, without those of the `stale` installations: for those
+ * the re-read search gives the "installed" mark again. The same set if it does not change.
  */
 export function forgetInstalled(
   keys: Set<string>,
@@ -41,9 +41,9 @@ export function forgetInstalled(
 }
 
 /**
- * Le installazioni avviate nella sessione, senza quelle finite nelle installazioni `stale`: un
- * esito di prima non descrive più gli addon sul disco. Quelle in corso restano. La stessa mappa
- * se non cambia.
+ * The installs started in the session, without those finished in the `stale` installations: an
+ * earlier outcome no longer describes the addons on disk. Those in progress stay. The same map
+ * if it does not change.
  */
 export function forgetFinishedRuns<R extends { status: InstallRun["status"] }>(
   runs: Map<string, R>,

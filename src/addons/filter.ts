@@ -1,17 +1,17 @@
-// Ricerca, filtri e ordinamento degli addon: funzioni pure, senza React né I/O.
+// Addon search, filters and sorting: pure functions, no React or I/O.
 
 import type { AddonUpdate, InstalledAddon, SourceKind } from "../api";
 import { projectId } from "./sources.ts";
 
 export type Filters = {
   query: string;
-  /** `null` = tutti gli autori. */
+  /** `null` = all authors. */
   author: string | null;
   hideLoadOnDemand: boolean;
   onlyErrors: boolean;
-  /** Solo gli addon con un aggiornamento disponibile (serve il risultato del controllo). */
+  /** Only the addons with an update available (needs the result of the check). */
   onlyUpdates: boolean;
-  /** Solo gli addon riconosciuti da questa fonte (serve il risultato del controllo); `null` = tutti. */
+  /** Only the addons recognised by this source (needs the result of the check); `null` = all. */
   source: SourceKind | null;
 };
 
@@ -30,18 +30,18 @@ export const defaultFilters: Filters = {
 export const defaultSort: Sort = { key: "title", direction: "asc" };
 
 /**
- * Un addon come lo vede l'utente: una cartella principale e le cartelle che arrivano con lei
- * (per esempio `QuestieDB` con `Questie`, o le cartelle di DBM).
+ * An addon as the user sees it: a main folder and the folders that come with it
+ * (for example `QuestieDB` with `Questie`, or the DBM folders).
  */
 export type AddonGroup = {
   main: InstalledAddon;
-  /** Le altre cartelle del gruppo, in ordine alfabetico. */
+  /** The other folders of the group, in alphabetical order. */
   others: InstalledAddon[];
 };
 
 const lower = (s: string) => s.toLocaleLowerCase("it");
 
-/** I nomi di un `## Author`, separati da virgola, punto e virgola, `&` o `/`. */
+/** The names of an `## Author`, separated by comma, semicolon, `&` or `/`. */
 const authorNames = (author: string | null): Set<string> =>
   new Set(
     (author ?? "")
@@ -51,10 +51,10 @@ const authorNames = (author: string | null): Set<string> =>
   );
 
 /**
- * Autori diversi tra due gruppi: nessun nome in comune tra tutti i nomi dell'uno e tutti quelli
- * dell'altro (`Elv, Simpy` e `fang2hou`). `Elv` e `Elv, Simpy` non lo sono, e un gruppo senza
- * autori non è una prova. Si confrontano i gruppi, non le singole cartelle: due moduli dello
- * stesso addon possono citare autori diversi tra quelli del principale.
+ * Different authors between two groups: no name in common between all the names of one and all
+ * those of the other (`Elv, Simpy` and `fang2hou`). `Elv` and `Elv, Simpy` are not, and a group
+ * without authors is no evidence. Groups are compared, not single folders: two modules of the
+ * same addon can cite different authors among those of the main one.
  */
 function disjointAuthors(x: InstalledAddon[], y: InstalledAddon[]): boolean {
   const names = (group: InstalledAddon[]) =>
@@ -65,40 +65,41 @@ function disjointAuthors(x: InstalledAddon[], y: InstalledAddon[]): boolean {
 }
 
 /**
- * Raggruppa le cartelle che formano un solo addon. Le prove, dalla più forte:
+ * Groups the folders that form a single addon. The evidence, strongest first:
  *
- * - **il file pubblicato** (dopo il controllo): le cartelle installate che compaiono nelle
- *   `projectFolders` di una cartella riconosciuta vanno con lei, anche se CurseForge non le
- *   riconosce una per una; le cartelle riconosciute come lo stesso progetto stanno insieme.
- *   **Il registro dell'app** (`installedProject`, le cartelle dello zip che l'app ha
- *   installato) è una prova della stessa forza e vale anche prima del controllo; per una
- *   cartella che il controllo riconosce prevale il file pubblicato, perché l'addon può essere
- *   stato aggiornato con un altro gestore;
- * - **il campo `## Group`**, come fa il gioco: B va con A se il `group` di B è il nome di A
- *   (i moduli `EllesmereUI*` dichiarano `EllesmereUI`); se A non è installata, niente;
- * - **una dipendenza obbligatoria più il prefisso del nome**, in entrambe le direzioni: A
- *   richiede B e il nome di B inizia con quello di A (`Questie` → `QuestieDB`), oppure B
- *   richiede A e il nome di B inizia con quello di A (`Details_Compare2` → `Details`).
+ * - **the published file** (after the check): the installed folders that appear in the
+ *   `projectFolders` of a recognised folder go with it, even if CurseForge does not
+ *   recognise them one by one; folders recognised as the same project stay together.
+ *   **The app's record** (`installedProject`, the zip folders the app
+ *   installed) is evidence of the same strength and holds even before the check; for a
+ *   folder the check recognises the published file prevails, because the addon may have
+ *   been updated with another manager;
+ * - **the `## Group` field**, as the game does: B goes with A if B's `group` is A's name
+ *   (the `EllesmereUI*` modules declare `EllesmereUI`); if A is not installed, nothing;
+ * - **a required dependency plus the name prefix**, in both directions: A
+ *   requires B and B's name starts with A's (`Questie` → `QuestieDB`), or B
+ *   requires A and B's name starts with A's (`Details_Compare2` → `Details`).
  *
- * **Veto**, che prevale su tutte le prove: due cartelle non stanno mai nello stesso gruppo se
- * sono riconosciute (dal controllo o dal registro) come progetti diversi, se una è riconosciuta
- * e il suo file non contiene l'altra (anche quando l'altra ha un record dello stesso progetto:
- * conta il file pubblicato), o (senza il controllo o il registro a dire il contrario) se i loro `.toc` dichiarano
- * `X-Curse-Project-ID` diversi o autori senza nomi in comune. Così un plugin di un altro autore (`ElvUI_WindTools` sotto
- * `ElvUI`) resta una riga sua. Il veto per autore vale solo nella direzione dei plugin, una
- * cartella che richiede la principale di cui estende il nome: non quando è la principale a
- * richiedere quella che ne estende il nome (`Questie` → `QuestieDB`), perché un addon non
- * funziona senza le sue dipendenze obbligatorie, né con `## Group`, che è una dichiarazione
- * seguita anche dal gioco. Il campo `## Author` è testo libero che due cartelle dello stesso
- * addon scrivono in modo diverso. L'id Wago non è un confine: Wago elenca come progetti separati
- * cartelle che arrivano nello stesso file CurseForge (i plugin di Details).
+ * **Veto**, which prevails over all evidence: two folders never stay in the same group if
+ * they are recognised (by the check or by the record) as different projects, if one is recognised
+ * and its file does not contain the other (even when the other has a record of the same project:
+ * the published file counts), or (without the check or the record saying otherwise) if their `.toc`
+ * files declare different `X-Curse-Project-ID`s or authors with no names in common. So a plugin by
+ * another author (`ElvUI_WindTools` under
+ * `ElvUI`) stays a row of its own. The author veto holds only in the plugin direction, a
+ * folder that requires the main one whose name it extends: not when it is the main one that
+ * requires the folder extending its name (`Questie` → `QuestieDB`), because an addon does not
+ * work without its required dependencies, nor with `## Group`, which is a declaration
+ * the game follows too. The `## Author` field is free text that two folders of the same
+ * addon write differently. The Wago id is not a boundary: Wago lists as separate projects
+ * folders that come in the same CurseForge file (the Details plugins).
  *
- * Gli archi si uniscono dal più forte al più debole e due gruppi si fondono solo se nessuna
- * coppia tra i loro membri è vietata: una cartella finisce in un solo gruppo. La principale è
- * la cartella indicata da `group`, se ce n'è una nel gruppo; poi, tra le cartelle che non sono
- * moduli `LoadOnDemand` (se ce ne sono), quelle che non richiedono una cartella del gruppo il
- * cui nome è un prefisso del loro (`Details_Compare2` richiede `Details`; `Questie` che
- * richiede `QuestieDB` resta candidata); a parità il nome più corto, poi l'ordine alfabetico.
+ * Edges are joined from strongest to weakest and two groups merge only if no
+ * pair among their members is vetoed: a folder ends up in only one group. The main one is
+ * the folder named by `group`, if there is one in the group; then, among the folders that are
+ * not `LoadOnDemand` modules (if there are any), those that do not require a folder of the group
+ * whose name is a prefix of theirs (`Details_Compare2` requires `Details`; `Questie`, which
+ * requires `QuestieDB`, stays a candidate); on a tie the shortest name, then alphabetical order.
  */
 export function groupAddons(
   addons: InstalledAddon[],
@@ -114,13 +115,13 @@ export function groupAddons(
     return current;
   };
 
-  // Il progetto riconosciuto e le cartelle del suo file, per cartella: dal controllo, oppure
-  // dal registro dell'app per le cartelle che il controllo non riconosce (o prima del controllo).
-  // L'identità è la fonte più l'id nella fonte (`projectId`): due fonti non si uniscono mai.
+  // The recognised project and the folders of its file, per folder: from the check, or
+  // from the app's record for the folders the check does not recognise (or before the check).
+  // The identity is the source plus the id within the source (`projectId`): two sources never join.
   const recognised = new Map<string, { id: string; folders: Set<string>; checked: boolean }>();
   for (const addon of addons) {
     const update = updates?.get(addon.folder);
-    // Il registro letto da `list_addons` (`installedProject`) è solo CurseForge.
+    // The record read by `list_addons` (`installedProject`) is CurseForge only.
     const project = update?.project
       ? { id: projectId(update.project), folders: update.projectFolders ?? [] }
       : addon.installedProject && {
@@ -139,7 +140,7 @@ export function groupAddons(
     const pb = recognised.get(b.folder);
     if (pa && pb) {
       if (pa.id !== pb.id) return true;
-      // Stesso progetto, una dal controllo e una dal registro: decide il file pubblicato.
+      // Same project, one from the check and one from the record: the published file decides.
       if (pa.checked && !pb.checked) return !pa.folders.has(lower(b.folder));
       if (pb.checked && !pa.checked) return !pb.folders.has(lower(a.folder));
       return false;
@@ -152,8 +153,8 @@ export function groupAddons(
     return differ(a.curseProjectId, b.curseProjectId);
   };
 
-  // Archi per forza: 0 file pubblicato o registro, 1 `## Group`, 2 la principale richiede la
-  // cartella che ne estende il nome, 3 la cartella richiede la principale di cui estende il nome.
+  // Edges by strength: 0 published file or record, 1 `## Group`, 2 the main one requires the
+  // folder that extends its name, 3 the folder requires the main one whose name it extends.
   const edges: [number, InstalledAddon, InstalledAddon][] = [];
   const firstOfProject = new Map<string, InstalledAddon>();
   for (const addon of addons) {
@@ -189,7 +190,7 @@ export function groupAddons(
     const left = members.get(ra)!;
     const right = members.get(rb)!;
     if (left.some((x) => right.some((y) => vetoed(x, y)))) continue;
-    // Il veto per autore vale solo senza il controllo o il registro a dire il contrario.
+    // The author veto holds only without the check or the record saying otherwise.
     const checked = [...left, ...right].some((x) => recognised.has(x.folder));
     if (strength === 3 && !checked && disjointAuthors(left, right)) continue;
     parent.set(rb, ra);
@@ -207,14 +208,14 @@ export function groupAddons(
 }
 
 function pickMain(group: InstalledAddon[]): InstalledAddon {
-  // La cartella indicata dal `## Group` delle cartelle del gruppo lo guida.
+  // The folder named by the `## Group` of the group's folders leads it.
   const named = new Set(group.flatMap((a) => (a.group ? [lower(a.group)] : [])));
   const leaders = group.filter((a) => named.has(lower(a.folder)));
   const scope = leaders.length > 0 ? leaders : group;
   const loaded = scope.filter((a) => !a.loadOnDemand);
   const candidates = loaded.length > 0 ? loaded : scope;
-  // Un modulo richiede una cartella del gruppo il cui nome è un prefisso del suo
-  // (`Details_Compare2` → `Details`); `Questie`, che richiede `QuestieDB`, non lo è.
+  // A module requires a folder of the group whose name is a prefix of its own
+  // (`Details_Compare2` → `Details`); `Questie`, which requires `QuestieDB`, is not one.
   const inGroup = new Set(group.map((a) => lower(a.folder)));
   const isModule = (a: InstalledAddon) => {
     const self = lower(a.folder);
@@ -230,10 +231,10 @@ function pickMain(group: InstalledAddon[]): InstalledAddon {
 }
 
 /**
- * Lo stato di aggiornamento del gruppo. Riguarda il **progetto**, non una cartella: le
- * cartelle di un progetto arrivano dallo stesso file pubblicato. Vince un aggiornamento
- * disponibile in una cartella qualsiasi, poi uno stato con progetto, poi quello della
- * principale.
+ * The update status of the group. It concerns the **project**, not a folder: the
+ * folders of a project come from the same published file. An update available in any
+ * folder wins, then a status with a project, then that of the
+ * main one.
  */
 export function groupUpdate(
   group: AddonGroup,
@@ -248,12 +249,12 @@ export function groupUpdate(
   );
 }
 
-/** Il titolo da mostrare: quello del `.toc`, altrimenti il nome della cartella. */
+/** The title to show: the one from the `.toc`, otherwise the folder name. */
 export function displayTitle(addon: InstalledAddon): string {
   return addon.title ?? addon.folder;
 }
 
-/** Gli autori presenti, senza ripetizioni, in ordine alfabetico. */
+/** The authors present, without repetitions, in alphabetical order. */
 export function authorsOf(addons: InstalledAddon[]): string[] {
   const authors = new Set<string>();
   for (const addon of addons) {
@@ -263,8 +264,8 @@ export function authorsOf(addons: InstalledAddon[]): string[] {
 }
 
 /**
- * La fonte di un addon con la stessa regola di `groupAddons`: quella del progetto del controllo,
- * altrimenti CurseForge se il registro dell'app (`installedProject`, solo CurseForge) lo conosce.
+ * An addon's source with the same rule as `groupAddons`: the source of the check's project,
+ * otherwise CurseForge if the app's record (`installedProject`, CurseForge only) knows it.
  */
 export function sourceOf(addon: InstalledAddon, update?: AddonUpdate): SourceKind | null {
   if (update?.project) return update.project.source;
@@ -294,7 +295,7 @@ function compare(a: InstalledAddon, b: InstalledAddon, key: SortKey): number {
     case "title":
       return text(displayTitle(a), displayTitle(b));
     case "author":
-      // Gli addon senza autore vanno in fondo in entrambe le direzioni (vedi sortAddons).
+      // Addons without an author go to the bottom in both directions (see sortAddons).
       return text(a.author ?? "", b.author ?? "");
     case "modified":
       return (a.modifiedMs ?? 0) - (b.modifiedMs ?? 0);
@@ -309,7 +310,7 @@ export function sortAddons(addons: InstalledAddon[], sort: Sort): InstalledAddon
     }
     return (
       sign * compare(a, b, sort.key) ||
-      // A parità, il titolo e poi la cartella rendono l'ordine stabile.
+      // On a tie, the title and then the folder make the order stable.
       compare(a, b, "title") ||
       a.folder.localeCompare(b.folder)
     );
@@ -317,9 +318,9 @@ export function sortAddons(addons: InstalledAddon[], sort: Sort): InstalledAddon
 }
 
 /**
- * I filtri su un gruppo: autore, LoadOnDemand e testo guardano la cartella principale (il testo
- * anche i nomi delle altre cartelle); un errore in una cartella qualsiasi conta; l'aggiornamento
- * è quello del gruppo.
+ * The filters on a group: author, LoadOnDemand and text look at the main folder (the text
+ * also at the names of the other folders); an error in any folder counts; the update
+ * is the group's.
  */
 export function matchesGroup(
   group: AddonGroup,
@@ -340,7 +341,7 @@ export function matchesGroup(
   );
 }
 
-/** Filtra e ordina gruppi già calcolati con `groupAddons`: conteggio e righe usano gli stessi. */
+/** Filters and sorts groups already computed with `groupAddons`: count and rows use the same. */
 export function visibleGroups(
   groups: AddonGroup[],
   filters: Filters,
@@ -357,11 +358,11 @@ export function visibleGroups(
   return filtered.sort((a, b) => order.get(a.main.folder)! - order.get(b.main.folder)!);
 }
 
-/** Clic su un'intestazione: stessa colonna inverte la direzione, colonna nuova parte da quella naturale. */
+/** Header click: the same column flips the direction, a new column starts from its natural one. */
 export function nextSort(current: Sort, key: SortKey): Sort {
   if (current.key === key) {
     return { key, direction: current.direction === "asc" ? "desc" : "asc" };
   }
-  // Per la data, la scelta naturale è "più recenti prima".
+  // For the date, the natural choice is "newest first".
   return { key, direction: key === "modified" ? "desc" : "asc" };
 }

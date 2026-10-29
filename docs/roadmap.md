@@ -1,126 +1,125 @@
 # Roadmap
 
-Ultimo aggiornamento: 2026-10-27.
+Last updated: 2026-10-29.
 
-## M0 — Scaffolding (fatto)
+## M0 — Scaffolding (done)
 
-- Progetto Tauri 2 + React + TypeScript.
-- Lettura della chiave CurseForge da `.env`.
-- Documentazione: contesto, decisioni, architettura, roadmap.
+- Tauri 2 + React + TypeScript project.
+- Reading the CurseForge key from `.env` (replaced by the proxy, D44).
+- Documentation: context, decisions, architecture, roadmap.
 
-## M1 — Addon installati (fatto)
+## M1 — Installed addons (done)
 
-- Aggiungere un'installazione di WoW a mano (percorso della cartella `_<flavor>_`).
-- Leggere `Interface/AddOns` e i file `.toc`.
-- Mostrare la lista degli addon installati con ricerca e filtri locali.
+- Add a WoW installation by hand (path of the `_<flavor>_` folder).
+- Read `Interface/AddOns` and the `.toc` files.
+- Show the list of installed addons with local search and filters.
 
-## M2 — CurseForge (fatto)
+## M2 — CurseForge (done)
 
-- Client API con chiave personale.
-- Riconoscimento degli addon installati tramite fingerprint.
-- Controllo aggiornamenti per la versione del gioco dell'installazione.
+- API client with a personal key.
+- Recognition of installed addons through fingerprints.
+- Update check for the installation's game version.
 
-## M3 — Installazione e aggiornamento (fatto)
+## M3 — Installation and update (done)
 
-- Download, estrazione sicura e sostituzione delle cartelle.
-- Aggiornamento singolo e "aggiorna tutto".
-- Versione del gioco forzata per singolo addon.
-- Backup delle cartelle `WTF` e `Interface`.
-- Gli addon con `allowModDistribution = false` (per esempio Details!) si riconoscono e
-  segnalano gli aggiornamenti, ma si aggiornano a mano dal sito (D13).
+- Download, safe extraction and folder replacement.
+- Single update and "update all".
+- Game version forced per addon.
+- Backup of the `WTF` and `Interface` folders.
+- Addons with `allowModDistribution = false` (for example Details!) are recognised and
+  report updates, but are updated by hand from the site (D13).
 
-## M3.5 — Interfaccia in inglese e tab (fatto)
+## M3.5 — English interface and tabs (done)
 
-- Interfaccia solo in inglese, compresi i messaggi del backend (D27).
-- App divisa in tab: per ora Installed e Options, con il selettore dell'installazione
-  nell'header; la gestione delle installazioni e i backup stanno in Options. La tab Search
-  è arrivata con M4.
+- Interface in English only, including the backend messages (D27).
+- App split into tabs: for now Installed and Options, with the installation selector
+  in the header; installation management and backups live in Options. The Search tab
+  arrived with M4.
 
-## M4 — Ricerca e catalogo (fatto)
+## M4 — Search and catalogue (done)
 
-- Tab Search, la prima delle tre (Search, Installed, Options); all'avvio resta aperta Installed.
-- Ricerca nel catalogo CurseForge con filtri (categoria, versione del gioco) e ordinamenti
-  (popolarità, data di aggiornamento, nome, download), a pagine da 50.
-- Dettaglio dell'addon: descrizione convertita in testo dal backend, file Release e Beta per
-  la versione del gioco, dipendenze obbligatorie.
-- Installazione di un addon nuovo dalla ricerca o dal dettaglio, con le dipendenze
-  obbligatorie installate in automatico come in WowUp; gli addon con
-  `allowModDistribution = false` rimandano al sito (D13).
+- Search tab, the first of three (Search, Installed, Options); at startup Installed stays open.
+- Search in the CurseForge catalogue with filters (category, game version) and sorting
+  (popularity, update date, name, downloads), in pages of 50.
+- Addon detail: description converted to text by the backend, Release and Beta files for
+  the game version, required dependencies.
+- Installation of a new addon from the search or from the detail, with required
+  dependencies installed automatically as in WowUp; addons with
+  `allowModDistribution = false` send you to the site (D13).
 
-## M4.5 — macOS, ricerca delle installazioni e tema (fatto)
+## M4.5 — macOS, installation discovery and theme (done)
 
-- L'app funziona anche su macOS con il client nativo (D29); job `backend-macos` in CI sulle
-  PR verso `main` e su quelle che toccano `ci.yml`.
-- Pacchetto `.dmg` universale (Apple Silicon e Intel), non firmato, nella release (D24).
-- Ricerca automatica delle installazioni: percorsi standard e registro di Battle.net su
-  Windows (D30), `Applications` su macOS, prefissi Wine su Linux (`~/.wine`, Lutris, Bottles,
-  Steam/Proton). Le installazioni trovate si propongono in Options con "Add", mai aggiunte da
-  sole.
-- Options: scelta del tema (sistema, chiaro, scuro) salvata dal backend.
+- The app also works on macOS with the native client (D29); `backend-macos` job in CI on
+  PRs targeting `main` and on those that touch `ci.yml`.
+- Universal `.dmg` package (Apple Silicon and Intel), unsigned, in the release (D24).
+- Automatic discovery of installations: standard paths and the Battle.net registry on
+  Windows (D30), `Applications` on macOS, Wine prefixes on Linux (`~/.wine`, Lutris, Bottles,
+  Steam/Proton). Found installations are proposed in Options with "Add", never added on
+  their own.
+- Options: theme choice (system, light, dark) saved by the backend.
 
-## M4.6 — Fonti libere (fatto)
+## M4.6 — Free sources (done)
 
-Fonti senza accordi pubblicitari né chiavi (D31), dietro l'interfaccia comune (D12):
+Sources without advertising agreements or keys (D31), behind the common interface (D12):
 
-- Installazione di uno zip scaricato a mano, trascinandolo nella finestra o con "Install from
-  zip…" (D32): così si installano anche gli addon con `allowModDistribution = false`.
-- `installed-addons.json` v2 con i record per fonte e l'ordine di abbinamento tra le fonti (D33).
-- Tukui (ElvUI, Tukui), WoWInterface e GitHub Releases, con l'installazione da link nella tab
-  Search e la fonte di ogni addon nella tab Installed.
+- Installation of a zip downloaded by hand, by dragging it into the window or with "Install from
+  zip…" (D32): this way addons with `allowModDistribution = false` can be installed too.
+- `installed-addons.json` v2 with records per source and the matching order across sources (D33).
+- Tukui (ElvUI, Tukui), WoWInterface and GitHub Releases, with installation from a link in the
+  Search tab and each addon's source in the Installed tab.
 
 Iteration 3: #102, #103, #104, #105, #106, #111, #117. Iteration 5: #107, #108, #109, #110.
 
-## M4.7 — Velocità, import/export e gestione degli addon (fatto)
+## M4.7 — Speed, import/export and addon management (done)
 
-- Scansione veloce, cache dei fingerprint, `refresh_addons` e barra di avanzamento
+- Fast scan, fingerprint cache, `refresh_addons` and progress bar
   (Iteration 4: #123–#128).
-- Ricerca che nasconde gli addon senza un file Release per la versione del gioco, opzione
-  per ripiegare sulle Beta (#140, #141).
-- Export e import della lista degli addon come stringa `WOWDON1:`, con "Keep my addons" e
+- Search that hides addons without a Release file for the game version, with an option
+  to fall back to Betas (#140, #141).
+- Export and import of the addon list as a `WOWDON1:` string, with "Keep my addons" and
   "Replace all" (#133–#135).
-- Tab Installed: menu contestuale, selezione multipla, reinstallazione e rimozione
+- Installed tab: context menu, multiple selection, reinstallation and removal
   (Iteration 5: #147, #148, #149).
 
-## M4.8 — Mirror GitHub, tray e import veloce (fatto)
+## M4.8 — GitHub mirror, tray and fast import (done)
 
 Iteration 6:
 
-- Mirror GitHub per i progetti CurseForge bloccati: stessa versione da `sourceUrl`,
-  aggiornamento, reinstallazione e installazione dalla Search, "via GitHub" nella tab
-  Installed (#162–#165).
-- Release GitHub lette senza API, dal redirect di `releases/latest` e dal `release.json`
+- GitHub mirror for blocked CurseForge projects: same version from `sourceUrl`,
+  update, reinstallation and installation from Search, "via GitHub" in the Installed
+  tab (#162–#165).
+- GitHub releases read without the API, from the `releases/latest` redirect and the `release.json`
   (D37, #179).
-- Icona nella tray, "Close to tray" e avvio con il sistema (D35, D36, #158–#160).
-- Tab Description e Gallery nel dettaglio di un addon (#167, #168).
-- Import più veloce: download in parallelo, installazione in fila (#180); mediana su 12 addon
-  CurseForge da 10,6 s a 4,5 s.
+- Tray icon, "Close to tray" and start with the system (D35, D36, #158–#160).
+- Description and Gallery tabs in an addon's detail (#167, #168).
+- Faster import: parallel downloads, sequential installation (#180); median over 12 CurseForge
+  addons from 10.6 s to 4.5 s.
 
-## M4.9 — Aggiornamento automatico degli addon
+## M4.9 — Automatic addon updates
 
-D41, issue #199–#204:
+D41, issues #199–#204:
 
-- Modalità `off`, `notify` (default) e `install`, con intervallo e esclusioni per addon e per
-  installazione (#199).
-- Giro automatico all'avvio e a intervalli nel backend (#200), conteggio nella tray (#202).
-- Versione precedente tenuta dai giri automatici e "Undo last auto-update" (#201).
-- Options, voce "Don't auto-update" e riga di stato nella tab Installed (#203, #204).
+- Modes `off`, `notify` (default) and `install`, with an interval and exclusions per addon and per
+  installation (#199).
+- Automatic round at startup and at intervals in the backend (#200), count in the tray (#202).
+- Previous version kept by automatic rounds and "Undo last auto-update" (#201).
+- Options, "Don't auto-update" entry and status line in the Installed tab (#203, #204).
 
-## M5 — Chiave per applicazioni di terzi e primo rilascio
+## M5 — Third-party application key and first release
 
-- Inviare a CurseForge/Overwolf il form per la chiave da applicazione.
-- Chiedere a Wago un accesso in lettura all'API (D39), in parallelo.
-- Decidere come la chiave arriva nell'app installata: oggi il backend la legge solo da
-  `CURSEFORGE_API_KEY` o dalla `.env` del checkout, quindi un pacchetto installato parte senza
-  chiave.
-- Primo rilascio provato: PR `develop → main` (la prima a far girare `backend-macos` sul
-  backend completo), poi `.deb`, installer NSIS e `.dmg` costruiti dalla CI (D24) al primo tag.
+- CurseForge/Overwolf application key: form sent, key granted (2026-10-29).
+- Ask Wago for read access to the API (D39), in parallel.
+- The key never reaches the app: it lives in the wow-don-proxy Worker and the backend calls the
+  proxy, in development too (D44, #247).
+- First tested release: PR `develop → main` (the first to run `backend-macos` on the
+  complete backend), then the `.deb`, NSIS installer and `.dmg` built by CI (D24) at the first tag.
 
-## Dopo
+## Later
 
-- Token GitHub personale facoltativo, per superare il limite di 60 richieste l'ora.
-- Ricerca nel catalogo WoWInterface.
-- Notifiche di sistema per l'aggiornamento automatico (D41): richiedono
-  `tauri-plugin-notification`, una dipendenza da approvare.
+- Optional personal GitHub token, to get past the limit of 60 requests an hour.
+- Search in the WoWInterface catalogue.
+- System notifications for automatic updates (D41): they require
+  `tauri-plugin-notification`, a dependency to be approved.
 
-- Wago Addons (D39): richiesta di accesso all'API inviata dall'utente; la fonte si specifica
-  solo se Wago concede una chiave da usare in WoW-don.
+- Wago Addons (D39): API access request sent by the user; the source is specified
+  only if Wago grants a key to use in WoW-don.

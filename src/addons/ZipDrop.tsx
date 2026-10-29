@@ -2,20 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 type Props = {
-  /** Il nome dell'installazione in cui finirà lo zip, o `null` se non ce n'è una. */
+  /** The name of the installation the zip will go into, or `null` if there is none. */
   target: string | null;
-  /** Chiamata al rilascio con i percorsi dei file trascinati. */
+  /** Called on drop with the paths of the dragged files. */
   onDrop: (paths: string[]) => void;
 };
 
 /**
- * Il trascinamento di file sulla finestra (D32): mentre un file passa sopra la finestra mostra
- * uno strato con l'installazione di destinazione, al rilascio passa i percorsi a `onDrop`. Tauri
- * consegna i percorsi con l'evento della webview; il file lo legge il backend.
+ * Dragging files onto the window (D32): while a file hovers over the window it shows an
+ * overlay with the target installation, on drop it passes the paths to `onDrop`. Tauri
+ * delivers the paths with the webview event; the backend reads the file.
  */
 export function ZipDrop({ target, onDrop }: Props) {
   const [over, setOver] = useState(false);
-  // Il listener si registra una volta sola: legge sempre l'ultimo `onDrop`.
+  // The listener is registered only once: it always reads the latest `onDrop`.
   const dropRef = useRef(onDrop);
   dropRef.current = onDrop;
 
@@ -38,8 +38,8 @@ export function ZipDrop({ target, onDrop }: Props) {
         if (disposed) stop();
         else unlisten = stop;
       })
-      // Fuori da Tauri (per esempio `vite` nel browser) non c'è niente da ascoltare; dentro
-      // l'app un errore qui vuol dire che il trascinamento non funziona: se ne lascia traccia.
+      // Outside Tauri (for example `vite` in the browser) there is nothing to listen to; inside
+      // the app an error here means dragging does not work: a trace of it is left.
       .catch((err) => console.warn("Drag and drop is unavailable:", err));
     return () => {
       disposed = true;

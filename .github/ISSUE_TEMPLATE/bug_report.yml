@@ -1,5 +1,5 @@
 name: Bug
-description: Segnala un bug o un comportamento inatteso
+description: Report a bug or unexpected behaviour
 title: "[Bug]: "
 labels: ["bug", "needs-triage"]
 assignees: []
@@ -8,78 +8,78 @@ body:
     id: workspace
     attributes:
       label: Area
-      description: Quale parte del repository è coinvolta?
+      description: Which part of the repository is involved?
       options:
         - backend (Rust / Tauri)
         - frontend (React / TypeScript)
-        - shared (Trasversale)
+        - shared (Cross-cutting)
     validations:
       required: true
 
   - type: textarea
     id: what_happened
     attributes:
-      label: Cosa è successo?
-      description: Il comportamento osservato. Includi messaggi di errore, panic e stack trace esatti.
+      label: What happened?
+      description: The observed behaviour. Include exact error messages, panics and stack traces.
     validations:
       required: true
 
   - type: textarea
     id: expected
     attributes:
-      label: Cosa doveva succedere?
-      description: Il comportamento corretto, abbastanza preciso da poterne ricavare un test.
+      label: What should have happened?
+      description: The correct behaviour, precise enough to derive a test from it.
     validations:
       required: true
 
   - type: textarea
     id: reproduction
     attributes:
-      label: Passi per riprodurre
-      description: Passi in ordine. L'agente prova a riprodurre il bug prima di correggerlo.
+      label: Steps to reproduce
+      description: Ordered steps. The agent tries to reproduce the bug before fixing it.
       placeholder: |
-        1. Aggiungi l'installazione `_classic_beta_` dentro il prefisso Lutris
-        2. Apri la lista degli addon installati
-        3. L'addon con due file `.toc` compare due volte
+        1. Add the `_classic_beta_` installation inside the Lutris prefix
+        2. Open the list of installed addons
+        3. The addon with two `.toc` files appears twice
     validations:
       required: true
 
   - type: textarea
     id: technical_context
     attributes:
-      label: Contesto tecnico
+      label: Technical context
       description: |
-        **OBBLIGATORIO**. Log, errori e percorsi del codice coinvolti.
+        **REQUIRED**. Logs, errors and the code paths involved.
       placeholder: |
         Log:
         ```
         thread 'main' panicked at src-tauri/src/addons/toc.rs:42:18
         ```
 
-        File rilevanti:
-        - src-tauri/src/addons/toc.rs (origine del panic)
+        Relevant files:
+        - src-tauri/src/addons/toc.rs (origin of the panic)
     validations:
       required: true
 
   - type: textarea
     id: out_of_scope
     attributes:
-      label: Fuori scope
+      label: Out of scope
       description: |
-        **OBBLIGATORIO**. Cosa questa correzione NON deve toccare.
+        **REQUIRED**. What this fix must NOT touch.
       placeholder: |
-        - Non riscrivere il parser dei `.toc`
-        - Non toccare il client CurseForge
+        - Do not rewrite the `.toc` parser
+        - Do not touch the CurseForge client
     validations:
       required: true
 
   - type: textarea
     id: code_pointers
     attributes:
-      label: Riferimenti nel codice
+      label: Code pointers
       description: |
-        Riferimenti `file:riga` da leggere per primi. Formato `path/to/file.rs:42`.
+        `file:line` references to read first. Format `path/to/file.rs:42`.
       placeholder: |
-        - src-tauri/src/addons/toc.rs:42 (origine dell'errore)
+        - src-tauri/src/addons/toc.rs:42 (origin of the error)
     validations:
       required: false

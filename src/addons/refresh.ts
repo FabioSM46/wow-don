@@ -1,13 +1,13 @@
-// Il risultato di `refresh_addons` (issue #126): la lista arriva sempre, gli stati solo se il
-// controllo è riuscito. Funzioni pure, senza React né I/O.
+// The result of `refresh_addons` (issue #126): the list always arrives, the statuses only if
+// the check succeeded. Pure functions, no React or I/O.
 
 import type { AddonUpdate, Refresh } from "../api";
 
-/** Gli stati di aggiornamento di un `refresh_addons`, oppure il motivo per cui mancano. */
+/** The update statuses of a `refresh_addons`, or the reason they are missing. */
 export type RefreshCheck = { error: null; updates: AddonUpdate[] } | { error: string };
 
 export function refreshCheck(result: Refresh): RefreshCheck {
-  // Un messaggio vuoto non è un motivo da mostrare: vale come errore generico.
+  // An empty message is not a reason worth showing: it counts as a generic error.
   if (result.checkError !== null) {
     return { error: result.checkError.trim() || "The update check failed." };
   }

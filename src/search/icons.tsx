@@ -1,8 +1,8 @@
-// Le due icone della tab Search (issue #229): la lente nella casella di ricerca e il segno del
-// link esterno sui pulsanti che aprono CurseForge nel browser. SVG in linea, nel colore del
-// testo, nascoste ai lettori di schermo: il testo accanto dice già cosa fanno.
+// The two icons of the Search tab (issue #229): the magnifier in the search box and the
+// external link mark on the buttons that open CurseForge in the browser. Inline SVG, in the
+// text color, hidden from screen readers: the text next to them already says what they do.
 
-/** La lente della casella di ricerca. */
+/** The magnifier of the search box. */
 export function SearchIcon() {
   return (
     <svg
@@ -19,7 +19,7 @@ export function SearchIcon() {
   );
 }
 
-/** Il link esterno: si apre nel browser, fuori dall'app. */
+/** The external link: it opens in the browser, outside the app. */
 export function ExternalLinkIcon() {
   return (
     <svg

@@ -1,8 +1,8 @@
-//! Installazioni di WoW registrate dall'utente.
+//! WoW installations registered by the user.
 //!
-//! Un'installazione è una cartella `_<flavor>_` dentro la cartella del gioco, per esempio
-//! `World of Warcraft/_retail_` o `World of Warcraft/_classic_beta_`. Ogni flavor ha i suoi
-//! `Interface/AddOns` e `WTF`, quindi è un'installazione separata.
+//! An installation is a `_<flavor>_` folder inside the game folder, for example
+//! `World of Warcraft/_retail_` or `World of Warcraft/_classic_beta_`. Each flavor has its own
+//! `Interface/AddOns` and `WTF`, so it is a separate installation.
 
 use std::path::{Path, PathBuf};
 
@@ -11,18 +11,18 @@ use serde::Serialize;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Installation {
-    /// Stabile per lo stesso percorso canonico.
+    /// Stable for the same canonical path.
     pub id: String,
-    /// Percorso canonico della cartella `_<flavor>_`.
+    /// Canonical path of the `_<flavor>_` folder.
     pub path: PathBuf,
-    /// Il nome della cartella senza i trattini bassi esterni: `_classic_beta_` → `classic_beta`.
+    /// The folder name without the outer underscores: `_classic_beta_` → `classic_beta`.
     pub flavor: String,
-    /// Nome leggibile ricavato dal flavor: `classic_beta` → `Classic Beta`.
+    /// Readable name derived from the flavor: `classic_beta` → `Classic Beta`.
     pub name: String,
 }
 
-/// Ricava il flavor dal nome della cartella: `_<flavor>_`, con il flavor fatto di lettere
-/// minuscole, cifre e `_`, che non inizia e non finisce con `_`.
+/// Derives the flavor from the folder name: `_<flavor>_`, with the flavor made of lowercase
+/// letters, digits and `_`, neither starting nor ending with `_`.
 pub fn flavor_from_dir_name(name: &str) -> Option<String> {
     let inner = name.strip_prefix('_')?.strip_suffix('_')?;
     let valid = !inner.is_empty()
@@ -50,8 +50,8 @@ pub fn display_name(flavor: &str) -> String {
         .join(" ")
 }
 
-/// Id stabile ricavato dal percorso canonico (FNV-1a a 64 bit). Non usa `DefaultHasher`, il cui
-/// algoritmo non è garantito stabile tra versioni di Rust: l'id finisce nel file salvato.
+/// Stable id derived from the canonical path (64-bit FNV-1a). It does not use `DefaultHasher`,
+/// whose algorithm is not guaranteed stable across Rust versions: the id ends up in the saved file.
 pub fn installation_id(canonical: &Path) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in canonical.as_os_str().as_encoded_bytes() {
@@ -62,9 +62,9 @@ pub fn installation_id(canonical: &Path) -> String {
 }
 
 impl Installation {
-    /// Ricava id, flavor e nome da un percorso già canonico, senza toccare il disco. È anche
-    /// quello che fa la lettura dello store: su disco si salva solo il percorso, così i campi
-    /// derivati seguono sempre il codice attuale.
+    /// Derives id, flavor and name from an already canonical path, without touching the disk.
+    /// It is also what reading the store does: only the path is saved on disk, so the derived
+    /// fields always follow the current code.
     pub fn from_canonical(path: PathBuf) -> Option<Self> {
         let flavor = path
             .file_name()
@@ -79,9 +79,9 @@ impl Installation {
     }
 }
 
-/// Toglie il prefisso "verbatim" che `canonicalize` aggiunge su Windows: `\\?\C:\x` diventa
-/// `C:\x` e `\\?\UNC\server\share` diventa `\\server\share`. Restituisce `None` se il
-/// prefisso non c'è. È una funzione di testo, così si prova su tutte le piattaforme.
+/// Removes the "verbatim" prefix that `canonicalize` adds on Windows: `\\?\C:\x` becomes
+/// `C:\x` and `\\?\UNC\server\share` becomes `\\server\share`. Returns `None` if the
+/// prefix is absent. It is a text function, so it can be tested on every platform.
 pub fn strip_verbatim_prefix(path: &str) -> Option<String> {
     let rest = path.strip_prefix(r"\\?\")?;
     if let Some(unc) = rest.strip_prefix(r"UNC\") {
@@ -100,8 +100,8 @@ fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
     Ok(simple.map(PathBuf::from).unwrap_or(canonical))
 }
 
-/// Controlla che `path` sia una cartella `_<flavor>_` esistente e costruisce l'installazione.
-/// L'assenza di `Interface/AddOns` non è un errore: vuol dire zero addon.
+/// Checks that `path` is an existing `_<flavor>_` folder and builds the installation.
+/// A missing `Interface/AddOns` is not an error: it means zero addons.
 pub fn validate(path: &Path) -> Result<Installation, String> {
     if path.as_os_str().is_empty() {
         return Err("No folder given.".to_owned());
@@ -111,7 +111,7 @@ pub fn validate(path: &Path) -> Result<Installation, String> {
     if !canonical.is_dir() {
         return Err("The given path is not a folder.".to_owned());
     }
-    // Il percorso si salva come testo JSON: uno non UTF-8 non si potrebbe salvare.
+    // The path is saved as JSON text: a non-UTF-8 one could not be saved.
     if canonical.to_str().is_none() {
         return Err("The path contains invalid characters: rename or move the folder.".to_owned());
     }
@@ -204,8 +204,8 @@ mod tests {
         assert!(Installation::from_canonical(PathBuf::from("games").join("Interface")).is_none());
     }
 
-    /// Solo su Linux: Windows non ha nomi in byte arbitrari, e APFS su macOS rifiuta di creare
-    /// un nome che non sia UTF-8 valido, quindi lì un percorso così non può esistere.
+    /// Linux only: Windows has no names in arbitrary bytes, and APFS on macOS refuses to create
+    /// a name that is not valid UTF-8, so such a path cannot exist there.
     #[cfg(target_os = "linux")]
     #[test]
     fn non_utf8_paths_are_rejected_with_a_reason() {

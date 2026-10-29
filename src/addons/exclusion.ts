@@ -1,20 +1,20 @@
-// Gli addon esclusi dall'aggiornamento automatico nella tab Installed (D41, issue #204): chi è
-// escluso, la voce del menu contestuale e l'effetto di una scelta sulla selezione multipla.
-// Funzioni pure, senza React né I/O.
+// The addons excluded from automatic updates in the Installed tab (D41, issue #204): who is
+// excluded, the context menu item and the effect of a choice on the multiple selection.
+// Pure functions, no React or I/O.
 
 import type { AddonUpdate, InstallationAutoUpdate } from "../api";
 import { groupUpdate, type AddonGroup } from "./filter.ts";
 import { projectId, type ProjectRef } from "./sources.ts";
 
 /**
- * Gli esclusi di `get_auto_update`, per identità del progetto (`projectId`): un escluso si
- * abbina a una riga con `project.source` e `project.key`, mai con `project.id`.
+ * The excluded projects of `get_auto_update`, by project identity (`projectId`): an excluded
+ * project matches a row by `project.source` and `project.key`, never by `project.id`.
  */
 export function excludedIds(state: InstallationAutoUpdate): Set<string> {
   return new Set(state.excluded.map(projectId));
 }
 
-/** La riga è esclusa: il suo progetto, se ce l'ha, è tra gli esclusi. */
+/** The row is excluded: its project, if it has one, is among the excluded. */
 export function isExcluded(
   update: AddonUpdate | undefined,
   excluded: ReadonlySet<string> | undefined,
@@ -23,7 +23,7 @@ export function isExcluded(
   return Boolean(project && excluded?.has(projectId(project)));
 }
 
-/** I progetti dei gruppi, uno per fonte e id: quelli su cui agisce la voce del menu. */
+/** The projects of the groups, one per source and id: those the menu item acts on. */
 export function exclusionProjects(
   groups: AddonGroup[],
   updates?: Map<string, AddonUpdate>,
@@ -37,9 +37,9 @@ export function exclusionProjects(
 }
 
 /**
- * Cosa fa la voce del menu: esclude (`true`) se almeno uno dei progetti partecipa ancora,
- * altrimenti li riammette tutti (`false`). Così con una selezione mista la prima scelta li
- * esclude tutti, e la seconda li riammette.
+ * What the menu item does: it excludes (`true`) if at least one of the projects still takes
+ * part, otherwise it readmits them all (`false`). So with a mixed selection the first choice
+ * excludes them all, and the second readmits them.
  */
 export function exclusionChoice(
   projects: ProjectRef[],
@@ -48,14 +48,15 @@ export function exclusionChoice(
   return projects.some((project) => !excluded?.has(projectId(project)));
 }
 
-/** Il testo della voce: "Don't auto-update" quando esclude, "Allow auto-update" quando riammette. */
+/** The item text: "Don't auto-update" when it excludes, "Allow auto-update" when it readmits. */
 export function exclusionLabel(exclude: boolean): string {
   return exclude ? "Don't auto-update" : "Allow auto-update";
 }
 
 /**
- * Chi è escluso dopo la scelta su `projects`: gli altri esclusi restano come sono. Le righe di
- * Installed lo mostrano mentre la scelta si salva; poi vale lo stato restituito dal backend.
+ * Who is excluded after the choice on `projects`: the other excluded projects stay as they are.
+ * The Installed rows show it while the choice is being saved; then the state returned by the
+ * backend applies.
  */
 export function excludedAfter(
   excluded: ReadonlySet<string>,
@@ -71,8 +72,8 @@ export function excludedAfter(
 }
 
 /**
- * Il motivo per cui la voce è disattivata, o `null`. `excluded` è `undefined` finché gli esclusi
- * non sono letti; `loadError` è l'errore di quella lettura.
+ * The reason the item is disabled, or `null`. `excluded` is `undefined` until the excluded
+ * projects have been read; `loadError` is the error of that read.
  */
 export function exclusionDisabledReason(
   projects: ProjectRef[],
@@ -105,6 +106,6 @@ export function exclusionDisabledReason(
   return null;
 }
 
-/** Il `title` del segno nella riga di un addon escluso. */
+/** The `title` of the mark in the row of an excluded addon. */
 export const EXCLUDED_TITLE =
   "Excluded from automatic updates. Right-click the row and choose Allow auto-update to include it again.";

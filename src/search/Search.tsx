@@ -55,39 +55,36 @@ import {
 
 type Props = {
   installation: Installation;
-  /** La tab è visibile: la prima ricerca parte solo quando la si apre. */
+  /** The tab is visible: the first search starts only when it is opened. */
   active: boolean;
-  /** `false` quando la chiave CurseForge manca; `null` finché lo stato non è noto. */
-  keyConfigured: boolean | null;
-  /** L'opzione della Beta (issue #141): quando cambia, la ricerca riparte. Il backend la legge
-   * da sé; qui serve solo a sapere quando i risultati non valgono più. */
+  /** The Beta option (issue #141): when it changes, the search restarts. The backend reads it
+   * on its own; here it only serves to know when the results are no longer valid. */
   betaWhenNoRelease?: boolean | null;
-  /** Un'installazione ha messo almeno un progetto nell'installazione (la tab Installed). */
+  /** An installation put at least one project into the installation (the Installed tab). */
   onInstalled?: () => void;
-  /** Le installazioni i cui addon sono cambiati altrove (tab Installed, zip, importazione):
-   * quando la tab è visibile, i loro risultati si rileggono. */
+  /** The installations whose addons changed elsewhere (Installed tab, zip, import): when the
+   * tab is visible, their results are reread. */
   stale?: ReadonlySet<string>;
-  /** Le installazioni di `stale` sono state rilette (o lo saranno alla prossima ricerca). */
+  /** The installations in `stale` have been reread (or will be at the next search). */
   onRefreshed?: (installationIds: ReadonlySet<string>) => void;
 };
 
-/** I risultati: quelli mostrati restano visibili mentre arriva una ricerca nuova. */
+/** The results: the ones shown stay visible while a new search arrives. */
 type Load = {
   results: Results | null;
   loading: boolean;
   error: string | null;
 };
 
-/** La versione del gioco scelta vale per l'installazione per cui è stata scelta. */
+/** The chosen game version applies to the installation it was chosen for. */
 type VersionChoice = { installationId: string; versionType: number | null };
 
-/** L'addon aperto nel dettaglio vale per l'installazione in cui è stato aperto. */
+/** The addon open in the detail applies to the installation it was opened in. */
 type Selection = { installationId: string; addon: CatalogAddon };
 
 export function Search({
   installation,
   active,
-  keyConfigured,
   betaWhenNoRelease,
   onInstalled,
   stale,
@@ -96,9 +93,9 @@ export function Search({
   const [started, setStarted] = useState(active);
   if (active && !started) setStarted(true);
 
-  // Il testo della casella diventa ricerca dopo una pausa di scrittura o con Invio.
+  // The text in the box becomes a search after a typing pause or with Enter.
   const [text, setText] = useState("");
-  // "Add by link" aperto dal pulsante della barra (issue #229).
+  // "Add by link" opened from the bar's button (issue #229).
   const [linkOpen, setLinkOpen] = useState(false);
   const [search, setSearch] = useState<Omit<CatalogSearch, "versionType">>(defaultSearch);
   const [versionChoice, setVersionChoice] = useState<VersionChoice | null>(null);
@@ -110,25 +107,25 @@ export function Search({
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
-  // Cambia quando gli addon dell'installazione sono cambiati: ricerca e dettaglio si rileggono
-  // con gli stessi filtri, lasciando in vista quello che c'è.
+  // Changes when the installation's addons have changed: search and detail are reread with the
+  // same filters, leaving in view what is there.
   const [refresh, setRefresh] = useState(0);
   const tracker = useRef(new RequestTracker());
-  // L'installazione dei risultati in `load`: dopo un cambio restano in vista quelli di prima
-  // finché non arriva la risposta nuova.
+  // The installation of the results in `load`: after a change the previous ones stay in view
+  // until the new response arrives.
   const resultsOf = useRef<string | null>(null);
 
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
   const [categoriesError, setCategoriesError] = useState<string | null>(null);
   const [versionTypes, setVersionTypes] = useState<VersionType[]>([]);
 
-  // Il dettaglio prende il posto dei risultati, che restano montati e nascosti: ricerca,
-  // filtri e pagine caricate non cambiano, e lo scorrimento si ripristina al ritorno.
+  // The detail takes the place of the results, which stay mounted and hidden: search, filters
+  // and loaded pages do not change, and the scroll position is restored on return.
   const [selection, setSelection] = useState<Selection | null>(null);
-  // L'ultima riga aperta resta segnata dopo il ritorno, e riceve il focus.
+  // The last opened row stays marked after returning, and receives focus.
   const [lastSelectedId, setLastSelectedId] = useState<number | null>(null);
-  // Un'altra installazione ha altri risultati: il dettaglio aperto nella precedente si chiude
-  // e non torna quando si torna a quella.
+  // Another installation has other results: the detail opened in the previous one closes and
+  // does not come back when returning to it.
   if (selection && selection.installationId !== installation.id) {
     setSelection(null);
     setLastSelectedId(null);
@@ -138,13 +135,11 @@ export function Search({
   const savedScroll = useRef(0);
   const shown = useRef({ open: false, installationId: installation.id });
 
-  const missingKey = keyConfigured === false;
-
-  // Le installazioni avviate nella sessione e i progetti installati dopo la risposta della
-  // ricerca, che il segno "installato" della risposta non conosce ancora.
+  // The installations started in the session and the projects installed after the search
+  // response, which the response's "installed" mark does not know about yet.
   const [runs, setRuns] = useState<Map<string, InstallRun>>(new Map());
   const [installedKeys, setInstalledKeys] = useState<Set<string>>(new Set());
-  // L'ultima installazione avviata: il suo esito si mostra sopra i risultati.
+  // The last installation started: its outcome is shown above the results.
   const [lastInstall, setLastInstall] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const installedHere = useMemo(() => {
@@ -156,9 +151,9 @@ export function Search({
     return ids;
   }, [installedKeys, installation.id]);
 
-  // L'avanzamento delle installazioni in corso (issue #128), dipendenze comprese.
-  // Le installazioni in corso stanno anche in un ref, aggiornato subito: il primo evento può
-  // arrivare prima che lo stato `runs` sia riletto.
+  // The progress of the installations in progress (issue #128), dependencies included.
+  // The installations in progress are also kept in a ref, updated immediately: the first event
+  // can arrive before the `runs` state is read again.
   const [runProgress, setRunProgress] = useState<RunProgress>(noRunProgress);
   const runningRuns = useRef(new Map<string, Set<string>>());
   useInstallProgress(installation.id, (event) => {
@@ -166,29 +161,30 @@ export function Search({
     setRunProgress((previous) => withRunProgress(previous, event, installation.id, running));
   });
 
-  // Il mirror GitHub dei progetti bloccati (issue #165), per installazione e progetto: chiesto
-  // da solo per i bloccati visibili con un repository GitHub (issue #223, al massimo
-  // `MIRROR_CHECKS_AT_ONCE` alla volta), dal dettaglio o da Install, e ricordato per la sessione.
-  // `checking` evita due richieste per lo stesso progetto; `mirrorGen` scarta le risposte
-  // arrivate dopo che gli esiti sono stati dimenticati. `autoRunning` conta i controlli
-  // automatici ancora senza risposta, anche di una generazione vecchia; `autoSettled` cambia a
-  // ogni risposta e fa partire i successivi. `autoPaused`: un controllo automatico è fallito
-  // (CurseForge o la rete non rispondono), quindi gli altri non partono più da soli fino alla
-  // ricerca o alla generazione successiva; Install e il dettaglio continuano a chiedere.
+  // The GitHub mirror of blocked projects (issue #165), per installation and project: requested
+  // automatically for the visible blocked ones with a GitHub repository (issue #223, at most
+  // `MIRROR_CHECKS_AT_ONCE` at a time), from the detail or from Install, and remembered for the
+  // session. `checking` avoids two requests for the same project; `mirrorGen` discards responses
+  // that arrive after the outcomes have been forgotten. `autoRunning` counts the automatic
+  // checks still without a response, even from an old generation; `autoSettled` changes on
+  // every response and starts the next ones. `autoPaused`: an automatic check failed
+  // (CurseForge or the network is not responding), so the others no longer start on their own
+  // until the next search or generation; Install and the detail keep requesting.
   const [mirrors, setMirrors] = useState<Map<string, MirrorCheck>>(new Map());
   const checking = useRef(new Set<string>());
   const mirrorGen = useRef(0);
   const autoRunning = useRef(0);
   const autoPaused = useRef(false);
   const [autoSettled, setAutoSettled] = useState(0);
-  /** L'esito che vale per `addon` in questa installazione (un bloccato senza repository è già
-   *  "website only"). */
+  /** The outcome that applies to `addon` in this installation (a blocked one without a
+   *  repository is already "website only"). */
   const mirrorOf = (addon: CatalogAddon) =>
     mirrorCheckFor(addon, mirrors.get(installKey(installation.id, addon.id)));
 
-  // L'opzione della Beta cambia il file che l'app installerebbe, e con lui il mirror: gli esiti,
-  // le richieste in corso e i motivi già mostrati non valgono più. Una risposta arrivata dopo
-  // si scarta (`mirrorGen`), così un nuovo clic su Install fa subito una richiesta nuova.
+  // The Beta option changes the file the app would install, and with it the mirror: the
+  // outcomes, the requests in progress and the reasons already shown are no longer valid. A
+  // response arriving later is discarded (`mirrorGen`), so a new click on Install makes a new
+  // request right away.
   useEffect(() => {
     mirrorGen.current += 1;
     autoPaused.current = false;
@@ -204,7 +200,7 @@ export function Search({
     setRuns((previous) => new Map(previous).set(key, run));
   }
 
-  /** Con l'esito del controllo: installa, oppure dice perché il progetto resta sul sito. */
+  /** With the check's outcome: installs, or says why the project stays on the site. */
   function installChecked(addon: CatalogAddon, check: MirrorCheck) {
     const step = mirrorStep(check);
     if (step.kind === "install") {
@@ -223,8 +219,8 @@ export function Search({
     setPageError(null);
   }
 
-  /** Chiede a `github_mirror` il mirror di `addon`; con `installAfter` poi lo installa. `auto`:
-   *  il controllo automatico della lista, contato in `autoRunning`. */
+  /** Asks `github_mirror` for the mirror of `addon`; with `installAfter` it then installs it.
+   *  `auto`: the automatic check of the list, counted in `autoRunning`. */
   function checkMirror(addon: CatalogAddon, installAfter: boolean, auto = false) {
     const id = installation.id;
     const key = installKey(id, addon.id);
@@ -232,8 +228,8 @@ export function Search({
     checking.current.add(key);
     if (auto) autoRunning.current += 1;
     const gen = mirrorGen.current;
-    // Una risposta di una generazione vecchia non scrive niente e non installa: il file che ha
-    // controllato non è più quello che `install_addon` sceglierebbe.
+    // A response from an old generation writes nothing and does not install: the file it
+    // checked is no longer the one `install_addon` would choose.
     const current = () => gen === mirrorGen.current;
     const setCheck = (check: MirrorCheck) =>
       setMirrors((previous) => new Map(previous).set(key, check));
@@ -241,7 +237,7 @@ export function Search({
     if (installAfter) {
       setLastInstall(key);
       setPageError(null);
-      // L'esito di prima (un errore) non descrive questo tentativo.
+      // The previous outcome (an error) does not describe this attempt.
       setRuns((previous) => {
         if (!previous.has(key)) return previous;
         const next = new Map(previous);
@@ -277,7 +273,7 @@ export function Search({
       });
   }
 
-  /** Install: subito per un progetto scaricabile, dal mirror GitHub per uno bloccato. */
+  /** Install: right away for a downloadable project, from the GitHub mirror for a blocked one. */
   function requestInstall(addon: CatalogAddon) {
     if (!isBlocked(addon)) {
       install(addon);
@@ -316,7 +312,7 @@ export function Search({
       },
       (err) => setRun({ status: "failed", message: errorMessage(err) }),
     )
-      // Non c'è una fase finale: la barra si chiude quando il comando restituisce gli esiti.
+      // There is no final phase: the bar closes when the command returns the outcomes.
       .finally(() => {
         running.delete(run);
         setRunProgress((previous) => withoutRun(previous, run));
@@ -348,8 +344,8 @@ export function Search({
     );
   }
 
-  /** La frase del dettaglio per un addon bloccato: l'esito del mirror, o l'errore con un nuovo
-   *  tentativo. */
+  /** The detail's sentence for a blocked addon: the mirror outcome, or the error with a
+   *  retry. */
   function renderBlockedNote(addon: CatalogAddon) {
     if (addon.installed) {
       return (
@@ -384,15 +380,16 @@ export function Search({
     setPageError(null);
   }
 
-  // L'errore di un link aperto nel dettaglio non riguarda i risultati, e viceversa.
+  // The error of a link opened in the detail does not concern the results, and vice versa.
   const closeDetail = useCallback(() => {
     setSelection(null);
     setPageError(null);
   }, []);
 
-  // Il dettaglio di un addon bloccato e non installato chiede subito il mirror GitHub, una
-  // volta per sessione: Install e la frase sotto il nome lo mostrano (issue #165). L'esito già
-  // chiesto dalla riga (anche in corso) vale anche qui; senza repository non si chiede niente.
+  // The detail of a blocked, not installed addon asks for the GitHub mirror right away, once
+  // per session: Install and the sentence below the name show it (issue #165). An outcome
+  // already requested by the row (even in progress) applies here too; without a repository
+  // nothing is requested.
   const detailBlocked =
     selected !== null &&
     isBlocked(selected) &&
@@ -402,13 +399,13 @@ export function Search({
     if (!selected || !detailBlocked) return;
     if (mirrors.has(installKey(installation.id, selected.id))) return;
     checkMirror(selected, false);
-    // Solo all'apertura (o quando l'addon diventa da controllare): un errore non riprova da sé.
+    // Only on opening (or when the addon becomes one to check): an error does not retry by itself.
   }, [selected?.id, detailBlocked, installation.id]);
 
-  // Prima del disegno: il dettaglio parte dall'alto, i risultati tornano dove erano, con il
-  // focus sulla riga da cui si era partiti.
-  // Con un cambio di installazione non si ripristina niente: lo scorrimento salvato e la riga
-  // appartengono ai risultati dell'installazione di prima.
+  // Before painting: the detail starts from the top, the results go back to where they were,
+  // with focus on the row they started from.
+  // On an installation change nothing is restored: the saved scroll position and the row
+  // belong to the results of the previous installation.
   useLayoutEffect(() => {
     const open = selected !== null;
     const previous = shown.current;
@@ -424,9 +421,9 @@ export function Search({
       ?.focus({ preventScroll: true });
   }, [selected, installation.id]);
 
-  // Categorie e versioni del gioco non cambiano durante la sessione: una richiesta sola.
+  // Categories and game versions do not change during the session: a single request.
   useEffect(() => {
-    if (!started || missingKey) return;
+    if (!started) return;
     api
       .listCategories()
       .then(setCategories)
@@ -435,7 +432,7 @@ export function Search({
       .listVersionTypes()
       .then(setVersionTypes)
       .catch(() => setVersionTypes([]));
-  }, [started, missingKey]);
+  }, [started]);
 
   useEffect(() => {
     const query = normalizeQuery(text);
@@ -446,9 +443,9 @@ export function Search({
     return () => clearTimeout(timer);
   }, [text]);
 
-  // Una ricerca nuova riparte dalla prima pagina; solo l'ultima risposta si applica.
+  // A new search restarts from the first page; only the last response applies.
   useEffect(() => {
-    if (!started || missingKey) return;
+    if (!started) return;
     const id = tracker.current.next();
     setLoad((previous) => ({ ...previous, loading: true, error: null }));
     setLoadingMore(false);
@@ -458,8 +455,8 @@ export function Search({
       .then((page) => {
         if (!tracker.current.isLatest(id)) return;
         resultsOf.current = installation.id;
-        // Una ricerca nuova riprova i controlli automatici dei progetti nuovi; quelli falliti
-        // restano falliti (riprova Install).
+        // A new search retries the automatic checks of the new projects; the failed ones stay
+        // failed (Install retries).
         autoPaused.current = false;
         setLoad({ results: firstPage(page), loading: false, error: null });
       })
@@ -467,13 +464,13 @@ export function Search({
         if (!tracker.current.isLatest(id)) return;
         setLoad({ results: null, loading: false, error: errorMessage(err) });
       });
-  }, [started, missingKey, installation.id, params, retry, refresh, betaWhenNoRelease]);
+  }, [started, installation.id, params, retry, refresh, betaWhenNoRelease]);
 
-  // I bloccati visibili con un repository GitHub si controllano da soli (issue #223), nell'ordine
-  // della lista e al massimo `MIRROR_CHECKS_AT_ONCE` alla volta. Solo con i risultati della
-  // ricerca attuale: durante una ricerca nuova quelli in vista sono di prima. Quelli non ancora
-  // partiti non sono una coda: cambiando ricerca o pagina si sceglie di nuovo tra le righe in
-  // vista, e gli esiti già arrivati restano per la sessione.
+  // The visible blocked ones with a GitHub repository are checked automatically (issue #223),
+  // in list order and at most `MIRROR_CHECKS_AT_ONCE` at a time. Only with the results of the
+  // current search: during a new search the ones in view are from before. Those not yet
+  // started are not a queue: changing search or page picks again among the rows in view, and
+  // the outcomes already received stay for the session.
   useEffect(() => {
     if (load.loading || !load.results || resultsOf.current !== installation.id) return;
     if (autoPaused.current) return;
@@ -488,23 +485,23 @@ export function Search({
     for (const addon of mirrorsToCheck(visible, known, slots)) checkMirror(addon, false, true);
   }, [load.loading, load.results, installedHere, mirrors, autoSettled, installation.id]);
 
-  // Addon tolti, reinstallati o installati fuori dalla Search: il segno "installato" dei
-  // risultati, i progetti installati nella sessione e gli esiti finiti non valgono più. Le
-  // installazioni in corso restano. Le altre installazioni rileggono comunque la ricerca quando
-  // si torna su di loro.
+  // Addons removed, reinstalled or installed outside Search: the results' "installed" mark,
+  // the projects installed in the session and the finished outcomes are no longer valid. The
+  // installations in progress stay. The other installations reread the search anyway when
+  // the user goes back to them.
   useEffect(() => {
     if (!active || !stale || stale.size === 0) return;
     setInstalledKeys((previous) => forgetInstalled(previous, stale));
     setRuns((previous) => forgetFinishedRuns(previous, stale));
-    // Prima ricerca mai partita (la tab si apre ora): l'effetto della ricerca la fa in questo
-    // stesso passaggio, già con gli addon nuovi; un `refresh` ne farebbe una seconda uguale.
+    // First search never started (the tab opens now): the search effect runs it in this same
+    // pass, already with the new addons; a `refresh` would run a second identical one.
     const firstSearch = load.results === null && !load.loading && load.error === null;
     if (stale.has(installation.id) && !firstSearch) {
       setRefresh((n) => n + 1);
-      // Il segno "installato" della riga è una copia di prima: il dettaglio lo riprende dal
-      // `AddonDetail` riletto (`detail.installed || addon.installed` in AddonDetailView), che
-      // per un addon ancora presente (Update, Reinstall) resta vero. Senza questo un addon
-      // rimosso resterebbe "Installed" per via della copia.
+      // The row's "installed" mark is a copy from before: the detail takes it again from the
+      // reread `AddonDetail` (`detail.installed || addon.installed` in AddonDetailView), which
+      // for an addon still present (Update, Reinstall) stays true. Without this a removed
+      // addon would stay "Installed" because of the copy.
       setSelection((previous) =>
         previous && stale.has(previous.installationId) && previous.addon.installed
           ? { ...previous, addon: { ...previous.addon, installed: false } }
@@ -548,36 +545,22 @@ export function Search({
     setSearch((previous) => ({ ...previous, query: "", categoryId: null }));
   }
 
-  // "Add by link" non usa CurseForge: resta anche senza la chiave, e allora è sempre aperto.
-  // Con la chiave si apre dal pulsante della barra (issue #229), che esiste solo in quel
-  // ramo: senza chiave il ritorno anticipato qui sotto non disegna la barra. Chiuso nasconde
-  // solo il campo: anteprima, avanzamento ed esito restano in vista, e restano montati. Il suo
-  // stato vale per l'installazione, quindi si rimonta quando cambia.
+  // "Add by link" opens from the bar's button (issue #229). Closed hides only the field:
+  // preview, progress and outcome stay in view, and stay mounted. Its state applies to the
+  // installation, so it remounts when that changes.
   const addByLink = (
     <AddByLink
       key={installation.id}
       id="add-by-link"
-      open={missingKey || linkOpen}
+      open={linkOpen}
       installationId={installation.id}
       onInstalled={() => {
         onInstalled?.();
-        // Il progetto installato dal link può essere nei risultati.
+        // The project installed from the link can be in the results.
         setRefresh((n) => n + 1);
       }}
     />
   );
-
-  if (missingKey) {
-    return (
-      <section aria-label="Search">
-        {addByLink}
-        <p className="empty">
-          Search needs a CurseForge API key. Set <code>CURSEFORGE_API_KEY</code> in the{" "}
-          <code>.env</code> file and restart the app.
-        </p>
-      </section>
-    );
-  }
 
   const options = categoryOptions(categories);
   const results = load.results;
@@ -782,7 +765,7 @@ export function Search({
   );
 }
 
-/** La chiave di un'installazione della Search negli eventi di avanzamento: un progetto CurseForge. */
+/** The key of a Search installation in progress events: a CurseForge project. */
 function curseforgeRun(modId: number): string {
   return projectId({ source: "curseforge", key: String(modId) });
 }

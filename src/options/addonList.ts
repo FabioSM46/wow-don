@@ -1,5 +1,5 @@
-// Import/export degli addon in Options (issue #135): i conteggi e i testi di export, anteprima
-// e risultato. Funzioni pure, senza React né I/O.
+// Addon import/export in Options (issue #135): the counts and the texts of export, preview
+// and result. Pure functions, no React or I/O.
 
 import type { ExportResult, ImportPreview, ImportResult, PreviewEntry } from "../api";
 import { PHASE_ORDER, type ProgressPhase } from "../addons/progress.ts";
@@ -36,7 +36,7 @@ export function previewCounts(preview: ImportPreview): PreviewCounts {
   };
 }
 
-/** "3 new · 8 already installed · 1 not downloadable · 1 invalid entry", senza i conteggi a zero. */
+/** "3 new · 8 already installed · 1 not downloadable · 1 invalid entry", without zero counts. */
 export function previewSummary(preview: ImportPreview): string {
   const counts = previewCounts(preview);
   const parts: string[] = [];
@@ -47,22 +47,23 @@ export function previewSummary(preview: ImportPreview): string {
   return parts.length > 0 ? parts.join(" · ") : "This list has no addons.";
 }
 
-/** Gli id (`projectId`) dei progetti che l'import installerà. */
+/** The ids (`projectId`) of the projects the import will install. */
 export function newProjects(preview: ImportPreview): string[] {
   return preview.entries.filter((entry) => entry.state === "new").map(projectId);
 }
 
-/** La fase più avanzata tra quella già vista per un progetto e quella di un nuovo evento. */
+/** The most advanced phase between the one already seen for a project and a new event's. */
 export function furthestPhase(seen: ProgressPhase | undefined, phase: ProgressPhase): ProgressPhase {
   return seen !== undefined && PHASE_ORDER.indexOf(seen) > PHASE_ORDER.indexOf(phase) ? seen : phase;
 }
 
 /**
- * "Downloading 7 of 12", poi "Installing 3 of 12" (issue #180): il backend scarica più progetti
- * nuovi insieme, poi li installa uno alla volta. `reached` è la fase più avanzata vista per ogni
- * progetto, `current` quella dell'ultimo evento: dice se l'import sta scaricando o installando.
- * "Downloading" conta gli zip già scaricati; "Installing" la posizione di quello in corso,
- * almeno 1.
+ * "Downloading 7 of 12", then "Installing 3 of 12" (issue #180): the backend downloads several
+ * new projects together, then installs them one at a time. `reached` is the most advanced phase
+ * seen for each project, `current` that of the latest event: it says whether the import is
+ * downloading or installing. "Downloading" counts the zips already downloaded; "Installing" the
+ * position of the one in progress,
+ * at least 1.
  */
 export function importProgressText(
   reached: ReadonlyMap<string, ProgressPhase>,
@@ -85,9 +86,9 @@ export function importProgressText(
 export type ImportSummary = {
   /** "Installed 3 · 8 already installed · 1 skipped · 1 failed · removed 4 folders". */
   headline: string;
-  /** Una riga per ogni progetto non installato e per ogni problema di "Replace all". */
+  /** One line for each project not installed and for each "Replace all" problem. */
   problems: string[];
-  /** Vero se qualcosa è andato storto e il riepilogo va mostrato come errore. */
+  /** True if something went wrong and the summary must be shown as an error. */
   failed: boolean;
 };
 

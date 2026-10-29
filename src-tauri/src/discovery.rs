@@ -1,17 +1,17 @@
-//! Ricerca automatica delle installazioni di WoW nei percorsi standard (issue #87).
+//! Automatic discovery of WoW installations in the standard paths (issue #87).
 //!
-//! Due parti separate:
+//! Two separate parts:
 //!
-//! - [`candidate_roots`] costruisce l'elenco delle cartelle `World of Warcraft` da guardare e
-//!   dipende dalla piattaforma (Windows: dischi e registro; macOS: le due `Applications`;
-//!   Linux: le cartelle del gioco dentro i prefissi Wine della home, issue #88);
-//! - [`examine`] è comune a tutte le piattaforme: legge solo le cartelle candidate e i loro
-//!   figli diretti, e tiene le cartelle `_<flavor>_` valide secondo
-//!   [`installations::validate`], la stessa regola dell'aggiunta manuale, che contengono
-//!   ancora il gioco ([`has_game_files`]).
+//! - [`candidate_roots`] builds the list of `World of Warcraft` folders to look at and
+//!   depends on the platform (Windows: drives and registry; macOS: the two `Applications`;
+//!   Linux: the game folders inside the Wine prefixes in the home, issue #88);
+//! - [`examine`] is common to all platforms: it reads only the candidate folders and their
+//!   direct children, and keeps the `_<flavor>_` folders that are valid according to
+//!   [`installations::validate`], the same rule as manual adding, and that still contain
+//!   the game ([`has_game_files`]).
 //!
-//! Il modulo suggerisce soltanto: non scrive mai `installations.json`. Non scrive log, così
-//! nessun percorso della macchina finisce in un messaggio.
+//! The module only suggests: it never writes `installations.json`. It writes no logs, so
+//! no machine path ends up in a message.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -20,11 +20,11 @@ use serde::Serialize;
 
 use crate::installations::{self, Installation};
 
-/// Una cartella `World of Warcraft` da esaminare, con il testo che dice da dove viene.
+/// A `World of Warcraft` folder to examine, with the text that says where it comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub path: PathBuf,
-    /// Testo breve in inglese mostrato all'utente, per esempio `"Program Files (x86)"`.
+    /// Short English text shown to the user, for example `"Program Files (x86)"`.
     pub origin: String,
 }
 
@@ -37,8 +37,8 @@ impl Candidate {
     }
 }
 
-/// Un'installazione trovata e non ancora aggiunta: gli stessi `path`, `flavor` e `name` di
-/// [`Installation`], più la provenienza.
+/// An installation found and not yet added: the same `path`, `flavor` and `name` as
+/// [`Installation`], plus the origin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveredInstallation {
@@ -59,11 +59,11 @@ impl DiscoveredInstallation {
     }
 }
 
-/// Esamina le candidate nell'ordine dato e restituisce le cartelle `_<flavor>_` figlie dirette
-/// valide, senza duplicati (stesso percorso canonico, cioè stesso id: vale la prima candidata
-/// che l'ha trovata) e senza quelle già in `known`. Dentro una candidata l'ordine è quello dei
-/// nomi delle cartelle. Una candidata che non esiste o non si legge si salta senza errore, e
-/// così ogni figlio che non si riesce a leggere.
+/// Examines the candidates in the given order and returns the valid direct-child `_<flavor>_`
+/// folders, without duplicates (same canonical path, i.e. same id: the first candidate that
+/// found it wins) and without those already in `known`. Within a candidate the order is that of
+/// the folder names. A candidate that does not exist or cannot be read is skipped without error,
+/// and so is every child that cannot be read.
 pub fn examine(candidates: &[Candidate], known: &[Installation]) -> Vec<DiscoveredInstallation> {
     let mut seen: HashSet<String> = known.iter().map(|k| k.id.clone()).collect();
     let mut found = Vec::new();
@@ -83,14 +83,14 @@ pub fn examine(candidates: &[Candidate], known: &[Installation]) -> Vec<Discover
     found
 }
 
-/// Se la cartella `_<flavor>_` contiene ancora il gioco: il file `.flavor.info` che il launcher
-/// scrive in ogni cartella installata, un eseguibile `Wow*.exe` (Windows e Wine: `Wow.exe`,
-/// `WowClassic.exe`, `WowB.exe`, `WowT.exe`) o un bundle `*.app` (macOS: il bundle sta dentro
-/// la cartella, per esempio `_retail_/World of Warcraft.app`, ed è una cartella, non un file
-/// che un residuo potrebbe imitare). Disinstallando una
-/// versione, il launcher lascia la cartella con qualche file residuo (librerie, `D3D12`) ma
-/// senza nessuno di questi: non è un'installazione da suggerire. Nomi senza distinguere
-/// maiuscole e minuscole, come il gioco.
+/// Whether the `_<flavor>_` folder still contains the game: the `.flavor.info` file the launcher
+/// writes in every installed folder, a `Wow*.exe` executable (Windows and Wine: `Wow.exe`,
+/// `WowClassic.exe`, `WowB.exe`, `WowT.exe`) or a `*.app` bundle (macOS: the bundle sits inside
+/// the folder, for example `_retail_/World of Warcraft.app`, and is a folder, not a file
+/// that a leftover could imitate). When uninstalling a
+/// version, the launcher leaves the folder with a few leftover files (libraries, `D3D12`) but
+/// with none of these: it is not an installation to suggest. Names are case-insensitive,
+/// like the game.
 fn has_game_files(dir: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return false;
@@ -103,8 +103,8 @@ fn has_game_files(dir: &Path) -> bool {
     })
 }
 
-/// I figli diretti di `root` con un nome `_<flavor>_`, ordinati per nome. Una sola lettura
-/// della cartella, nessuna visita ricorsiva; `validate` controlla poi che siano cartelle.
+/// The direct children of `root` with a `_<flavor>_` name, sorted by name. A single read
+/// of the folder, no recursive walk; `validate` then checks that they are folders.
 fn flavor_children(root: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
@@ -124,11 +124,11 @@ fn flavor_children(root: &Path) -> Vec<PathBuf> {
     children
 }
 
-/// Ricava la cartella del gioco dal valore `InstallPath` del registro di Windows. Se il valore
-/// punta già a una cartella `_<flavor>_` (per esempio `...\World of Warcraft\_retail_\`) si
-/// restituisce la cartella sopra di essa. È una funzione di testo, così si prova su tutte le
-/// piattaforme: accetta sia `\` sia `/` come separatore. Un valore vuoto non dà niente.
-// La usa solo la lettura del registro di Windows, ma i test girano su tutte le piattaforme.
+/// Derives the game folder from the `InstallPath` value of the Windows registry. If the value
+/// already points to a `_<flavor>_` folder (for example `...\World of Warcraft\_retail_\`) the
+/// folder above it is returned. It is a text function, so it is tested on all
+/// platforms: it accepts both `\` and `/` as separator. An empty value yields nothing.
+// Only the Windows registry read uses it, but the tests run on all platforms.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn game_dir_from_install_path(value: &str) -> Option<PathBuf> {
     let trimmed = value.trim().trim_end_matches(['\\', '/']);
@@ -148,7 +148,7 @@ pub fn game_dir_from_install_path(value: &str) -> Option<PathBuf> {
     Some(absolute_drive(parent))
 }
 
-/// `C:` da solo indica la cartella corrente del disco, non la sua radice: diventa `C:\`.
+/// `C:` alone means the drive's current folder, not its root: it becomes `C:\`.
 fn absolute_drive(path: &str) -> PathBuf {
     if path.ends_with(':') {
         PathBuf::from(format!("{path}\\"))
@@ -159,14 +159,14 @@ fn absolute_drive(path: &str) -> PathBuf {
 
 const GAME_DIR: &str = "World of Warcraft";
 
-/// Le cartelle `World of Warcraft` da esaminare su Windows: prima quelle indicate dal registro,
-/// poi i percorsi standard su ogni disco presente da C a Z. `home` non serve qui.
+/// The `World of Warcraft` folders to examine on Windows: first those named by the registry,
+/// then the standard paths on every drive present from C to Z. `home` is not needed here.
 ///
-/// Limite noto: il controllo di ogni lettera tocca anche le unità rimovibili senza supporto e
-/// le unità di rete mappate; una di rete disconnessa può far attendere il sistema qualche
-/// secondo per lettera. Il comando gira in `spawn_blocking`, quindi la finestra non si blocca,
-/// ma la risposta può tardare. Filtrare per tipo di unità (`GetDriveTypeW`) richiederebbe una
-/// dipendenza diretta da `windows-sys`, non approvata per questa issue.
+/// Known limit: checking each letter also touches removable drives with no media and
+/// mapped network drives; a disconnected network drive can make the system wait a few
+/// seconds per letter. The command runs in `spawn_blocking`, so the window does not freeze,
+/// but the answer may be late. Filtering by drive type (`GetDriveTypeW`) would require a
+/// direct dependency on `windows-sys`, not approved for this issue.
 #[cfg(target_os = "windows")]
 pub fn candidate_roots(_home: Option<&Path>) -> Vec<Candidate> {
     let mut candidates: Vec<Candidate> = registry_install_paths()
@@ -191,8 +191,8 @@ pub fn candidate_roots(_home: Option<&Path>) -> Vec<Candidate> {
     candidates
 }
 
-/// I valori `InstallPath` della chiave di Blizzard, nella vista a 32 bit (`WOW6432Node`) e in
-/// quella nativa. Una chiave o un valore mancante non è un errore: semplicemente non c'è.
+/// The `InstallPath` values of the Blizzard key, in the 32-bit view (`WOW6432Node`) and in
+/// the native one. A missing key or value is not an error: it simply is not there.
 #[cfg(target_os = "windows")]
 fn registry_install_paths() -> Vec<String> {
     use winreg::RegKey;
@@ -214,8 +214,8 @@ fn registry_install_paths() -> Vec<String> {
     .collect()
 }
 
-/// Le cartelle `World of Warcraft` da esaminare su macOS: quella di sistema e quella
-/// dell'utente, con la home chiesta a Tauri dal chiamante.
+/// The `World of Warcraft` folders to examine on macOS: the system one and the user's
+/// one, with the home asked of Tauri by the caller.
 #[cfg(target_os = "macos")]
 pub fn candidate_roots(home: Option<&Path>) -> Vec<Candidate> {
     let mut candidates = vec![Candidate::new(
@@ -231,21 +231,21 @@ pub fn candidate_roots(home: Option<&Path>) -> Vec<Candidate> {
     candidates
 }
 
-/// Su Linux il gioco gira dentro un prefisso Wine: le candidate sono le cartelle del gioco
-/// nei prefissi trovati sotto la home chiesta a Tauri (vedi [`wine_candidates`]). Senza home
-/// non c'è niente da cercare.
+/// On Linux the game runs inside a Wine prefix: the candidates are the game folders
+/// in the prefixes found under the home asked of Tauri (see [`wine_candidates`]). Without a home
+/// there is nothing to search.
 #[cfg(target_os = "linux")]
 pub fn candidate_roots(home: Option<&Path>) -> Vec<Candidate> {
     home.map(wine_candidates).unwrap_or_default()
 }
 
-/// Le cartelle `Program Files` dove Battle.net installa il gioco dentro `drive_c`, nell'ordine
-/// in cui si guardano.
+/// The `Program Files` folders where Battle.net installs the game inside `drive_c`, in the order
+/// in which they are checked.
 const PROGRAM_FILES: [&str; 2] = ["Program Files (x86)", "Program Files"];
 
-/// Le cartelle `World of Warcraft` dentro i prefissi Wine sotto `home`, due per prefisso
-/// (`Program Files (x86)` e `Program Files`), nell'ordine di [`wine_prefixes`]. È comune a
-/// tutte le piattaforme così i test girano ovunque; la chiama solo la parte Linux.
+/// The `World of Warcraft` folders inside the Wine prefixes under `home`, two per prefix
+/// (`Program Files (x86)` and `Program Files`), in the order of [`wine_prefixes`]. It is common to
+/// all platforms so the tests run everywhere; only the Linux part calls it.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn wine_candidates(home: &Path) -> Vec<Candidate> {
     let mut candidates = Vec::new();
@@ -259,13 +259,13 @@ pub fn wine_candidates(home: &Path) -> Vec<Candidate> {
     candidates
 }
 
-/// I prefissi Wine sotto `home`, ciascuno come la sua cartella `drive_c` con la provenienza da
-/// mostrare: `.wine`, i figli diretti di `Games` (Lutris), i bottle di Bottles nativo e Flatpak
-/// e i `pfx` di Steam/Proton. Solo questi livelli fissi, nessuna visita ricorsiva; una cartella
-/// è un prefisso solo se contiene `drive_c`. Lo stesso prefisso raggiunto due volte (per
-/// esempio `.steam/steam`, che di norma è un link a `.local/share/Steam`) compare una volta
-/// sola, con la prima provenienza: si confronta il percorso canonico, o quello così com'è se
-/// non si riesce a canonicalizzarlo. La provenienza non contiene mai la home.
+/// The Wine prefixes under `home`, each as its `drive_c` folder with the origin to
+/// show: `.wine`, the direct children of `Games` (Lutris), the bottles of native and Flatpak
+/// Bottles and the Steam/Proton `pfx`. Only these fixed levels, no recursive walk; a folder
+/// is a prefix only if it contains `drive_c`. The same prefix reached twice (for
+/// example `.steam/steam`, which is usually a link to `.local/share/Steam`) appears only
+/// once, with the first origin: the canonical path is compared, or the path as it is if
+/// it cannot be canonicalized. The origin never contains the home.
 fn wine_prefixes(home: &Path) -> Vec<(PathBuf, String)> {
     let mut prefixes = vec![(home.join(".wine"), "Wine prefix (~/.wine)".to_owned())];
     for (name, path) in child_dirs(&home.join("Games")) {
@@ -313,15 +313,15 @@ fn wine_prefixes(home: &Path) -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-/// `base` con i nomi aggiunti uno alla volta, senza separatori scritti a mano.
+/// `base` with the names appended one at a time, without hand-written separators.
 fn join_all(base: &Path, names: &[&str]) -> PathBuf {
     names
         .iter()
         .fold(base.to_path_buf(), |path, name| path.join(name))
 }
 
-/// Le cartelle figlie dirette di `dir`, con il nome, ordinate per nome. I link a cartelle
-/// contano come cartelle. Una cartella che non si legge non ha figli.
+/// The direct child folders of `dir`, with their name, sorted by name. Links to folders
+/// count as folders. A folder that cannot be read has no children.
 fn child_dirs(dir: &Path) -> Vec<(String, PathBuf)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -339,9 +339,9 @@ fn child_dirs(dir: &Path) -> Vec<(String, PathBuf)> {
     children
 }
 
-/// La cartella figlia di `dir` che si chiama `name` senza distinguere maiuscole e minuscole,
-/// come fa il gioco sotto Wine. Se ce ne sono più di una vince il nome identico, poi il primo in
-/// ordine di nome.
+/// The child folder of `dir` named `name`, case-insensitively,
+/// as the game does under Wine. If there is more than one, the identical name wins, then the
+/// first in name order.
 fn child_ignoring_case(dir: &Path, name: &str) -> Option<PathBuf> {
     child_dirs(dir)
         .into_iter()
@@ -350,13 +350,13 @@ fn child_ignoring_case(dir: &Path, name: &str) -> Option<PathBuf> {
         .map(|(_, path)| path)
 }
 
-/// Come [`child_ignoring_case`], ma se la cartella non c'è restituisce `dir/name`: la candidata
-/// resta nell'elenco e [`examine`] la salta.
+/// Like [`child_ignoring_case`], but if the folder is not there it returns `dir/name`: the
+/// candidate stays in the list and [`examine`] skips it.
 fn child_or_join(dir: &Path, name: &str) -> PathBuf {
     child_ignoring_case(dir, name).unwrap_or_else(|| dir.join(name))
 }
 
-/// Le altre piattaforme non sono supportate: nessuna candidata.
+/// Other platforms are not supported: no candidates.
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub fn candidate_roots(_home: Option<&Path>) -> Vec<Candidate> {
     Vec::new()
@@ -367,8 +367,8 @@ mod tests {
     use super::*;
     use crate::test_support::TempDir;
 
-    /// Crea le cartelle; quelle con un nome `_<flavor>_` ricevono anche il `.flavor.info` di
-    /// un'installazione vera.
+    /// Creates the folders; those with a `_<flavor>_` name also get the `.flavor.info` of
+    /// a real installation.
     fn make_dirs(root: &Path, dirs: &[&str]) {
         for dir in dirs {
             let path = root.join(dir);
@@ -414,13 +414,13 @@ mod tests {
     fn a_folder_left_by_an_uninstall_is_not_suggested() {
         let tmp = TempDir::new();
         let game = tmp.path().join(GAME_DIR);
-        // I residui reali di un `_retail_` disinstallato.
+        // The real leftovers of an uninstalled `_retail_`.
         let leftover = game.join("_retail_");
         std::fs::create_dir_all(leftover.join("D3D12")).unwrap();
         for file in ["icudt78l.dat", "libxell.dll", "wow_loader.dll"] {
             std::fs::write(leftover.join(file), b"").unwrap();
         }
-        // Ogni segno del gioco basta da solo.
+        // Each sign of the game is enough on its own.
         for (dir, marker) in [
             ("_classic_era_", "WowClassic.exe"),
             ("_forever_", "Wow.exe"),
@@ -431,7 +431,7 @@ mod tests {
         }
         std::fs::create_dir_all(game.join("_classic_").join("World of Warcraft Classic.app"))
             .unwrap();
-        // Un file `.app` non è un bundle.
+        // A `.app` file is not a bundle.
         std::fs::create_dir_all(game.join("_ptr_")).unwrap();
         std::fs::write(game.join("_ptr_").join("World of Warcraft.app"), b"").unwrap();
 
@@ -541,12 +541,12 @@ mod tests {
             game_dir_from_install_path("games/World of Warcraft/_retail_/"),
             Some(PathBuf::from("games/World of Warcraft"))
         );
-        // Un nome che non è `_<flavor>_` resta la cartella del gioco.
+        // A name that is not `_<flavor>_` stays the game folder.
         assert_eq!(
             game_dir_from_install_path(r"C:\WoW\_Retail_"),
             Some(PathBuf::from(r"C:\WoW\_Retail_"))
         );
-        // Un disco senza cartella diventa la sua radice, non la cartella corrente del disco.
+        // A drive without a folder becomes its root, not the drive's current folder.
         assert_eq!(
             game_dir_from_install_path("C:"),
             Some(PathBuf::from(r"C:\"))
@@ -560,8 +560,8 @@ mod tests {
         assert_eq!(game_dir_from_install_path("_retail_"), None);
     }
 
-    /// Una home sintetica con un prefisso per ogni forma cercata, più cartelle che non sono
-    /// prefissi. Restituisce la cartella `World of Warcraft` del prefisso Lutris.
+    /// A synthetic home with one prefix for each searched form, plus folders that are not
+    /// prefixes. Returns the `World of Warcraft` folder of the Lutris prefix.
     fn synthetic_home(home: &Path) -> PathBuf {
         let lutris = "Games/battlenet/drive_c/Program Files (x86)/World of Warcraft";
         make_dirs(
@@ -612,7 +612,7 @@ mod tests {
             candidates[3].path,
             home.join("Games/battlenet/drive_c/Program Files/World of Warcraft")
         );
-        // Le maiuscole diverse si seguono come sono sul disco.
+        // Different cases are followed as they are on disk.
         assert_eq!(
             candidates[4].path,
             home.join(
@@ -661,7 +661,7 @@ mod tests {
         if child_dirs(tmp.path()).len() == 3 {
             assert_eq!(found, tmp.path().join("Program Files"));
         } else {
-            // Su un file system che non distingue le maiuscole le tre cartelle sono una sola.
+            // On a case-insensitive file system the three folders are a single one.
             assert!(
                 found
                     .file_name()

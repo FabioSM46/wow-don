@@ -28,7 +28,7 @@ import { Search } from "./search/Search";
 import { clearStale, markStale } from "./search/stale";
 import "./App.css";
 
-/** Le tab dell'app, nell'ordine in cui compaiono. */
+/** The app's tabs, in the order they appear. */
 const TABS = [
   { id: "search", label: "Search" },
   { id: "installed", label: "Installed" },
@@ -40,17 +40,17 @@ type Tab = (typeof TABS)[number]["id"];
 function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [installations, setInstallations] = useState<Installation[] | null>(null);
-  // La tab e l'installazione attive valgono solo per la sessione.
+  // The active tab and installation last only for the session.
   const [tab, setTab] = useState<Tab>("installed");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Un'installazione dalla tab Search cambia gli addon sul disco: tornando sulla tab Installed
-  // la lista si rilegge (`reload` cambia), una volta sola per quante installazioni ci sono state.
+  // An installation from the Search tab changes the addons on disk: going back to the Installed
+  // tab rereads the list (`reload` changes), only once however many installations there were.
   const [installedStale, setInstalledStale] = useState(false);
   const [reload, setReload] = useState(0);
-  // Il contrario: un addon tolto, reinstallato o installato fuori dalla Search (tab Installed,
-  // zip, importazione) rende vecchi i risultati della Search per quell'installazione. La Search
-  // li rilegge quando torna visibile.
+  // The reverse: an addon removed, reinstalled or installed outside Search (Installed tab, zip,
+  // import) makes the Search results for that installation stale. Search rereads them when it
+  // becomes visible again.
   const [searchStale, setSearchStale] = useState<ReadonlySet<string>>(() => new Set());
   const markSearchStale = useCallback(
     (installationId: string) => setSearchStale((previous) => markStale(previous, installationId)),
@@ -62,24 +62,24 @@ function App() {
     [],
   );
   const tabRefs = useRef<Partial<Record<Tab, HTMLButtonElement | null>>>({});
-  // Il tema salvato dal backend; finché non arriva vale quello del sistema (niente localStorage:
-  // lo stato sta nel backend, un breve lampo all'avvio è accettato).
+  // The theme saved by the backend; until it arrives the system one applies (no localStorage:
+  // the state lives in the backend, a brief flash at startup is accepted).
   const [theme, setTheme] = useState<Theme | null>(null);
-  // L'opzione della Beta (issue #141); `null` finché le impostazioni non sono lette.
+  // The Beta option (issue #141); `null` until the settings are read.
   const [betaWhenNoRelease, setBetaWhenNoRelease] = useState<boolean | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  // L'aggiornamento automatico (D41, issue #203): la modalità salvata (`null` finché non è letta)
-  // e lo stato dell'ultimo giro, da `get_auto_update_status` e dall'evento `auto-update`.
+  // Automatic updating (D41, issue #203): the saved mode (`null` until it is read) and the state
+  // of the last round, from `get_auto_update_status` and from the `auto-update` event.
   const [autoUpdateMode, setAutoUpdateMode] = useState<AutoUpdateMode | null>(null);
   const [autoUpdateStatus, setAutoUpdateStatus] = useState<AutoUpdateStatus | null>(null);
   const lastAutoUpdate = useRef<AutoUpdateStatus | null>(null);
-  // Id dell'installazione → `finishedAt` del giro che l'utente ha annullato: il suo esito non
-  // descrive più il disco e la riga non lo mostra.
+  // Installation id → `finishedAt` of the round the user undid: its outcome no longer describes
+  // the disk and the row does not show it.
   const [undoneRounds, setUndoneRounds] = useState<ReadonlyMap<string, string>>(() => new Map());
-  // Installazione di uno zip trascinato o scelto (D32): una alla volta, con il suo esito.
+  // Installation of a dragged or chosen zip (D32): one at a time, with its outcome.
   const [zipBusy, setZipBusy] = useState(false);
-  // La fase dell'installazione da zip (issue #128). Il ref è aggiornato subito: il primo evento
-  // può arrivare prima che `zipBusy` sia riletto.
+  // The phase of the zip installation (issue #128). The ref is updated immediately: the first
+  // event can arrive before `zipBusy` is read again.
   const [zipProgress, setZipProgress] = useState<InstallProgress | undefined>(undefined);
   const zipRunning = useRef(false);
   const [zipMessage, setZipMessage] = useState<{ text: string; error: boolean } | null>(null);
@@ -88,8 +88,8 @@ function App() {
     if (theme !== null) applyTheme(document.documentElement, theme);
   }, [theme]);
 
-  // Il menu di default del browser (Reload, Inspect…) non serve in un'app desktop (issue #149):
-  // resta solo nei campi di testo, per Copy e Paste. I menu dell'app si aprono dai loro elementi.
+  // The browser's default menu (Reload, Inspect…) is not needed in a desktop app (issue #149): it
+  // stays only in text fields, for Copy and Paste. The app's menus open from their own elements.
   useEffect(() => {
     const suppress = (event: MouseEvent) => {
       const target = event.target instanceof Element ? event.target : null;
@@ -120,15 +120,15 @@ function App() {
       .then((list) => {
         setInstallations(list);
         setActiveId(list[0]?.id ?? null);
-        // Senza installazioni c'è una sola cosa da fare: aggiungerne una, in Options.
+        // With no installations there is only one thing to do: add one, in Options.
         if (list.length === 0) setTab("options");
       })
       .catch((err) => setError(errorMessage(err)));
   }, []);
 
-  // Lo stato dell'aggiornamento automatico: letto all'apertura, poi a ogni evento. Un giro
-  // `install` nuovo cambia gli addon sul disco: Installed e Search si rileggono, come dopo
-  // un'installazione dalla Search.
+  // The automatic update status: read on opening, then on every event. A new `install` round
+  // changes the addons on disk: Installed and Search reread, as after an installation from
+  // Search.
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
@@ -137,9 +137,9 @@ function App() {
       const previous = lastAutoUpdate.current;
       lastAutoUpdate.current = next;
       setAutoUpdateStatus(next);
-      // Solo la lettura all'apertura è la linea di base: la lista appena aperta è già quella del
-      // disco. Un evento arrivato per primo può essere di un giro finito dopo la lettura della
-      // lista, e quindi conta.
+      // Only the read on opening is the baseline: the list just opened already matches the
+      // disk. An event that arrives first may come from a round finished after the list was
+      // read, and so it counts.
       if (previous === null && !fromEvent) return;
       const changed = changedInstallations(previous, next);
       if (changed.length === 0) return;
@@ -151,12 +151,12 @@ function App() {
         if (disposed) stop();
         else unlisten = stop;
       })
-      // Fuori da Tauri non arriva niente: la riga resta nascosta.
+      // Outside Tauri nothing arrives: the row stays hidden.
       .catch(() => {});
     api
       .getAutoUpdateStatus()
       .then((first) => {
-        // Un evento arrivato prima della risposta è più recente: la lettura non lo sostituisce.
+        // An event that arrived before the response is more recent: the read does not replace it.
         if (lastAutoUpdate.current === null) receive(first, false);
       })
       .catch(() => {});
@@ -166,7 +166,7 @@ function App() {
     };
   }, [markSearchStale]);
 
-  // Anche un'installazione che finisce mentre la tab Installed è già aperta la fa rileggere.
+  // An installation that finishes while the Installed tab is already open also makes it reread.
   useEffect(() => {
     if (tab !== "installed" || !installedStale) return;
     setInstalledStale(false);
@@ -174,7 +174,7 @@ function App() {
   }, [tab, installedStale]);
 
   const active = installations?.find((installation) => installation.id === activeId) ?? null;
-  // Solo gli eventi di uno zip locale (senza fonte), mentre se ne installa uno.
+  // Only the events of a local zip (without a source), while one is being installed.
   useInstallProgress(active?.id ?? null, (event) => {
     if (zipRunning.current && event.source === null) setZipProgress(event);
   });
@@ -199,10 +199,10 @@ function App() {
       const result = await api.installZip(target.id, picked.path);
       setZipMessage({
         text: describeZipInstall(result, fileName(picked.path), target.name),
-        // Un avviso del backend (per esempio record non aggiornati) si mostra come errore.
+        // A backend warning (for example records not updated) is shown as an error.
         error: Boolean(result.warning),
       });
-      // Gli addon sul disco sono cambiati: la tab Installed si rilegge.
+      // The addons on disk changed: the Installed tab rereads.
       setInstalledStale(true);
     } catch (err) {
       setZipMessage({
@@ -210,10 +210,10 @@ function App() {
         error: true,
       });
     } finally {
-      // Anche uno zip fallito può aver cambiato il disco: la Search rilegge i suoi risultati.
+      // Even a failed zip may have changed the disk: Search rereads its results.
       markSearchStale(target.id);
       setZipBusy(false);
-      // Non c'è una fase finale: la barra si chiude quando il comando restituisce l'esito.
+      // There is no final phase: the bar closes when the command returns the outcome.
       zipRunning.current = false;
       setZipProgress(undefined);
     }
@@ -227,7 +227,7 @@ function App() {
         title: "Choose an addon .zip",
         filters: [{ name: "Zip archives", extensions: ["zip", "ZIP"] }],
       });
-      // Selettore annullato: non succede niente.
+      // Picker cancelled: nothing happens.
       if (typeof selected !== "string") return;
       await installZip([selected]);
     } catch (err) {
@@ -242,14 +242,14 @@ function App() {
     }
   }
 
-  /** Cambia tab e porta il focus sulla tab scelta (frecce e link verso Options). */
+  /** Switches tab and moves focus to the chosen tab (arrows and links to Options). */
   function focusTab(next: Tab) {
     setTab(next);
     tabRefs.current[next]?.focus();
   }
 
-  // Tastiera della barra di tab (pattern WAI-ARIA): frecce per spostarsi, Home e Fine per
-  // andare agli estremi. La tab si attiva insieme al focus.
+  // Tab bar keyboard (WAI-ARIA pattern): arrows to move, Home and End to go to the ends. The tab
+  // is activated together with the focus.
   function onTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const index = TABS.findIndex((t) => t.id === tab);
     let next: number;
@@ -337,8 +337,8 @@ function App() {
           </p>
         )}
 
-        {/* Le tab restano montate e nascoste: ricerca, filtri e controlli in corso non si
-            perdono passando da una tab all'altra. */}
+        {/* The tabs stay mounted and hidden: search, filters and checks in progress are not
+            lost when switching from one tab to another. */}
         <div
           id="panel-installed"
           role="tabpanel"
@@ -391,7 +391,6 @@ function App() {
             <Search
               installation={active}
               active={tab === "search"}
-              keyConfigured={status?.curseforgeKeyConfigured ?? null}
               betaWhenNoRelease={betaWhenNoRelease}
               onInstalled={() => setInstalledStale(true)}
               stale={searchStale}
@@ -430,7 +429,7 @@ function App() {
             enabled={betaWhenNoRelease}
             onChange={(enabled) => {
               setBetaWhenNoRelease(enabled);
-              // Gli stati della tab Installed dipendono dall'opzione: si rileggono.
+              // The Installed tab statuses depend on the option: they are reread.
               setInstalledStale(true);
             }}
           />
@@ -459,10 +458,6 @@ function App() {
       {status && (
         <footer className="app-footer">
           <span>v{status.version}</span>
-          <span>
-            CurseForge:{" "}
-            {status.curseforgeKeyConfigured ? "key configured" : "key missing"}
-          </span>
         </footer>
       )}
     </div>
