@@ -11,8 +11,9 @@ example values and placeholders such as `<repo-root>`. Before every push run
 commit of the branch) and `bash scripts/check-commit-privacy.sh <base> <head>` on authors and
 messages; before publishing an issue or PR body, `bash scripts/check-body-privacy.sh`.
 
-The CurseForge key lives only in `.env` (ignored by git) and in the Rust backend. Agents never
-read `.env`; to know which variables are needed they use `.env.example`. No tool signatures in
+The CurseForge key is not in this repository or in the app: it lives only in the secrets of the
+wow-don-proxy Cloudflare Worker (D44), which the backend calls. Agents never read `.env` files,
+which may be left over with an old key. No tool signatures in
 commits and PRs: no agent `Co-Authored-By` trailer, no "Generated with", no
 `claude.ai/code/session_…` link and no `Claude-Session:` trailer.
 
