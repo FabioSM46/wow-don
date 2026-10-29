@@ -4,18 +4,18 @@ import { nextIndex, positionLabel, previousIndex, screenshotTitle } from "./scre
 
 type Props = {
   screenshots: Screenshot[];
-  /** La gallery è visibile: solo allora frecce ed Esc agiscono sull'immagine aperta. */
+  /** The gallery is visible: only then do arrows and Esc act on the open image. */
   active: boolean;
 };
 
 /**
- * Le miniature in una griglia; un clic apre l'immagine grande al posto della griglia, con
- * titolo e descrizione come testo. Le immagini si caricano dal CDN con `<img src>`: nessun
- * `fetch` dal frontend.
+ * The thumbnails in a grid; a click opens the large image in place of the grid, with
+ * title and description as text. Images load from the CDN with `<img src>`: no
+ * `fetch` from the frontend.
  */
 export function Gallery({ screenshots, active }: Props) {
   const [open, setOpen] = useState<number | null>(null);
-  // Le immagini che non si sono caricate, per posizione: "t" la miniatura, "f" quella grande.
+  // The images that failed to load, by position: "t" the thumbnail, "f" the large one.
   const [broken, setBroken] = useState<ReadonlySet<string>>(() => new Set());
   const thumbRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -27,8 +27,8 @@ export function Gallery({ screenshots, active }: Props) {
     setBroken((current) => (current.has(key) ? current : new Set(current).add(key)));
   }, []);
 
-  // Il focus va sul pulsante Close quando la vista si apre e torna sulla miniatura dell'ultima
-  // immagine vista quando si chiude.
+  // Focus goes to the Close button when the view opens and returns to the thumbnail of the last
+  // image viewed when it closes.
   useEffect(() => {
     if (isOpen) {
       closeRef.current?.focus({ preventScroll: true });
@@ -41,9 +41,9 @@ export function Gallery({ screenshots, active }: Props) {
     lastOpen.current = open;
   }, [open]);
 
-  // Esc chiude la vista prima che il dettaglio torni ai risultati: l'ascolto è in cattura
-  // sulla finestra, quindi arriva prima di quello del dettaglio, che salta un evento già
-  // gestito (`defaultPrevented`). Le frecce non agiscono dentro una barra di tab o un campo.
+  // Esc closes the view before the detail goes back to the results: the listener is in capture
+  // on the window, so it comes before the detail's one, which skips an event already
+  // handled (`defaultPrevented`). The arrows do not act inside a tab bar or a field.
   useEffect(() => {
     if (!active || !isOpen) return;
     function onKeyDown(event: KeyboardEvent) {
@@ -116,7 +116,7 @@ export function Gallery({ screenshots, active }: Props) {
         </div>
         <figcaption className="gallery-caption">
           <p className="gallery-title">{title}</p>
-          {/* Testo semplice: React lo mostra come testo, mai come HTML. */}
+          {/* Plain text: React shows it as text, never as HTML. */}
           {description && <p className="gallery-description">{description}</p>}
         </figcaption>
       </figure>

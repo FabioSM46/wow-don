@@ -1,42 +1,42 @@
-/* UI minimale e moderna: vedi AGENTS.md, "Interfaccia", e le decisioni D20 e D42. Ogni valore
-   condiviso è una variabile qui, e i nomi sono stabili: le schermate li usano per nome.
+/* Minimal and modern UI: see AGENTS.md, "Interface", and decisions D20 and D42. Every shared
+   value is a variable here, and the names are stable: the screens use them by name.
 
-   Token (D42, issue #228)
-   - Corpi: --text-xs 12px (intestazioni di colonna, dati secondari, pastiglie), --text-base
-     14px (testo, è il corpo della pagina), --text-lg 16px (titoli di sezione), --text-xl 20px
-     (titoli di pagina). Ogni `font-size` del file è uno di questi o `inherit`
-     (src/styleTokens.test.ts lo verifica).
-   - Pesi: --weight-regular 400 e --weight-strong 600, nessun altro.
-   - Altezze dei controlli: --control-height 32px, --control-height-sm 28px.
-   - Raggi: --radius 8px (controlli), --radius-lg 10px (schede e riquadri).
-   - Spaziature: --space-1 … --space-6 = 4, 8, 12, 16, 24, 32px.
-   - Colori: --bg (pagina), --surface (schede, campi), --surface-2 (fondo attenuato, controlli
-     disabilitati), --border (divisori, righe di tabella, schede: non i controlli),
-     --border-strong (il bordo di ogni controllo: campi, menu, textarea, checkbox, radio, switch
-     spento, pulsanti con bordo; almeno 3:1 su --surface e --bg), --text, --muted (testo
-     secondario), --faint (placeholder, testo disabilitato, bordo dei controlli al passaggio del
-     mouse), --accent (l'unico colore d'accento), --accent-hover (il fondo pieno d'accento al
-     passaggio del mouse), --accent-soft e --accent-soft-text (fondo e testo tenui d'accento),
-     --on-accent (testo sui fondi pieni d'accento o di pericolo), --hover, --danger e
-     --danger-soft, --ok-soft e --ok-text, --knob (la manopola dello switch).
+   Tokens (D42, issue #228)
+   - Sizes: --text-xs 12px (column headers, secondary data, pills), --text-base 14px (text, the
+     page's body size), --text-lg 16px (section titles), --text-xl 20px (page titles). Every
+     `font-size` in the file is one of these or `inherit` (src/styleTokens.test.ts checks
+     this).
+   - Weights: --weight-regular 400 and --weight-strong 600, no others.
+   - Control heights: --control-height 32px, --control-height-sm 28px.
+   - Radii: --radius 8px (controls), --radius-lg 10px (cards and panels).
+   - Spacing: --space-1 … --space-6 = 4, 8, 12, 16, 24, 32px.
+   - Colors: --bg (page), --surface (cards, fields), --surface-2 (muted background, disabled
+     controls), --border (dividers, table rows, cards: not controls), --border-strong (the
+     border of every control: fields, menus, textarea, checkbox, radio, switch when off,
+     bordered buttons; at least 3:1 on --surface and --bg), --text, --muted (secondary text),
+     --faint (placeholder, disabled text, control border on mouse hover), --accent (the only
+     accent color), --accent-hover (the solid accent background on mouse hover), --accent-soft
+     and --accent-soft-text (soft accent background and text), --on-accent (text on solid
+     accent or danger backgrounds), --hover, --danger and --danger-soft, --ok-soft and
+     --ok-text, --knob (the switch knob).
 
-   Classi dei controlli
-   - .button (primario, pieno d'accento) con le varianti .secondary (bordo), .soft (fondo
-     --accent-soft), .ghost (senza fondo), .danger e .small (alto --control-height-sm).
-   - .search e .select (campi e menu), .import-text (textarea): bordo --border-strong,
-     placeholder --faint, focus visibile; disabilitati in --faint su --surface-2.
-   - Checkbox e radio a 16px con bordo --border-strong e `accent-color`.
-   - .switch: interruttore 36×20px su `<input type="checkbox" role="switch" class="switch">`.
-   - .segmented: gruppo di `<button>`; quello attivo (`aria-pressed`, `aria-checked` o
-     `aria-selected` a "true") sta su --surface.
-   - .pill: pastiglia alta 22px a --text-xs 600; varianti .accent, .ok, .danger (senza
-     variante è neutra).
+   Control classes
+   - .button (primary, solid accent) with the variants .secondary (bordered), .soft (background
+     --accent-soft), .ghost (no background), .danger and .small (--control-height-sm tall).
+   - .search and .select (fields and menus), .import-text (textarea): border --border-strong,
+     placeholder --faint, visible focus; disabled in --faint on --surface-2.
+   - Checkbox and radio at 16px with border --border-strong and `accent-color`.
+   - .switch: 36×20px switch on `<input type="checkbox" role="switch" class="switch">`.
+   - .segmented: group of `<button>`s; the active one (`aria-pressed`, `aria-checked` or
+     `aria-selected` set to "true") sits on --surface.
+   - .pill: 22px-tall pill at --text-xs 600; variants .accent, .ok, .danger (with no variant it
+     is neutral).
 
-   Tema (issue #92): `data-theme` su <html> forza `light` o `dark`; senza attributo (scelta
-   `system`) vale `prefers-color-scheme`. I colori scuri esistono una volta sola, come `--dark-*`;
-   i due blocchi scuri qui sotto li assegnano e vanno tenuti uguali (un selettore non può stare
-   insieme dentro e fuori da una @media). `color-scheme` sta sempre insieme ai colori, così i
-   controlli nativi (select, lista delle opzioni, barre di scorrimento) seguono il tema scelto. */
+   Theme (issue #92): `data-theme` on <html> forces `light` or `dark`; with no attribute (the
+   `system` choice) `prefers-color-scheme` applies. The dark colors exist only once, as
+   `--dark-*`; the two dark blocks below assign them and must be kept identical (a selector
+   cannot sit both inside and outside an @media). `color-scheme` always goes together with the
+   colors, so native controls (select, option list, scrollbars) follow the chosen theme. */
 :root {
   --text-xs: 12px;
   --text-base: 14px;
@@ -77,13 +77,13 @@
   --knob: #ffffff;
   --overlay: rgb(244 244 245 / 85%);
   --progress-track: #d4d4d8;
-  /* Riga selezionata e menu contestuale della tab Installed (issue #149). */
+  /* Selected row and context menu of the Installed tab (issue #149). */
   --selected: rgb(47 95 224 / 10%);
   --menu-shadow: 0 4px 16px rgb(0 0 0 / 10%);
-  /* Sfondo dell'immagine grande della gallery (issue #168). */
+  /* Background of the gallery's large image (issue #168). */
   --viewer-bg: #ececee;
-  /* Il segno di spunta della checkbox: bianco sul fondo d'accento chiaro, scuro su quello
-     scuro (l'immagine non può leggere --on-accent). */
+  /* The checkbox check mark: white on the light accent background, dark on the dark one
+     (the image cannot read --on-accent). */
   --check-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   --dark-bg: #111113;
@@ -213,9 +213,9 @@ h2 {
   color: var(--muted);
 }
 
-/* Intestazione, contenuto e piè di pagina sono tre righe una sotto l'altra: il contenuto
-   cresce ma non si restringe mai sotto la propria altezza, così il piè di pagina sta dopo il
-   contenuto (in fondo alla finestra se la pagina è corta) e non lo copre mai. */
+/* Header, content and footer are three rows one below the other: the content grows but never
+   shrinks below its own height, so the footer comes after the content (at the bottom of the
+   window if the page is short) and never covers it. */
 .app {
   display: flex;
   flex-direction: column;
@@ -227,8 +227,8 @@ h2 {
   flex: none;
 }
 
-/* Intestazione, contenuto e piè di pagina condividono la stessa colonna, larga quanto la
-   finestra: a schermo intero la tabella usa tutto lo spazio. */
+/* Header, content and footer share the same column, as wide as the window: in full screen the
+   table uses all the space. */
 .app-header,
 .app-main,
 .app-footer {
@@ -252,8 +252,8 @@ h2 {
   padding-bottom: var(--space-6);
 }
 
-/* Tab: solo testo; la tab attiva ha una linea sottile del colore d'accento, appoggiata sul
-   bordo dell'intestazione. */
+/* Tabs: text only; the active tab has a thin line in the accent color, resting on the header's
+   border. */
 .tabs {
   display: flex;
   gap: var(--space-5);
@@ -284,7 +284,7 @@ h2 {
   outline-offset: -2px;
 }
 
-/* Il selettore dell'installazione attiva sta a destra nell'intestazione. */
+/* The active installation selector sits on the right of the header. */
 .header-select {
   margin-left: auto;
   max-width: 16rem;
@@ -312,9 +312,9 @@ h2 {
   color: var(--danger);
 }
 
-/* Pulsanti (D42): alti --control-height, primario pieno d'accento; le varianti cambiano solo
-   fondo, bordo e testo. Il bordo è un'ombra interna, così tutte le varianti hanno la stessa
-   altezza. Disabilitato: testo --faint su --surface-2, non un'opacità. */
+/* Buttons (D42): --control-height tall, primary in solid accent; the variants change only
+   background, border and text. The border is an inset shadow, so all variants have the same
+   height. Disabled: --faint text on --surface-2, not an opacity. */
 
 .button {
   box-sizing: border-box;
@@ -355,7 +355,7 @@ h2 {
   color: var(--accent-soft-text);
 }
 
-/* Due strati del fondo tenue: lo stesso colore, più pieno, senza un valore nuovo. */
+/* Two layers of the soft background: the same color, more solid, without a new value. */
 .button.soft:hover:not(:disabled) {
   background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--accent-soft);
 }
@@ -374,7 +374,7 @@ h2 {
   color: var(--on-accent);
 }
 
-/* Il pericolo resta del suo colore anche al passaggio del mouse. */
+/* Danger keeps its color on mouse hover too. */
 .button.danger:hover:not(:disabled) {
   background: var(--danger);
 }
@@ -424,8 +424,8 @@ input[type="radio"]:focus-visible {
   outline-offset: 2px;
 }
 
-/* Checkbox e radio (D42): 16px, bordo --border-strong, fondo d'accento quando sono scelti.
-   `accent-color` resta per i motori che ignorano `appearance: none`. */
+/* Checkbox and radio (D42): 16px, border --border-strong, accent background when checked.
+   `accent-color` stays for engines that ignore `appearance: none`. */
 input[type="checkbox"]:not(.switch),
 input[type="radio"] {
   appearance: none;
@@ -470,8 +470,8 @@ input[type="radio"]:checked:disabled {
   background-color: var(--border-strong);
 }
 
-/* Interruttore (D42): una checkbox con `role="switch"` e classe `switch`, 36×20px; la
-   manopola è un cerchio disegnato nel fondo, che scorre a destra quando è acceso. */
+/* Switch (D42): a checkbox with `role="switch"` and class `switch`, 36×20px; the knob is a
+   circle drawn in the background, which slides to the right when it is on. */
 .switch {
   appearance: none;
   box-sizing: border-box;
@@ -513,8 +513,8 @@ input[type="radio"]:checked:disabled {
   }
 }
 
-/* Controllo segmentato (D42): pulsanti affiancati in un fondo comune; quello attivo
-   (`aria-pressed`, `aria-checked` o `aria-selected` a "true") sta su --surface. */
+/* Segmented control (D42): buttons side by side on a shared background; the active one
+   (`aria-pressed`, `aria-checked` or `aria-selected` set to "true") sits on --surface. */
 .segmented {
   box-sizing: border-box;
   display: inline-flex;
@@ -562,8 +562,8 @@ input[type="radio"]:checked:disabled {
   outline-offset: 0;
 }
 
-/* Pastiglia (D42): uno stato breve accanto a un nome. Neutra senza variante; il colore solo
-   per lo stato (accento, ok, pericolo). */
+/* Pill (D42): a short state next to a name. Neutral with no variant; color only for the state
+   (accent, ok, danger). */
 .pill {
   box-sizing: border-box;
   display: inline-flex;
@@ -595,10 +595,10 @@ input[type="radio"]:checked:disabled {
   color: var(--danger);
 }
 
-/* Options (issue #231): una colonna centrata di sezioni, larga al massimo 720px. Ogni sezione è
-   un titolo e una o più schede; ogni riga di una scheda ha etichetta e descrizione a sinistra e
-   il controllo subito a destra, così lo sguardo non attraversa tutta la finestra. Il pannello
-   non cambia `display`: l'attributo `hidden` delle tab deve continuare a nasconderlo. */
+/* Options (issue #231): a centered column of sections, at most 720px wide. Each section is a
+   title and one or more cards; each row of a card has label and description on the left and
+   the control right next to them, so the eye does not travel across the whole window. The
+   panel does not change `display`: the tabs' `hidden` attribute must keep hiding it. */
 .options-page {
   max-width: 720px;
   margin: 0 auto;
@@ -698,8 +698,8 @@ label.setting-label {
   gap: var(--space-2);
 }
 
-/* Import and export (issue #135): due blocchi nella stessa scheda, ognuno aperto dalla sua
-   riga; il colore solo per errore e conferma. */
+/* Import and export (issue #135): two blocks in the same card, each opened by its own row;
+   color only for error and confirmation. */
 .import-export-block {
   padding: 0 var(--space-4) var(--space-3);
 }
@@ -810,8 +810,8 @@ label.setting-label {
   white-space: nowrap;
 }
 
-/* La scheda Installations di Options (issue #231): le installazioni aggiunte, poi quelle trovate
-   sul computer. "Back up" resta in vista; la rimozione sta nel menu "⋯". */
+/* The Installations card of Options (issue #231): the added installations, then those found on
+   the computer. "Back up" stays in view; removal is in the "⋯" menu. */
 .installation-list {
   list-style: none;
   margin: 0;
@@ -865,8 +865,8 @@ label.setting-label {
   color: var(--muted);
 }
 
-/* Il menu "⋯" di una riga: si apre sotto il pulsante, allineato a destra. La scheda non taglia
-   il contenuto (niente `overflow: hidden`), così il menu dell'ultima riga resta intero. */
+/* A row's "⋯" menu: it opens below the button, aligned to the right. The card does not clip
+   its content (no `overflow: hidden`), so the menu of the last row stays whole. */
 .row-menu {
   position: relative;
   display: inline-flex;
@@ -918,8 +918,8 @@ label.setting-label {
   cursor: default;
 }
 
-/* Installazioni trovate: un sottotitolo con "Scan again", poi le righe con il loro "Add";
-   cartella del gioco e provenienza accanto al nome, in tono neutro. */
+/* Found installations: a subtitle with "Scan again", then the rows with their "Add"; game
+   folder and origin next to the name, in a neutral tone. */
 .discovered-header {
   display: flex;
   align-items: center;
@@ -949,7 +949,7 @@ label.setting-label {
   color: var(--muted);
 }
 
-/* L'intestazione della tabella di Installed. */
+/* The header of the Installed table. */
 .section-header {
   display: flex;
   align-items: center;
@@ -957,8 +957,8 @@ label.setting-label {
   margin-bottom: var(--space-3);
 }
 
-/* Backup: lo stato sotto il percorso dell'installazione. "Open folder" compare al passaggio
-   del mouse o con il focus, sempre sugli schermi senza mouse. */
+/* Backup: the status below the installation path. "Open folder" appears on mouse hover or
+   with focus, always on screens without a mouse. */
 
 .backups {
   margin-top: var(--space-1);
@@ -1022,10 +1022,10 @@ label.setting-label {
   }
 }
 
-/* Addon */
+/* Addons */
 
-/* Il titolo della tab Installed (issue #230): "Addons" a --text-xl con il conteggio accanto,
-   non l'etichetta maiuscola delle altre sezioni. */
+/* The Installed tab title (issue #230): "Addons" at --text-xl with the count next to it, not
+   the uppercase label of the other sections. */
 .addons-title {
   font-size: var(--text-xl);
   text-transform: none;
@@ -1058,8 +1058,8 @@ label.setting-label {
   margin-bottom: var(--space-3);
 }
 
-/* Campi e menu (D42): alti --control-height, bordo --border-strong che si rinforza al
-   passaggio del mouse, focus con l'anello d'accento, placeholder --faint. */
+/* Fields and menus (D42): --control-height tall, border --border-strong that strengthens on
+   mouse hover, focus with the accent ring, placeholder --faint. */
 .search,
 .select {
   box-sizing: border-box;
@@ -1072,7 +1072,7 @@ label.setting-label {
   padding: 0 10px;
 }
 
-/* Aspetto nativo tolto: stessa altezza della ricerca e freccia nei colori del tema. */
+/* Native appearance removed: same height as the search and an arrow in the theme colors. */
 .select {
   appearance: none;
   padding-right: 30px;
@@ -1148,7 +1148,7 @@ label.setting-label {
 
 .addon-table th,
 .addon-table td {
-  /* Un testo lungo senza spazi va a capo invece di allargare la tabella oltre la finestra. */
+  /* A long text without spaces wraps instead of widening the table beyond the window. */
   overflow-wrap: anywhere;
   padding: var(--space-2) 14px;
   text-align: left;
@@ -1200,9 +1200,9 @@ label.setting-label {
   color: var(--danger);
 }
 
-/* Le pastiglie nelle righe di Installed (issue #230): con margini verticali negativi una
-   pastiglia (22px) non allunga la riga oltre la linea del testo. Accanto al titolo (un addon
-   escluso dall'aggiornamento automatico, issue #204) è neutra, senza colore di stato. */
+/* The pills in the Installed rows (issue #230): with negative vertical margins a pill (22px)
+   does not stretch the row beyond the text line. Next to the title (an addon excluded from
+   automatic updates, issue #204) it is neutral, with no state color. */
 .addon-table .addon-pill {
   margin-top: -2px;
   margin-bottom: -2px;
@@ -1226,7 +1226,7 @@ label.setting-label {
   white-space: nowrap;
 }
 
-/* Testo lungo su una riga sola, accorciato con "…": il testo intero è nel suggerimento. */
+/* Long text on a single line, shortened with "…": the full text is in the tooltip. */
 .clip {
   display: block;
   max-width: 16rem;
@@ -1235,7 +1235,7 @@ label.setting-label {
   white-space: nowrap;
 }
 
-/* Aggiornamenti */
+/* Updates */
 
 .section-actions {
   display: flex;
@@ -1256,9 +1256,9 @@ label.setting-label {
   color: var(--muted);
 }
 
-/* L'aggiornamento di una riga (issue #230): un pulsante tenue con la versione nuova, su una
-   riga sola; una versione lunga si accorcia con "…" (il file installato e la data sono nel
-   suggerimento della cella). Margini negativi come le pastiglie: la riga non si allunga. */
+/* A row's update (issue #230): a soft button with the new version, on a single line; a long
+   version is shortened with "…" (the installed file and the date are in the cell's
+   tooltip). Negative margins like the pills: the row does not get taller. */
 .addon-table .row-update {
   display: inline-block;
   max-width: 16rem;
@@ -1270,8 +1270,8 @@ label.setting-label {
   vertical-align: middle;
 }
 
-/* La riga dell'aggiornamento automatico tra il titolo e i filtri di Installed (issue #203):
-   una barra propria, sobria, il colore solo per gli errori (issue #230). */
+/* The automatic update row between the title and the Installed filters (issue #203): a bar of
+   its own, understated, color only for errors (issue #230). */
 .auto-update-line {
   margin: 0 0 var(--space-3);
   padding: var(--space-2) var(--space-3);
@@ -1320,7 +1320,7 @@ label.setting-label {
   color: var(--muted);
 }
 
-/* Gruppi di cartelle: la riga si apre con un clic e mostra sotto le altre cartelle. */
+/* Folder groups: the row opens with a click and shows the other folders below. */
 
 .addon-table tr.expandable {
   cursor: pointer;
@@ -1362,8 +1362,8 @@ label.setting-label {
   content: "└ ";
 }
 
-/* Tabella stretta (finestra piccola): meno spazio tra le colonne, così le intestazioni,
-   che non vanno a capo, stanno nella larghezza invece di far comparire la barra in basso. */
+/* Narrow table (small window): less space between columns, so the headers, which do not wrap,
+   fit in the width instead of making the bottom scrollbar appear. */
 @container (max-width: 960px) {
   .addon-table th,
   .addon-table td {
@@ -1377,8 +1377,8 @@ label.setting-label {
 }
 
 
-/* Versione del gioco forzata: un menu compatto che compare al passaggio del mouse sulla riga
-   o con il focus da tastiera; l'etichetta "Forced: …" resta sempre visibile. */
+/* Forced game version: a compact menu that appears on mouse hover over the row or with
+   keyboard focus; the "Forced: …" label stays always visible. */
 
 .select.compact {
   height: var(--control-height-sm);
@@ -1389,7 +1389,7 @@ label.setting-label {
     right 8px center;
 }
 
-/* Accanto al nome del progetto e con margini negativi: nascosto non allunga la riga. */
+/* Next to the project name and with negative margins: when hidden it does not stretch the row. */
 .version-select {
   max-width: 100%;
   margin: -4px 0 -4px var(--space-2);
@@ -1409,17 +1409,17 @@ label.setting-label {
   opacity: 1;
 }
 
-/* Senza un puntatore che passa sopra (schermo touch) il menu resta sempre visibile. */
+/* Without a hovering pointer (touch screen) the menu stays always visible. */
 @media (hover: none) {
   .version-select {
     opacity: 1;
   }
 }
 
-/* Ricerca nel catalogo */
+/* Catalog search */
 
-/* La barra della Search su una riga (issue #229): ricerca con la lente, categoria, versione,
-   ordinamento e "Add by link". Va a capo solo in una finestra troppo stretta. */
+/* The Search bar on a single line (issue #229): search with the magnifier, category, version,
+   sort and "Add by link". It wraps only in a window that is too narrow. */
 .search-toolbar {
   gap: var(--space-2);
 }
@@ -1452,7 +1452,7 @@ label.setting-label {
   gap: var(--space-1);
 }
 
-/* La direzione dell'ordinamento: un pulsante quadrato accanto al menu, come i controlli. */
+/* The sort direction: a square button next to the menu, like the controls. */
 .direction {
   box-sizing: border-box;
   width: var(--control-height);
@@ -1470,7 +1470,7 @@ label.setting-label {
   background: var(--hover);
 }
 
-/* Una ricerca nuova in corso: i risultati di prima restano, più tenui. */
+/* A new search in progress: the previous results stay, more faded. */
 .results.busy .table-wrap {
   opacity: 0.6;
 }
@@ -1498,16 +1498,16 @@ label.setting-label {
   font-variant-numeric: tabular-nums;
 }
 
-/* Righe di altezza uniforme (issue #229): ogni cella è centrata in verticale e la riga è alta
-   quanto una con il nome, le pastiglie sotto e il sommario su due righe. L'altezza di una
-   cella di tabella è un minimo. */
+/* Rows of uniform height (issue #229): every cell is vertically centered and the row is as
+   tall as one with the name, the pills below and the summary on two lines. The height of a
+   table cell is a minimum. */
 .catalog-table td {
   height: 62px;
   box-sizing: border-box;
   vertical-align: middle;
 }
 
-/* Il nome su una riga sola, accorciato con "…": il nome intero è nel suggerimento. */
+/* The name on a single line, shortened with "…": the full name is in the tooltip. */
 .catalog-name {
   display: block;
   max-width: 16rem;
@@ -1516,7 +1516,7 @@ label.setting-label {
   white-space: nowrap;
 }
 
-/* Le pastiglie di stato sotto il nome: Installed, via GitHub, website only, checking GitHub… */
+/* The state pills below the name: Installed, via GitHub, website only, checking GitHub… */
 .catalog-states,
 .link-states {
   display: flex;
@@ -1525,14 +1525,14 @@ label.setting-label {
   margin-top: 2px;
 }
 
-/* La colonna delle azioni, sempre visibile e allineata a destra. */
+/* The actions column, always visible and aligned to the right. */
 .catalog-table .actions-cell {
   width: 1%;
   text-align: right;
   white-space: nowrap;
 }
 
-/* Il sommario occupa al massimo due righe; il testo intero è nel suggerimento. */
+/* The summary takes at most two lines; the full text is in the tooltip. */
 .summary {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -1556,7 +1556,7 @@ label.setting-label {
   background: var(--hover);
 }
 
-/* Le azioni di una riga (Install, Open on CurseForge, Checking…, la barra), sempre in vista
+/* A row's actions (Install, Open on CurseForge, Checking…, the bar), always in view
    (issue #229). */
 .catalog-table .row-actions {
   display: inline-flex;
@@ -1574,7 +1574,7 @@ label.setting-label {
   font-size: var(--text-base);
 }
 
-/* Dettaglio di un addon: prende il posto dei risultati nella tab Search. */
+/* Addon detail: it takes the place of the results in the Search tab. */
 
 .detail {
   max-width: 72rem;
@@ -1611,7 +1611,7 @@ label.setting-label {
   gap: var(--space-1);
 }
 
-/* Il nome è il titolo della vista: più grande delle intestazioni di sezione, stesso peso. */
+/* The name is the view's title: larger than the section headers, same weight. */
 .detail-name {
   font-size: var(--text-xl);
   text-transform: none;
@@ -1633,14 +1633,14 @@ label.setting-label {
   color: var(--muted);
 }
 
-/* Un errore nell'intestazione (link non aperto). */
+/* An error in the header (link not opened). */
 .detail-meta.error {
   color: var(--danger);
 }
 
-/* Perché un addon bloccato non si installa, o da dove si installa (issue #229): un riquadro a
-   corpo pieno sotto l'intestazione, non una nota minuta. Con un errore (controllo del mirror
-   GitHub fallito) il fondo è quello del pericolo. */
+/* Why a blocked addon does not install, or where it installs from (issue #229): a panel in the
+   full body size below the header, not a tiny note. With an error (GitHub mirror check failed)
+   the background is the danger one. */
 .detail-notice {
   max-width: 48rem;
   margin: 0 0 var(--space-5);
@@ -1665,8 +1665,8 @@ label.setting-label {
   gap: var(--space-2);
 }
 
-/* Descrizione a sinistra, file e dipendenze in una colonna stretta a destra; nella finestra
-   piccola una colonna sola. */
+/* Description on the left, files and dependencies in a narrow column on the right; in the small
+   window a single column. */
 .detail-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
@@ -1686,7 +1686,7 @@ label.setting-label {
   gap: var(--space-6);
 }
 
-/* Description e Gallery: le tab dell'app in piccolo, appoggiate su una linea sottile. */
+/* Description and Gallery: the app's tabs in small, resting on a thin line. */
 .detail-main {
   min-width: 0;
 }
@@ -1705,7 +1705,7 @@ label.setting-label {
   margin: 0;
 }
 
-/* Gallery (issue #168): miniature in una griglia regolare, l'immagine grande al loro posto. */
+/* Gallery (issue #168): thumbnails in a regular grid, the large image in their place. */
 .gallery-grid {
   list-style: none;
   margin: 0;
@@ -1738,7 +1738,7 @@ label.setting-label {
   object-fit: cover;
 }
 
-/* Un'immagine che non si carica: il titolo al suo posto, nelle stesse misure. */
+/* An image that does not load: the title in its place, at the same size. */
 .gallery-placeholder {
   display: flex;
   align-items: center;
@@ -1843,8 +1843,8 @@ label.setting-label {
   margin: 0;
 }
 
-/* I paragrafi della descrizione: gli a capo dentro un paragrafo (righe di un elenco)
-   restano. */
+/* The paragraphs of the description: line breaks inside a paragraph (lines of a list)
+   stay. */
 .detail-description p {
   max-width: 44rem;
   white-space: pre-line;
@@ -1882,8 +1882,8 @@ label.setting-label {
   color: var(--muted);
 }
 
-/* Trascinamento di uno zip sulla finestra (D32): un solo strato neutro con il bordo tratteggiato
-   nel colore d'accento, sopra tutto, che non intercetta il puntatore. */
+/* Dragging a zip onto the window (D32): a single neutral layer with a dashed border in the
+   accent color, above everything, that does not intercept the pointer. */
 .zip-drop {
   position: fixed;
   inset: var(--space-3);
@@ -1905,8 +1905,8 @@ label.setting-label {
   font-weight: var(--weight-strong);
 }
 
-/* Barra di avanzamento di installazioni e aggiornamenti (issue #128): sottile, con la fase
-   scritta accanto. Determinata durante il download, altrimenti un tratto che scorre. */
+/* Progress bar of installations and updates (issue #128): thin, with the phase written next to
+   it. Determinate during the download, otherwise a sliding stroke. */
 .progress {
   display: inline-flex;
   align-items: center;
@@ -1958,15 +1958,15 @@ label.setting-label {
     transition: none;
   }
 
-  /* Senza animazione la barra indeterminata resta un tratto fermo, a metà. */
+  /* Without animation the indeterminate bar stays a still stroke, in the middle. */
   .progress-track.indeterminate .progress-fill {
     animation: none;
     left: 32%;
   }
 }
 
-/* Menu contestuale e selezione multipla della tab Installed (issue #149): un menu leggero, la
-   riga selezionata con il colore d'accento, la conferma della rimozione in linea. */
+/* Context menu and multiple selection of the Installed tab (issue #149): a light menu, the
+   selected row in the accent color, inline removal confirmation. */
 .addon-table tbody tr[data-row]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -2047,7 +2047,7 @@ label.setting-label {
   font-size: var(--text-xs);
 }
 
-/* "Add by link" (issue #110): una riga sotto i filtri, l'anteprima come una riga di tabella. */
+/* "Add by link" (issue #110): a row below the filters, the preview like a table row. */
 .link-bar {
   display: flex;
   flex-wrap: wrap;

@@ -1,20 +1,20 @@
-// L'avanzamento di installazioni e aggiornamenti (issue #128): l'evento `install-progress` del
-// backend (#127), la percentuale e il testo della barra, l'abbinamento evento → riga. Funzioni
-// pure, senza React né I/O.
+// The progress of installs and updates (issue #128): the backend's `install-progress` event
+// (#127), the percentage and text of the bar, the event → row matching. Pure functions,
+// no React or I/O.
 
 import type { SourceKind } from "../api";
 import { projectId } from "./sources.ts";
 
-/** Il nome dell'evento Tauri, come `progress::EVENT` nel backend. */
+/** The name of the Tauri event, like `progress::EVENT` in the backend. */
 export const PROGRESS_EVENT = "install-progress";
 
 /**
- * `downloaded` arriva solo dall'import (issue #180): lo zip è scaricato e aspetta il suo turno,
- * perché il backend scarica più progetti insieme e li installa uno alla volta.
+ * `downloaded` comes only from the import (issue #180): the zip is downloaded and waits its turn,
+ * because the backend downloads several projects together and installs them one at a time.
  */
 export type ProgressPhase = "checking" | "downloading" | "downloaded" | "extracting" | "installing";
 
-/** Le fasi nell'ordine in cui le attraversa un progetto. */
+/** The phases in the order a project goes through them. */
 export const PHASE_ORDER: readonly ProgressPhase[] = [
   "checking",
   "downloading",
@@ -24,10 +24,10 @@ export const PHASE_ORDER: readonly ProgressPhase[] = [
 ];
 
 /**
- * Il payload di `install-progress`. `source` è `null` e `key` vuoto per uno zip scelto
- * dall'utente; `received` e `total` arrivano solo in `downloading`, e `total` solo se il server
- * dichiara la lunghezza. Non c'è una fase finale: l'avanzamento finisce quando il comando
- * restituisce i suoi esiti.
+ * The payload of `install-progress`. `source` is `null` and `key` empty for a zip chosen by
+ * the user; `received` and `total` arrive only in `downloading`, and `total` only if the server
+ * declares the length. There is no final phase: progress ends when the command returns its
+ * outcomes.
  */
 export type InstallProgress = {
   installationId: string;
@@ -39,12 +39,12 @@ export type InstallProgress = {
   total?: number;
 };
 
-/** La chiave di un evento: il progetto (`projectId`), o `zip` per uno zip locale. */
+/** The key of an event: the project (`projectId`), or `zip` for a local zip. */
 export function progressKey(event: InstallProgress): string {
   return event.source === null ? "zip" : projectId({ source: event.source, key: event.key });
 }
 
-/** La percentuale del download, da 0 a 100, o `null` quando la barra è indeterminata. */
+/** The download percentage, from 0 to 100, or `null` when the bar is indeterminate. */
 export function progressPercent(event: InstallProgress | undefined): number | null {
   if (event?.phase !== "downloading") return null;
   const { received, total } = event;
@@ -52,7 +52,7 @@ export function progressPercent(event: InstallProgress | undefined): number | nu
   return Math.min(100, Math.max(0, Math.floor((received / total) * 100)));
 }
 
-/** Il testo accanto alla barra: la fase, con la percentuale quando c'è. */
+/** The text next to the bar: the phase, with the percentage when there is one. */
 export function progressLabel(event: InstallProgress | undefined, idle = "Waiting…"): string {
   if (!event) return idle;
   switch (event.phase) {
@@ -72,8 +72,8 @@ export function progressLabel(event: InstallProgress | undefined, idle = "Waitin
 }
 
 /**
- * Vero se i due eventi si mostrano allo stesso modo: stessa fase, stesso nome e stessa
- * percentuale. Un evento così non cambia la barra e non deve ridisegnare la lista.
+ * True if the two events look the same: same phase, same name and same percentage. Such an
+ * event does not change the bar and must not redraw the list.
  */
 export function sameView(a: InstallProgress | undefined, b: InstallProgress): boolean {
   return (
@@ -86,8 +86,8 @@ export function sameView(a: InstallProgress | undefined, b: InstallProgress): bo
 }
 
 /**
- * Aggiunge un evento alla mappa chiave → ultimo evento, se è dell'installazione indicata. Un
- * evento che non cambia niente di visibile restituisce la stessa mappa, così React non ridisegna.
+ * Adds an event to the key → latest event map, if it belongs to the given installation. An
+ * event that changes nothing visible returns the same map, so React does not redraw.
  */
 export function withProgress(
   previous: Map<string, InstallProgress>,
@@ -101,8 +101,9 @@ export function withProgress(
 }
 
 /**
- * Quanti progetti di un aggiornamento sono già arrivati al proprio turno: il backend li porta
- * tutti in `checking` all'inizio, poi uno alla volta oltre. È la posizione di "Updating 2 of 5".
+ * How many projects of an update have already reached their turn: the backend brings them
+ * all to `checking` at the start, then one at a time beyond it. It is the position in
+ * "Updating 2 of 5".
  */
 export function progressPosition(
   progress: Map<string, InstallProgress>,
@@ -117,9 +118,9 @@ export function progressPosition(
 }
 
 /**
- * L'avanzamento delle installazioni avviate dalla Search, per progetto scelto. Il backend ne
- * esegue una alla volta (`InstallLock`) e consegna anche le dipendenze, con il loro id: un
- * evento di un progetto scelto rende quello il corrente, e ogni altro evento va al corrente.
+ * The progress of the installs started from Search, per chosen project. The backend runs
+ * one at a time (`InstallLock`) and delivers the dependencies too, with their id: an event
+ * of a chosen project makes it the current one, and every other event goes to the current one.
  */
 export type RunProgress = {
   current: string | null;
@@ -146,7 +147,7 @@ export function withRunProgress(
   return { current, runs: new Map(previous.runs).set(current, event) };
 }
 
-/** Toglie l'avanzamento di un'installazione finita. */
+/** Removes the progress of a finished install. */
 export function withoutRun(previous: RunProgress, run: string): RunProgress {
   if (!previous.runs.has(run) && previous.current !== run) return previous;
   const runs = new Map(previous.runs);
@@ -154,7 +155,7 @@ export function withoutRun(previous: RunProgress, run: string): RunProgress {
   return { current: previous.current === run ? null : previous.current, runs };
 }
 
-/** Il testo per un'installazione della Search: con il nome della dipendenza in corso. */
+/** The text for a Search install: with the name of the dependency in progress. */
 export function runLabel(event: InstallProgress | undefined, run: string): string {
   const label = progressLabel(event, "Starting…");
   if (!event || progressKey(event) === run || !event.name) return label;

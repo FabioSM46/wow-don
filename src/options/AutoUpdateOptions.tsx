@@ -12,42 +12,42 @@ import {
 import { Segmented, SettingRow, SettingsSection, SwitchRow } from "./Setting";
 
 type Props = {
-  /** La tab Options è aperta: le impostazioni si rileggono quando lo diventa. */
+  /** The Options tab is open: the settings are read again when it becomes so. */
   active: boolean;
   installations: Installation[];
-  /** La modalità salvata, a ogni lettura e salvataggio (la riga di stato di Installed, #203). */
+  /** The saved mode, on every read and save (the status line of Installed, #203). */
   onModeChange?: (mode: AutoUpdateMode) => void;
 };
 
 type Schedule = { mode: AutoUpdateMode; intervalHours: number };
 
 /**
- * La sezione "Automatic updates" di Options (D41, issue #204): modalità e intervallo
- * (`autoUpdate` e `autoUpdateIntervalHours` di `get_settings`, salvati con `set_auto_update`) e
- * un interruttore per installazione (`get_auto_update`, `set_installation_auto_update`). I giri
- * e gli aggiornamenti restano nel backend: qui ci sono solo le scelte.
+ * The "Automatic updates" section of Options (D41, issue #204): mode and interval
+ * (`autoUpdate` and `autoUpdateIntervalHours` from `get_settings`, saved with `set_auto_update`)
+ * and a switch per installation (`get_auto_update`, `set_installation_auto_update`). The rounds
+ * and the updates stay in the backend: here there are only the choices.
  *
- * Ogni controllo mostra il valore salvato; durante un salvataggio quello scelto. Un salvataggio
- * fallito mostra l'errore e il controllo torna al valore salvato.
+ * Each control shows the saved value; during a save the chosen one. A failed save shows the
+ * error and the control goes back to the saved value.
  */
 export function AutoUpdateOptions({ active, installations, onModeChange }: Props) {
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [pending, setPending] = useState<Schedule | undefined>(undefined);
-  // Id dell'installazione → partecipa all'aggiornamento automatico.
+  // Installation id → takes part in automatic updates.
   const [enabled, setEnabled] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [pendingInstallation, setPendingInstallation] = useState<
     { id: string; enabled: boolean } | undefined
   >(undefined);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // Come in `SystemOptions`: una lettura vale solo se nel frattempo non è partito altro, e
-  // nessuna lettura parte mentre un salvataggio è in corso.
+  // As in `SystemOptions`: a read counts only if nothing else has started in the meantime, and
+  // no read starts while a save is in progress.
   const generation = useRef(0);
   const savingRef = useRef(false);
-  // Una lettura saltata durante un salvataggio, o scartata perché il salvataggio ha cambiato
-  // generazione, non tornerebbe più: per esempio un'installazione aggiunta mentre si salva
-  // resterebbe senza valore e con la casella disattivata. Ogni salvataggio finito fa quindi
-  // ripartire la lettura cambiando `retry`.
+  // A read skipped during a save, or discarded because the save changed generation, would
+  // never come back: for example an installation added while saving would stay without a
+  // value and with its checkbox disabled. Every finished save therefore restarts the read by
+  // changing `retry`.
   const [retry, setRetry] = useState(0);
   const modeChanged = useRef(onModeChange);
   useEffect(() => {
@@ -86,7 +86,7 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
         }
       });
       setEnabled(next);
-      // Lo stesso errore per più installazioni (per esempio `settings.json` danneggiato) una volta.
+      // The same error for several installations (for example a corrupted `settings.json`) once.
       setLoadError(failures.length > 0 ? [...new Set(failures)].join(" ") : null);
     }
 

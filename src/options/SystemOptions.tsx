@@ -4,7 +4,7 @@ import { SettingsSection, SwitchRow } from "./Setting";
 import { autostartHint, closeToTrayHint } from "./system";
 
 type Props = {
-  /** La tab Options è aperta: le impostazioni si rileggono quando lo diventa. */
+  /** The Options tab is open: the settings are read again when it becomes so. */
   active: boolean;
 };
 
@@ -12,13 +12,13 @@ type Tray = { closeToTray: boolean; trayAvailable: boolean };
 type Saving = "tray" | "autostart" | null;
 
 /**
- * La sezione "System" di Options (issue #160): "Close to tray" (`closeToTray` di
- * `get_settings`, salvata con `set_close_to_tray`) e "Start with the system" (`get_autostart` e
- * `set_autostart`, lo stato reale del sistema operativo). Tray e avvio automatico restano nel
- * backend: qui ci sono solo i comandi dell'app.
+ * The "System" section of Options (issue #160): "Close to tray" (`closeToTray` from
+ * `get_settings`, saved with `set_close_to_tray`) and "Start with the system" (`get_autostart`
+ * and `set_autostart`, the real state of the operating system). Tray and autostart stay in the
+ * backend: here there are only the app's commands.
  *
- * `trayAvailable` può cambiare mentre l'app gira, quindi i valori si rileggono ogni volta che
- * Options si apre e quando la finestra torna in primo piano con Options aperta.
+ * `trayAvailable` can change while the app runs, so the values are read again every time
+ * Options opens and when the window comes back to the foreground with Options open.
  */
 export function SystemOptions({ active }: Props) {
   const [tray, setTray] = useState<Tray | null>(null);
@@ -26,12 +26,12 @@ export function SystemOptions({ active }: Props) {
   const [saving, setSaving] = useState<Saving>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // Conta letture e salvataggi: una lettura vale solo se nel frattempo non è partito altro, così
-  // una risposta vecchia non copre il valore appena salvato.
+  // Counts reads and saves: a read counts only if nothing else has started in the meantime, so
+  // an old answer does not cover the value just saved.
   const generation = useRef(0);
-  // Un salvataggio in corso vince: nessuna lettura parte finché non finisce, perché il backend
-  // potrebbe servirla prima della scrittura e la sua risposta arrivare dopo. Un ref e non
-  // `saving`, che l'effetto non rivede.
+  // A save in progress wins: no read starts until it finishes, because the backend could serve
+  // it before the write and its answer arrive later. A ref and not `saving`, which the effect
+  // does not see again.
   const savingRef = useRef(false);
 
   useEffect(() => {
@@ -77,7 +77,7 @@ export function SystemOptions({ active }: Props) {
         setAutostart(await api.setAutostart(next));
       }
     } catch (err) {
-      // L'interruttore è controllato: senza un valore salvato nuovo resta su quello di prima.
+      // The switch is controlled: without a new saved value it stays on the previous one.
       setError(errorMessage(err));
     } finally {
       savingRef.current = false;

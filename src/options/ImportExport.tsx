@@ -28,10 +28,10 @@ import {
 import { SettingRow, SettingsSection } from "./Setting";
 
 type Props = {
-  /** L'installazione attiva; `null` se non ce n'è nessuna. */
+  /** The active installation; `null` if there is none. */
   installation: Installation | null;
-  /** Gli addon sul disco sono cambiati: la tab Installed si rilegge. */
-  /** L'importazione nell'installazione `installationId` è finita, anche con un errore. */
+  /** The addons on disk changed: the Installed tab reads them again. */
+  /** The import into installation `installationId` has finished, even with an error. */
   onImported: (installationId: string) => void;
 };
 
@@ -42,10 +42,10 @@ type Load<T> =
   | { state: "error"; message: string };
 
 /**
- * La sezione "Import and export" di Options (issue #135): copia la stringa degli addon
- * dell'installazione attiva e ne importa una, con un'anteprima prima di cambiare qualcosa.
- * "Replace all" toglie cartelle senza backup (scelta dell'utente): la conferma elenca
- * esattamente quelle, e solo quelle arrivano al backend.
+ * The "Import and export" section of Options (issue #135): copies the addon string of the
+ * active installation and imports one, with a preview before changing anything.
+ * "Replace all" removes folders without a backup (the user's choice): the confirmation lists
+ * exactly those, and only those reach the backend.
  */
 export function ImportExport({ installation, onImported }: Props) {
   const id = installation?.id ?? null;
@@ -63,7 +63,7 @@ export function ImportExport({ installation, onImported }: Props) {
   const [reached, setReached] = useState<ReadonlyMap<string, ProgressPhase>>(new Map());
   const cancelRef = useRef<HTMLButtonElement>(null);
   const importRef = useRef<HTMLButtonElement>(null);
-  // Una risposta vale solo per l'installazione e il testo da cui è partita la richiesta.
+  // An answer counts only for the installation and the text the request started from.
   const idRef = useRef(id);
   const textRef = useRef(text);
   useEffect(() => {
@@ -81,7 +81,7 @@ export function ImportExport({ installation, onImported }: Props) {
     });
   });
 
-  // Un'altra installazione: export e anteprima non valgono più.
+  // Another installation: export and preview no longer hold.
   useEffect(() => {
     setExported({ state: "idle" });
     setPreview({ state: "idle" });
@@ -90,12 +90,12 @@ export function ImportExport({ installation, onImported }: Props) {
     setCopied(null);
   }, [id]);
 
-  // La conferma prende il focus quando compare, così tastiera e lettori di schermo ci arrivano.
+  // The confirmation takes focus when it appears, so keyboard and screen readers reach it.
   useEffect(() => {
     if (confirming) cancelRef.current?.focus();
   }, [confirming]);
 
-  // Il messaggio di "Copy" sparisce da solo.
+  // The "Copy" message disappears on its own.
   useEffect(() => {
     if (copied === null) return;
     const timer = window.setTimeout(() => setCopied(null), 2500);
@@ -128,7 +128,7 @@ export function ImportExport({ installation, onImported }: Props) {
       await navigator.clipboard.writeText(value);
       setCopied("Copied");
     } catch {
-      // Senza accesso agli appunti si seleziona il testo: basta la scorciatoia di sistema.
+      // Without clipboard access the text is selected: the system shortcut is enough.
       exportRef.current?.select();
       setCopied("Press Ctrl+C (⌘C on macOS) to copy");
     }
@@ -136,7 +136,7 @@ export function ImportExport({ installation, onImported }: Props) {
 
   function changeText(value: string) {
     setText(value);
-    // L'anteprima era della stringa di prima.
+    // The preview was of the previous string.
     setPreview({ state: "idle" });
     setConfirming(false);
   }
@@ -150,8 +150,8 @@ export function ImportExport({ installation, onImported }: Props) {
     setConfirming(false);
     try {
       const value = await api.previewImport(requested.id, requested.text);
-      // Un'anteprima di un altro testo o di un'altra installazione mostrerebbe cartelle da
-      // togliere che non c'entrano.
+      // A preview of another text or of another installation would show folders to remove
+      // that have nothing to do with it.
       if (stillCurrent()) setPreview({ state: "ready", value });
     } catch (err) {
       if (stillCurrent()) setPreview({ state: "error", message: errorMessage(err) });
@@ -169,7 +169,7 @@ export function ImportExport({ installation, onImported }: Props) {
       const value = await api.importAddons(requested, text, mode, confirmed);
       if (idRef.current === requested) {
         setResult({ state: "ready", value });
-        // L'anteprima descriveva lo stato di prima.
+        // The preview described the previous state.
         setPreview({ state: "idle" });
       }
     } catch (err) {
@@ -177,14 +177,14 @@ export function ImportExport({ installation, onImported }: Props) {
     } finally {
       setImporting(false);
       setProgress(undefined);
-      // Gli addon sul disco possono essere cambiati anche se il comando ha fallito.
+      // The addons on disk may have changed even if the command failed.
       onImported(requested);
     }
   }
 
   function cancelConfirm() {
     setConfirming(false);
-    // Il pulsante Import torna al posto della conferma: il focus ci torna con lui.
+    // The Import button comes back in place of the confirmation: focus returns with it.
     window.setTimeout(() => importRef.current?.focus(), 0);
   }
 

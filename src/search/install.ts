@@ -1,25 +1,25 @@
-// Installazione dalla tab Search: il riepilogo degli esiti di `install_addon` e lo stato
-// "installato" che le righe e il dettaglio mostrano dopo un'installazione. Funzioni pure,
-// senza React né I/O.
+// Installing from the Search tab: the summary of the `install_addon` outcomes and the
+// "installed" state that the rows and the detail show after an install. Pure functions,
+// no React or I/O.
 
 import type { CatalogAddon, InstallOutcome } from "../api";
 
-/** Una riga del riepilogo: `error` si mostra come errore, il resto in tono neutro. */
+/** A summary line: `error` shows as an error, the rest in a neutral tone. */
 export type SummaryLine = { modId: number; text: string; error: boolean };
 
-/** Il riepilogo di un'installazione: una frase sul progetto scelto e una riga per dipendenza. */
+/** The summary of an install: a sentence on the chosen project and one line per dependency. */
 export type InstallSummary = { headline: string; error: boolean; lines: SummaryLine[] };
 
-/** Il nome di un esito: il backend può lasciarlo vuoto, e allora resta l'id. */
+/** The name of an outcome: the backend may leave it empty, and then the id remains. */
 function outcomeName(outcome: InstallOutcome, fallback?: string): string {
   return outcome.name.trim() || fallback?.trim() || `Project #${outcome.modId}`;
 }
 
 /**
- * Il riepilogo degli esiti di `install_addon` per il progetto `requested` (id e nome che gli dà
- * la ricerca, per quando l'esito non ne ha uno): il backend mette prima il suo esito e poi
- * quelli delle dipendenze, in ampiezza e con `dependencyOf`. L'esito del progetto si cerca per
- * id, così la frase non descrive mai una dipendenza.
+ * The summary of the `install_addon` outcomes for the project `requested` (id and name the
+ * search gives it, for when the outcome has none): the backend puts its outcome first and then
+ * those of the dependencies, breadth-first and with `dependencyOf`. The project's outcome is
+ * looked up by id, so the sentence never describes a dependency.
  */
 export function summarizeInstall(
   outcomes: InstallOutcome[],
@@ -55,7 +55,7 @@ export function summarizeInstall(
     };
   });
 
-  // Senza l'esito del progetto (una risposta che il backend non dà) restano le righe.
+  // Without the project's outcome (an answer the backend does not give) the lines remain.
   if (!main) return { headline: "Nothing was installed.", error: false, lines };
 
   const mainName = nameOf(main.modId);
@@ -66,7 +66,7 @@ export function summarizeInstall(
       const installed = dependencies.filter((o) => o.status === "installed").length;
       const withDeps =
         installed > 0 ? ` with ${installed} ${installed === 1 ? "dependency" : "dependencies"}` : "";
-      // Su un'installazione riuscita il messaggio è un avviso: segue la frase.
+      // On a successful install the message is a warning: it follows the sentence.
       headline = `${mainName} installed${withDeps}.${main.message ? ` ${main.message}` : ""}`;
       break;
     }
@@ -80,14 +80,14 @@ export function summarizeInstall(
   return { headline, error: main.status === "error", lines };
 }
 
-/** Gli id dei progetti che l'installazione ha messo nell'installazione. */
+/** The ids of the projects the install put into the installation. */
 export function installedIds(outcomes: InstallOutcome[]): number[] {
   return outcomes.filter((o) => o.status === "installed").map((o) => o.modId);
 }
 
 /**
- * L'addon con il segno "installato" aggiornato: la ricerca lo calcola a ogni risposta, ma un
- * progetto installato dopo la risposta è in `installed`. Lo stesso oggetto se non cambia niente.
+ * The addon with an updated "installed" mark: the search computes it on every answer, but a
+ * project installed after the answer is in `installed`. The same object if nothing changes.
  */
 export function withInstalled<T extends Pick<CatalogAddon, "id" | "installed">>(
   addon: T,
@@ -96,12 +96,12 @@ export function withInstalled<T extends Pick<CatalogAddon, "id" | "installed">>(
   return !addon.installed && installed.has(addon.id) ? { ...addon, installed: true } : addon;
 }
 
-/** `releaseType` dei file Beta di CurseForge. */
+/** `releaseType` of CurseForge Beta files. */
 const RELEASE_TYPE_BETA = 2;
 
 /**
- * Il testo del pulsante di installazione: "Install beta" quando il file che l'app installerà è
- * una Beta (solo con l'opzione, quando la versione non ha una Release; issue #141).
+ * The text of the install button: "Install beta" when the file the app will install is
+ * a Beta (only with the option, when the version has no Release; issue #141).
  */
 export function installLabel(addon: Pick<CatalogAddon, "latestFile">): string {
   return addon.latestFile?.releaseType === RELEASE_TYPE_BETA ? "Install beta" : "Install";

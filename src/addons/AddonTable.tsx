@@ -73,60 +73,60 @@ import {
 
 type Props = {
   installation: Installation;
-  /** Cambia quando gli addon sono stati installati altrove nell'app: la lista si rilegge. */
+  /** Changes when the addons were installed elsewhere in the app: the list is reread. */
   reload?: number;
-  /** Apre il selettore di uno zip da installare (D32); senza, il pulsante non compare. */
+  /** Opens the picker for a zip to install (D32); without it, the button does not appear. */
   onInstallZip?: () => void;
-  /** Un'installazione da zip è in corso. */
+  /** A zip installation is in progress. */
   zipBusy?: boolean;
-  /** Rimozione, aggiornamento o reinstallazione hanno (forse) cambiato gli addon sul disco
-   * dell'installazione `installationId`: la tab Search rilegge i suoi risultati. */
+  /** Removal, update or reinstall have (perhaps) changed the addons on disk of the
+   * `installationId` installation: the Search tab rereads its results. */
   onChanged?: (installationId: string) => void;
-  /** La riga dell'aggiornamento automatico (`AutoUpdateLine`): una barra propria tra il titolo
-   * e i filtri. */
+  /** The automatic update row (`AutoUpdateLine`): a bar of its own between the title and the
+   * filters. */
   autoUpdateLine?: ReactNode;
 };
 
 /**
- * Risultati del controllo aggiornamenti per installazione, validi per la sessione. Stanno fuori
- * dal componente perché cambiando installazione il componente si ricarica: tornando su una già
- * controllata non si richiama CurseForge.
+ * Update check results per installation, valid for the session. They live outside the
+ * component because changing installation reloads the component: going back to one already
+ * checked does not call CurseForge again.
  */
 const updatesCache = new Map<string, AddonUpdate[]>();
-/** Installazioni con un controllo automatico già partito, per non chiamare CurseForge due volte. */
+/** Installations with an automatic check already started, so as not to call CurseForge twice. */
 const autoChecked = new Set<string>();
-/** L'ultimo errore del controllo per installazione, per mostrarlo anche tornandoci. */
+/** The last check error per installation, to show it also when going back to it. */
 const errorCache = new Map<string, string>();
 /**
- * Progetti in aggiornamento per installazione. Fuori dal componente come le cache sopra:
- * tornando su un'installazione con un aggiornamento ancora in corso, le righe restano bloccate
- * e non parte un secondo aggiornamento dello stesso progetto.
+ * Projects being updated per installation. Outside the component like the caches above: going
+ * back to an installation with an update still in progress, the rows stay locked and a second
+ * update of the same project does not start.
  */
 const updateRuns = new Map<string, Set<string>>();
-/** Le installazioni il cui aggiornamento in corso è una reinstallazione (issue #149). */
+/** The installations whose update in progress is a reinstall (issue #149). */
 const reinstallRuns = new Set<string>();
-/** L'esito dell'ultimo aggiornamento per installazione, mostrato sopra la tabella. */
+/** The outcome of the last update per installation, shown above the table. */
 const updateResults = new Map<string, UpdateResult>();
 
-/** `reinstall`: l'esito viene da "Reinstall" del menu, non da un aggiornamento. */
+/** `reinstall`: the outcome comes from the menu's "Reinstall", not from an update. */
 type UpdateResult = ({ outcomes: UpdateOutcome[] } | { error: string }) & { reinstall?: boolean };
 
-/** Il menu aperto: la riga (cartella principale) e il punto in cui si apre. */
+/** The open menu: the row (main folder) and the point where it opens. */
 type OpenMenu = { row: string; x: number; y: number };
 
-/** L'esito dell'ultima rimozione, mostrato sopra la tabella. */
+/** The outcome of the last removal, shown above the table. */
 type RemovalResult =
   | { error: string }
   | { text: string; errors: { folder: string; message: string }[]; warning: string | null };
 
 /**
- * I tipi di versione del gioco non cambiano durante la sessione e il comando non usa la rete:
- * una sola richiesta, condivisa da tutte le installazioni.
+ * The game version types do not change during the session and the command does not use the
+ * network: a single request, shared by all installations.
  */
 let versionTypesRequest: Promise<VersionType[]> | null = null;
 function loadVersionTypes(): Promise<VersionType[]> {
   versionTypesRequest ??= api.listVersionTypes().catch((err) => {
-    // Un errore non resta in cache: il prossimo montaggio riprova.
+    // An error does not stay in the cache: the next mount retries.
     versionTypesRequest = null;
     throw err;
   });
@@ -144,7 +144,7 @@ type Load =
 
 const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium" });
 
-/** `format` lancia un'eccezione su una data non valida: un `mtime` strano mostra "—". */
+/** `format` throws an exception on an invalid date: an odd `mtime` shows "—". */
 function formatModified(ms: number | null): string {
   if (ms === null) return "—";
   const date = new Date(ms);
@@ -162,7 +162,7 @@ export function AddonTable({
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<Sort>(defaultSort);
-  // Gruppi aperti (per cartella principale): le altre cartelle compaiono sotto la riga.
+  // Open groups (by main folder): the other folders appear below the row.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   function toggle(folder: string) {
@@ -173,13 +173,13 @@ export function AddonTable({
       return next;
     });
   }
-  // L'ultimo risultato valido resta visibile anche durante un nuovo controllo, così la tabella
-  // e il filtro "Solo con aggiornamenti" non si svuotano mentre si aspetta.
+  // The last valid result stays visible even during a new check, so the table and the
+  // "Only with updates" filter do not empty while waiting.
   const [updates, setUpdates] = useState<Map<string, AddonUpdate> | undefined>();
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
-  // Il componente non si rimonta cambiando installazione: ogni risposta, automatica o dal
-  // pulsante, si applica solo se l'installazione è ancora quella per cui è partita.
+  // The component does not remount when changing installation: every response, automatic or
+  // from the button, applies only if the installation is still the one it started for.
   const currentId = useRef(installation.id);
   currentId.current = installation.id;
 
@@ -201,12 +201,12 @@ export function AddonTable({
         if (currentId.current !== id) return;
         setCheckError(errorMessage(err));
         setChecking(false);
-        // Senza nessun risultato il filtro non ha dati su cui agire: lo si toglie.
+        // With no results at all the filter has no data to act on: it is removed.
         if (!updatesCache.has(id)) setFilters((f) => ({ ...f, onlyUpdates: false }));
       });
   }, [installation.id]);
 
-  // Primo accesso nella sessione: controllo automatico; poi solo con il pulsante.
+  // First access in the session: automatic check; afterwards only with the button.
   useEffect(() => {
     const cached = updatesCache.get(installation.id);
     setUpdates(cached ? byFolder(cached) : undefined);
@@ -218,19 +218,19 @@ export function AddonTable({
     }
   }, [installation.id, runCheck]);
 
-  // Rilegge `Interface/AddOns` senza svuotare la tabella né perdere filtri e righe aperte:
-  // serve dopo aver installato o tolto addon fuori dall'app.
+  // Rereads `Interface/AddOns` without emptying the table or losing filters and open rows:
+  // needed after installing or removing addons outside the app.
   const [rescanning, setRescanning] = useState(false);
   const [rescanError, setRescanError] = useState<string | null>(null);
-  // `force` solo dal pulsante: ricalcola i fingerprint anche delle cartelle che sembrano uguali,
-  // per le modifiche fatte a mano fuori dall'app.
+  // `force` only from the button: recomputes the fingerprints even of folders that look
+  // unchanged, for changes made by hand outside the app.
   function rescan(force = false): Promise<void> {
     const id = installation.id;
     setRescanning(true);
     setRescanError(null);
     setChecking(true);
     setCheckError(null);
-    // Una sola scansione per lista e stati (issue #126).
+    // A single scan for list and statuses (issue #126).
     return api
       .refreshAddons(id, force)
       .then((result) => {
@@ -246,17 +246,17 @@ export function AddonTable({
         if (check.error === null) {
           setUpdates(byFolder(check.updates));
         } else {
-          // Come in `runCheck`: l'ultimo risultato valido resta visibile accanto all'errore, così
-          // un controllo fallito (rete assente) non toglie tutti gli stati. Dopo un aggiornamento
-          // `updateProjects` ha già svuotato la cache, quindi lì non resta niente di vecchio.
+          // As in `runCheck`: the last valid result stays visible next to the error, so a failed
+          // check (no network) does not remove all the statuses. After an update
+          // `updateProjects` has already emptied the cache, so nothing stale remains there.
           setCheckError(check.error);
-          // Senza nessun risultato il filtro non ha dati su cui agire: lo si toglie.
+          // With no results at all the filter has no data to act on: it is removed.
           if (!updatesCache.has(id)) setFilters((f) => ({ ...f, onlyUpdates: false }));
         }
       })
       .catch((err) => {
         if (currentId.current !== id) return;
-        // Un errore di lettura non toglie la tabella già mostrata: lo si segnala sopra.
+        // A read error does not remove the table already shown: it is reported above.
         setLoad((previous) =>
           previous.state === "ready" ? previous : { state: "error", message: errorMessage(err) },
         );
@@ -270,8 +270,8 @@ export function AddonTable({
       });
   }
 
-  // Un'installazione fatta altrove (tab Search) si vede con la stessa rilettura del pulsante,
-  // solo quando `reload` cambia.
+  // An installation made elsewhere (Search tab) shows up with the same reread as the button,
+  // only when `reload` changes.
   const seenReload = useRef(reload);
   useEffect(() => {
     if (seenReload.current === reload) return;
@@ -279,10 +279,10 @@ export function AddonTable({
     void rescan();
   }, [reload]);
 
-  // Progetti (`mod_id`) in aggiornamento: le loro righe mostrano la barra di avanzamento e tutti
-  // i pulsanti di aggiornamento restano disabilitati finché la lista e gli stati non sono riletti.
+  // Projects (`mod_id`) being updated: their rows show the progress bar and all the update
+  // buttons stay disabled until the list and the statuses are reread.
   const [updating, setUpdating] = useState<Set<string>>(new Set());
-  // L'ultimo avanzamento di ogni progetto in aggiornamento (issue #128), per `projectId`.
+  // The last progress of each project being updated (issue #128), by `projectId`.
   const [progress, setProgress] = useState<Map<string, InstallProgress>>(new Map());
   useInstallProgress(installation.id, (event) => {
     if (updateRuns.has(installation.id)) {
@@ -291,21 +291,21 @@ export function AddonTable({
   });
   const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
   const [reinstalling, setReinstalling] = useState(false);
-  // Menu contestuale, selezione multipla e rimozione (issue #149).
+  // Context menu, multiple selection and removal (issue #149).
   const [selection, setSelection] = useState<Selection>(null);
   const [menu, setMenu] = useState<OpenMenu | null>(null);
-  // I gruppi da togliere, fissati quando si sceglie "Remove": la barra chiede conferma per quelli.
+  // The groups to remove, fixed when "Remove" is chosen: the bar asks confirmation for those.
   const [confirming, setConfirming] = useState<AddonGroup[] | null>(null);
   const [removing, setRemoving] = useState(false);
   const [removalResult, setRemovalResult] = useState<RemovalResult | null>(null);
-  // La riga da cui è partito il menu: il focus ci torna con Esc, dopo una scelta o con Cancel.
+  // The row the menu started from: focus returns to it with Esc, after a choice or with Cancel.
   const returnFocus = useRef<HTMLElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
-  // La riga raggiungibile con Tab (roving tabindex): le altre si raggiungono con le frecce.
+  // The row reachable with Tab (roving tabindex): the others are reached with the arrows.
   const [focusRow, setFocusRow] = useState<string | null>(null);
-  // `currentId` sopravvive allo smontaggio: serve un segnale a parte per non rileggere la lista
-  // di un componente che non c'è più.
+  // `currentId` survives unmounting: a separate signal is needed so as not to reread the list
+  // of a component that no longer exists.
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -314,14 +314,14 @@ export function AddonTable({
     };
   }, []);
 
-  // Gli addon esclusi dall'aggiornamento automatico (issue #204), per `projectId`: si leggono
-  // con `get_auto_update` per installazione e si abbinano alle righe su `project.source` e
-  // `project.key`. `undefined` finché la lettura non è riuscita.
+  // The addons excluded from automatic updates (issue #204), by `projectId`: they are read with
+  // `get_auto_update` per installation and matched to the rows on `project.source` and
+  // `project.key`. `undefined` until the read has succeeded.
   const [excluded, setExcluded] = useState<ReadonlySet<string> | undefined>();
   const [excludedError, setExcludedError] = useState<string | null>(null);
   const [savingExclusion, setSavingExclusion] = useState(false);
-  // La scelta in salvataggio: le righe la mostrano finché il backend non risponde, poi vale lo
-  // stato salvato (anche dopo un errore, che riporta le righe a quello che c'è davvero).
+  // The choice being saved: the rows show it until the backend responds, then the saved state
+  // applies (even after an error, which brings the rows back to what is really there).
   const [pendingExclusion, setPendingExclusion] = useState<{
     projects: ProjectRef[];
     exclude: boolean;
@@ -345,8 +345,8 @@ export function AddonTable({
   }, [installation.id]);
 
   /**
-   * Esclude o riammette i progetti, uno alla volta: ogni risposta è lo stato salvato e lo
-   * sostituisce. Al primo errore si ferma: le righe mostrano quello che il backend ha salvato.
+   * Excludes or readmits the projects, one at a time: each response is the saved state and
+   * replaces it. At the first error it stops: the rows show what the backend saved.
    */
   async function saveExclusion(projects: ProjectRef[], exclude: boolean) {
     const id = installation.id;
@@ -373,14 +373,14 @@ export function AddonTable({
     }
   }
 
-  // Quello che le righe mostrano: la scelta in salvataggio sopra lo stato salvato.
+  // What the rows show: the choice being saved on top of the saved state.
   const shownExcluded =
     pendingExclusion && excluded
       ? excludedAfter(excluded, pendingExclusion.projects, pendingExclusion.exclude)
       : excluded;
 
-  // `reinstall` (issue #149): riscarica anche i progetti già aggiornati, con la stessa barra e
-  // lo stesso riepilogo di un aggiornamento.
+  // `reinstall` (issue #149): downloads again even the projects already up to date, with the
+  // same bar and the same summary as an update.
   function updateProjects(projects: ProjectRef[], reinstall = false) {
     const id = installation.id;
     const ids = new Set(projects.map(projectId));
@@ -403,22 +403,22 @@ export function AddonTable({
       )
       .then((result) => {
         updateResults.set(id, result);
-        // Gli stati di prima non valgono più: senza cache il prossimo controllo li rilegge.
+        // The previous statuses are no longer valid: without a cache the next check rereads them.
         updatesCache.delete(id);
         errorCache.delete(id);
-        // Con la cache vuota serve un nuovo controllo anche se ora si guarda altro: tornando
-        // sulla tabella il controllo automatico ripartirà.
+        // With the cache empty a new check is needed even if something else is being viewed now:
+        // when going back to the table the automatic check will start again.
         autoChecked.delete(id);
         if (!mounted.current || currentId.current !== id) return;
         setUpdateResult(result);
         return rescan();
       })
       .finally(() => {
-        // Anche un comando fallito può aver cambiato qualcosa sul disco.
+        // Even a failed command may have changed something on disk.
         onChanged?.(id);
         updateRuns.delete(id);
         reinstallRuns.delete(id);
-        // Non c'è una fase finale: la barra si chiude quando il comando restituisce gli esiti.
+        // There is no final phase: the bar closes when the command returns the outcomes.
         if (mounted.current && currentId.current === id) {
           setUpdating(new Set());
           setReinstalling(false);
@@ -427,8 +427,8 @@ export function AddonTable({
       });
   }
 
-  // Rimozione (issue #149): toglie tutte le cartelle dei gruppi confermati, senza backup; poi la
-  // lista si rilegge. Le righe rimosse escono dalla selezione, le altre restano.
+  // Removal (issue #149): removes all the folders of the confirmed groups, without backup; then
+  // the list is reread. The removed rows leave the selection, the others stay.
   function removeGroups(targets: AddonGroup[]) {
     const id = installation.id;
     const folders = foldersOf(targets);
@@ -472,7 +472,7 @@ export function AddonTable({
     };
   }, []);
 
-  // La versione del gioco che si sta salvando (progetto e scelta), ed errori per progetto.
+  // The game version being saved (project and choice), and errors per project.
   const [versionSaving, setVersionSaving] = useState<VersionChoice | null>(null);
   const [versionErrors, setVersionErrors] = useState<Map<number, string>>(new Map());
 
@@ -487,13 +487,13 @@ export function AddonTable({
     request
       .then(
         () => {
-          // Gli stati di prima valgono per l'altra versione: come dopo un aggiornamento, la
-          // cache si svuota e il controllo riparte (o ripartirà tornando sull'installazione).
+          // The previous statuses apply to the other version: as after an update, the cache is
+          // emptied and the check restarts (or will restart on going back to the installation).
           updatesCache.delete(id);
           errorCache.delete(id);
           autoChecked.delete(id);
           if (!mounted.current || currentId.current !== id) return;
-          // L'etichetta cambia subito; lo stato dell'aggiornamento arriva dal controllo.
+          // The label changes immediately; the update status comes from the check.
           setUpdates((previous) => withOverride(previous, modId, versionType));
           return runCheck();
         },
@@ -508,11 +508,11 @@ export function AddonTable({
   }
 
   useEffect(() => {
-    // Cambiando installazione in fretta, una risposta vecchia non deve sovrascrivere la nuova.
+    // When changing installation quickly, an old response must not overwrite the new one.
     let current = true;
     setVersionSaving(null);
     setVersionErrors(new Map());
-    // Una rilettura partita per l'installazione precedente non vale più per questa.
+    // A reread started for the previous installation is no longer valid for this one.
     setRescanning(false);
     setRescanError(null);
     setUpdating(updateRuns.get(installation.id) ?? new Set());
@@ -538,7 +538,7 @@ export function AddonTable({
   }, [installation.id]);
 
   const addons = load.state === "ready" ? load.addons : [];
-  // Un addon fatto di più cartelle è una riga sola: conteggi e filtri contano i gruppi.
+  // An addon made of several folders is a single row: counts and filters count the groups.
   const groups = useMemo(() => groupAddons(addons, updates), [addons, updates]);
   const authors = useMemo(() => authorsOf(groups.map((g) => g.main)), [groups]);
   const visible = useMemo(
@@ -548,8 +548,8 @@ export function AddonTable({
   const updateCount = groups.filter(
     (g) => groupUpdate(g, updates)?.status === "updateAvailable",
   ).length;
-  // "Update all" conta i progetti che l'app può aggiornare da sola: uno per gruppo, senza
-  // ripetizioni (fonte più id), così il numero sul pulsante è quello dei progetti inviati.
+  // "Update all" counts the projects the app can update on its own: one per group, without
+  // repetitions (source plus id), so the number on the button is that of the projects sent.
   const updatable = new Map<string, ProjectRef>();
   for (const g of groups) {
     const update = groupUpdate(g, updates);
@@ -557,8 +557,8 @@ export function AddonTable({
   }
   const updatableIds = [...updatable.values()];
   const sources = useMemo(() => sourcesIn(updates), [updates]);
-  // Una fonte scelta che non compare più nel controllo (addon tolto, nuovo controllo) nasconderebbe
-  // tutto senza un menu per toglierla. Un controllo ancora vuoto non cancella la scelta.
+  // A chosen source that no longer appears in the check (addon removed, new check) would hide
+  // everything without a menu to clear it. A check that is still empty does not clear the choice.
   useEffect(() => {
     if (sources.length > 0 && filters.source !== null && !sources.includes(filters.source)) {
       setFilters((previous) => ({ ...previous, source: null }));
@@ -568,14 +568,14 @@ export function AddonTable({
   const busy = running || removing;
   const position = progressPosition(progress, updating);
 
-  // Dopo una rilettura restano selezionate solo le righe che esistono ancora.
+  // After a reread only the rows that still exist stay selected.
   useEffect(() => {
     if (load.state !== "ready") return;
     setSelection((previous) => pruneSelection(previous, groups.map((g) => g.main.folder)));
   }, [groups, load.state]);
 
-  // Esc esce dalla modalità selezione, se il tasto non serve già a un campo, al menu o alla barra
-  // di conferma, e solo con la tab Installed in vista (le tab nascoste restano montate).
+  // Esc leaves selection mode, if the key is not already used by a field, the menu or the
+  // confirmation bar, and only with the Installed tab in view (hidden tabs stay mounted).
   const selecting = selection !== null;
   useEffect(() => {
     if (!selecting) return;
@@ -590,7 +590,7 @@ export function AddonTable({
     return () => document.removeEventListener("keydown", onKey);
   }, [selecting]);
 
-  // La barra di conferma prende il focus su Cancel: Invio per sbaglio non toglie niente.
+  // The confirmation bar takes focus on Cancel: an accidental Enter removes nothing.
   useEffect(() => {
     if (confirming) cancelRef.current?.focus();
   }, [confirming]);
@@ -609,7 +609,7 @@ export function AddonTable({
   function onRowContextMenu(event: MouseEvent<HTMLTableRowElement>, row: string) {
     event.preventDefault();
     const element = event.currentTarget;
-    // Dal tasto Menu il browser può dare (0, 0): il menu si apre sotto l'inizio della riga.
+    // From the Menu key the browser may give (0, 0): the menu opens below the start of the row.
     if (event.clientX === 0 && event.clientY === 0) {
       const rect = element.getBoundingClientRect();
       openMenu(row, element, rect.left + 24, rect.bottom);
@@ -619,7 +619,7 @@ export function AddonTable({
   }
 
   function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, row: string, hasOthers: boolean) {
-    // I controlli dentro la riga (link, menu della versione, pulsanti) tengono i loro tasti.
+    // The controls inside the row (links, version menu, buttons) keep their keys.
     if (event.target !== event.currentTarget) return;
     const element = event.currentTarget;
     if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
@@ -666,7 +666,7 @@ export function AddonTable({
         break;
       }
       case "remove":
-        // Il focus va alla barra di conferma, non alla riga.
+        // Focus goes to the confirmation bar, not to the row.
         closeMenu(false);
         setConfirming(targets);
         break;
@@ -679,7 +679,7 @@ export function AddonTable({
   }
 
   const menuState = { updates, busy, checking, excluded, excludedError, savingExclusion };
-  // Una riga che i filtri hanno nascosto non può restare l'unica raggiungibile con Tab.
+  // A row the filters have hidden cannot remain the only one reachable with Tab.
   const tabStop =
     focusRow !== null && visible.some((g) => g.main.folder === focusRow)
       ? focusRow
@@ -709,7 +709,7 @@ export function AddonTable({
       <header className="section-header addons-header">
         <h2 id="addons-title" className="addons-title">
           Addons
-          {/* L'installazione resta nel titolo: la sezione è etichettata da questo testo. */}
+          {/* The installation stays in the title: the section is labelled by this text. */}
           <span className="addons-count">
             {installation.name}
             {load.state === "ready" &&
@@ -744,8 +744,8 @@ export function AddonTable({
           >
             {rescanning ? "Reloading…" : "Reload addons"}
           </button>
-          {/* Un solo pulsante principale (D20, D42): "Update all" è tenue come gli Update
-              delle righe. */}
+          {/* A single primary button (D20, D42): "Update all" is soft like the rows'
+              Update buttons. */}
           {(running || updatableIds.length > 0) && (
             <button
               className="button soft"
@@ -960,8 +960,8 @@ export function AddonTable({
                           onClick={
                             selection !== null
                               ? (event) => {
-                                  // Un controllo dentro la riga (link, menu della versione,
-                                  // pulsanti) fa la sua azione e non cambia la selezione.
+                                  // A control inside the row (link, version menu, buttons)
+                                  // performs its action and does not change the selection.
                                   if (isControl(event.target, event.currentTarget)) return;
                                   setSelection((previous) => toggleRow(previous, addon.folder));
                                 }
@@ -991,8 +991,8 @@ export function AddonTable({
                             <span className="addon-title" title={addon.notes ?? undefined}>
                               {displayTitle(addon)}
                             </span>
-                            {/* `aria-selected` su una riga di tabella non è letto da tutti gli
-                                screen reader: lo stato è anche nel testo della riga. */}
+                            {/* `aria-selected` on a table row is not read by every screen
+                                reader: the state is also in the row's text. */}
                             {isSelected && <span className="visually-hidden"> (selected)</span>}
                             {isExcluded(update, shownExcluded) && (
                               <span className="pill addon-pill" title={EXCLUDED_TITLE}>
@@ -1109,20 +1109,20 @@ export function AddonTable({
   );
 }
 
-/** Il clic viene da un controllo dentro la riga, non dalla riga stessa. */
+/** The click comes from a control inside the row, not from the row itself. */
 function isControl(target: EventTarget, row: Element): boolean {
   const control =
     target instanceof Element ? target.closest("button, a, select, input, textarea, label") : null;
   return control !== null && row.contains(control);
 }
 
-/** Il titolo della riga del menu, per il suo nome accessibile. */
+/** The title of the menu's row, for its accessible name. */
 function menuTitle(groups: AddonGroup[], row: string): string {
   const group = groups.find((g) => g.main.folder === row);
   return group ? displayTitle(group.main) : row;
 }
 
-/** Riepilogo dell'ultima rimozione, con il motivo di ogni cartella non tolta. */
+/** Summary of the last removal, with the reason for each folder not removed. */
 function RemovalSummary({ result }: { result: RemovalResult }) {
   if ("error" in result) {
     return (
@@ -1156,7 +1156,7 @@ function withoutKey<V>(map: Map<number, V>, key: number): Map<number, V> {
   return next;
 }
 
-/** Gli stati con la nuova versione forzata per il progetto `modId`, prima del ricontrollo. */
+/** The statuses with the new version forced for the `modId` project, before the recheck. */
 function withOverride(
   updates: Map<string, AddonUpdate> | undefined,
   modId: number,
@@ -1180,13 +1180,13 @@ type VersionChoice = { modId: number; versionType: number | null };
 type ProjectCellProps = {
   update?: AddonUpdate;
   versionTypes: VersionType[];
-  /** La scelta in salvataggio per questo progetto, mostrata nel menu finché non finisce. */
+  /** The choice being saved for this project, shown in the menu until it finishes. */
   saving: VersionChoice | null;
   versionError?: string;
   /**
-   * Un salvataggio, un controllo o un aggiornamento in corso: il menu ignora le scelte. Non è
-   * `disabled` perché un controllo disabilitato perde il focus, e chi usa la tastiera
-   * ricomincerebbe dall'inizio della pagina dopo ogni scelta.
+   * A save, a check or an update in progress: the menu ignores choices. It is not `disabled`
+   * because a disabled control loses focus, and keyboard users would start again from the top
+   * of the page after every choice.
    */
   locked: boolean;
   onVersionChange: (modId: number, versionType: number | null) => void;
@@ -1204,7 +1204,7 @@ function ProjectCell({
   if (!project) return <td className="muted">—</td>;
   const override = update?.versionOverride ?? null;
   const selected = saving ? saving.versionType : override;
-  // "website only" o, con il mirror trovato dal controllo, "via GitHub" (issue #165).
+  // "website only" or, with the mirror found by the check, "via GitHub" (issue #165).
   const blocked = blockedHint(update);
   return (
     <td>
@@ -1212,7 +1212,7 @@ function ProjectCell({
         <button
           className="link inline"
           onClick={(event) => {
-            // Il link non apre e chiude la riga del gruppo.
+            // The link does not open and close the group row.
             event.stopPropagation();
             void openUrl(project.url!);
           }}
@@ -1227,17 +1227,17 @@ function ProjectCell({
           {SOURCE_LABELS[project.source]}
         </span>
       )}
-      {/* Le versioni forzate sono per progetto CurseForge (`mod_id`, D6). */}
+      {/* Forced versions are per CurseForge project (`mod_id`, D6). */}
       {versionTypes.length > 0 && project.source === "curseforge" && (
         <select
           className={`select compact version-select${saving || versionError ? " shown" : ""}`}
           aria-label={`Game version for ${project.name || `#${project.key}`}`}
           value={selected ?? ""}
           aria-disabled={locked}
-          // Il menu non apre e chiude la riga del gruppo.
+          // The menu does not open and close the group row.
           onClick={(event) => event.stopPropagation()}
           onChange={(event) => {
-            // Il menu è controllato: una scelta ignorata torna da sola al valore attuale.
+            // The menu is controlled: an ignored choice returns by itself to the current value.
             if (locked) return;
             onVersionChange(project.id, event.target.value ? Number(event.target.value) : null);
           }}
@@ -1248,7 +1248,7 @@ function ProjectCell({
               {type.name}
             </option>
           ))}
-          {/* Una versione forzata che l'app non conosce più resta visibile come scelta attuale. */}
+          {/* A forced version the app no longer knows stays visible as the current choice. */}
           {selected !== null && !versionTypes.some((type) => type.id === selected) && (
             <option value={selected}>{`#${selected}`}</option>
           )}
@@ -1276,11 +1276,11 @@ function ProjectCell({
 type UpdateCellProps = {
   update?: AddonUpdate;
   checking: boolean;
-  /** Il progetto di questa riga è nell'aggiornamento in corso. */
+  /** This row's project is in the update in progress. */
   updating: boolean;
-  /** L'aggiornamento in corso è una reinstallazione. */
+  /** The update in progress is a reinstall. */
   reinstalling: boolean;
-  /** L'ultimo avanzamento del progetto in aggiornamento, se è arrivato. */
+  /** The last progress of the project being updated, if it has arrived. */
   progress?: InstallProgress;
   disabled: boolean;
   onUpdate: (projects: ProjectRef[]) => void;
@@ -1314,11 +1314,11 @@ function UpdateCell({
           {isUpdatable(update) ? (
             <button
               className="button soft small row-update"
-              // Il testo si accorcia con "…": la versione intera resta nel suggerimento.
+              // The text is shortened with "…": the full version stays in the tooltip.
               title={`Update to ${update.latest.name}`}
               disabled={disabled}
               onClick={(event) => {
-                // Il pulsante non apre e chiude la riga del gruppo.
+                // The button does not open and close the group row.
                 event.stopPropagation();
                 onUpdate([update.project!]);
               }}
@@ -1348,7 +1348,7 @@ function UpdateCell({
     case "error":
       return (
         <td className="nowrap">
-          {/* Il messaggio intero nel suggerimento; per chi usa uno screen reader anche nel testo. */}
+          {/* The full message in the tooltip; for screen reader users also in the text. */}
           <span className="pill danger addon-pill" title={update.message}>
             Error<span className="visually-hidden">: {update.message}</span>
           </span>
@@ -1359,7 +1359,7 @@ function UpdateCell({
   }
 }
 
-/** Una sola versione dell'interfaccia e il resto come `+N`; l'elenco intero nel suggerimento. */
+/** A single interface version and the rest as `+N`; the full list in the tooltip. */
 function InterfaceCell({ versions, flavor }: { versions: number[]; flavor: string }) {
   const summary = interfaceSummary(versions, flavor);
   if (!summary) return <td className="mono">—</td>;
@@ -1369,7 +1369,7 @@ function InterfaceCell({ versions, flavor }: { versions: number[]; flavor: strin
       {summary.more > 0 && (
         <span className="more-folders">
           <span aria-hidden="true">+{summary.more}</span>
-          {/* Testo nascosto e non `aria-label`: uno span senza ruolo non viene sempre letto. */}
+          {/* Hidden text and not `aria-label`: a span without a role is not always read. */}
           <span className="visually-hidden">
             {" "}
             and {summary.more} more: {summary.title}
@@ -1380,14 +1380,14 @@ function InterfaceCell({ versions, flavor }: { versions: number[]; flavor: strin
   );
 }
 
-/** Lo stato riguarda il progetto: il suggerimento dice quale file del progetto è installato. */
+/** The status concerns the project: the tooltip says which file of the project is installed. */
 function installedTitle(update: AddonUpdate, latestDate?: string): string | undefined {
   const installed = update.installedFile ? `Installed: ${update.installedFile.name}` : undefined;
   const latest = latestDate ? `New file from ${latestDate.slice(0, 10)}` : undefined;
   return [installed, latest].filter(Boolean).join("\n") || undefined;
 }
 
-/** Riepilogo dell'ultimo aggiornamento, con il motivo di ogni progetto saltato o in errore. */
+/** Summary of the last update, with the reason for each project skipped or in error. */
 function UpdateSummary({ result }: { result: UpdateResult }) {
   if ("error" in result) {
     return (
@@ -1406,7 +1406,7 @@ function UpdateSummary({ result }: { result: UpdateResult }) {
     skipped > 0 && `${skipped} skipped`,
     errors > 0 && `${errors} ${errors === 1 ? "error" : "errors"}`,
   ].filter(Boolean);
-  // Un progetto aggiornato compare solo con un messaggio (per esempio "Installed from GitHub").
+  // An updated project appears only with a message (for example "Installed from GitHub").
   const details = result.outcomes.filter((o) => o.status !== "updated" || o.message);
   return (
     <div className="message update-summary" role="status">

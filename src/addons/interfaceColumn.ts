@@ -1,14 +1,14 @@
-// La colonna Interface della tab Installed (issue #230): una sola versione e il resto come
-// `+N`, così un addon che dichiara molte versioni non manda a capo la riga. Funzioni pure,
-// senza React né I/O.
+// The Interface column of the Installed tab (issue #230): a single version and the rest as
+// `+N`, so an addon that declares many versions does not wrap the row. Pure functions,
+// no React or I/O.
 
-/** Quello che la cella mostra: la versione scelta, quante altre ce ne sono e l'elenco intero. */
+/** What the cell shows: the chosen version, how many others there are and the whole list. */
 export type InterfaceSummary = { shown: number; more: number; title: string };
 
 /**
- * Gli intervalli di `## Interface` di ogni flavor, `[da, fino a escluso)`. È la stessa tabella
- * di `fits` in `src-tauri/src/sources/tukui.rs`: `interfaceColumn.test.ts` legge quel file e
- * fallisce se le due tabelle divergono.
+ * The `## Interface` ranges of each flavor, `[from, up to exclusive)`. It is the same table as
+ * `fits` in `src-tauri/src/sources/tukui.rs`: `interfaceColumn.test.ts` reads that file and
+ * fails if the two tables diverge.
  */
 export const FLAVOR_RANGES: Readonly<Record<string, readonly [number, number]>> = {
   retail: [100_000, Number.POSITIVE_INFINITY],
@@ -20,9 +20,9 @@ export const FLAVOR_RANGES: Readonly<Record<string, readonly [number, number]>> 
 };
 
 /**
- * Se un numero di `## Interface` appartiene al gioco del flavor dell'installazione. Si accetta
- * anche il nome della cartella (`_classic_era_`) e le maiuscole non contano. Un flavor
- * sconosciuto non ha versioni.
+ * Whether an `## Interface` number belongs to the game of the installation's flavor. The folder
+ * name (`_classic_era_`) is accepted too and case does not matter. An unknown flavor has no
+ * versions.
  */
 export function fitsFlavor(flavor: string, version: number): boolean {
   const key = flavor.replace(/^_+|_+$/g, "").toLowerCase();
@@ -33,9 +33,9 @@ export function fitsFlavor(flavor: string, version: number): boolean {
 }
 
 /**
- * La versione da mostrare è la prima che appartiene al flavor dell'installazione, altrimenti
- * la prima dichiarata; le altre diventano `+N`, e `title` le elenca tutte nell'ordine del
- * `.toc`. Senza versioni non c'è niente da mostrare (`null`).
+ * The version to show is the first that belongs to the installation's flavor, otherwise the
+ * first declared; the others become `+N`, and `title` lists them all in the order of the
+ * `.toc`. Without versions there is nothing to show (`null`).
  */
 export function interfaceSummary(versions: number[], flavor: string): InterfaceSummary | null {
   if (versions.length === 0) return null;

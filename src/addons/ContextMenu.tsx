@@ -2,32 +2,32 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from
 import type { MenuAction, MenuItem } from "./selection";
 
 type Props = {
-  /** Il punto in cui si apre, in coordinate della finestra. */
+  /** The point where it opens, in window coordinates. */
   x: number;
   y: number;
   items: MenuItem[];
-  /** Il nome accessibile del menu: l'addon o la selezione su cui agisce. */
+  /** The accessible name of the menu: the addon or the selection it acts on. */
   label: string;
   onChoose: (action: MenuAction) => void;
-  /** `restoreFocus`: il menu si chiude con Esc e il focus torna alla riga. */
+  /** `restoreFocus`: the menu closes with Esc and focus returns to the row. */
   onClose: (restoreFocus: boolean) => void;
 };
 
-/** Il margine tra il menu e i bordi della finestra. */
+/** The margin between the menu and the window edges. */
 const EDGE = 8;
 
 /**
- * Un menu contestuale leggero (issue #149): si apre nel punto del clic, resta dentro la finestra
- * e si chiude con Esc, un clic fuori, lo scroll, il ridimensionamento o il focus che esce. Le voci
- * si scelgono con le frecce e Invio (pattern WAI-ARIA "menu"); una voce disattivata resta
- * raggiungibile e dice il motivo nel `title`.
+ * A lightweight context menu (issue #149): it opens at the click point, stays inside the window
+ * and closes with Esc, a click outside, scrolling, resizing or focus leaving. Items are
+ * chosen with the arrows and Enter (WAI-ARIA "menu" pattern); a disabled item stays
+ * reachable and gives the reason in its `title`.
  */
 export function ContextMenu({ x, y, items, label, onChoose, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [position, setPosition] = useState({ left: x, top: y });
 
-  // Dentro la finestra: un clic vicino al bordo destro o in basso apre il menu verso l'interno.
+  // Inside the window: a click near the right or bottom edge opens the menu inwards.
   useLayoutEffect(() => {
     const menu = ref.current;
     if (!menu) return;
@@ -38,11 +38,11 @@ export function ContextMenu({ x, y, items, label, onChoose, onClose }: Props) {
     });
   }, [x, y]);
 
-  // Il focus va sulla prima voce attiva all'apertura (anche da tastiera).
+  // Focus goes to the first enabled item on opening (from the keyboard too).
   useEffect(() => {
     const first = items.findIndex((item) => item.disabledReason === null);
     itemRefs.current[first === -1 ? 0 : first]?.focus();
-    // Solo all'apertura: le voci che cambiano non spostano il focus.
+    // Only on opening: items that change do not move the focus.
   }, []);
 
   useEffect(() => {
@@ -51,7 +51,7 @@ export function ContextMenu({ x, y, items, label, onChoose, onClose }: Props) {
     };
     const close = () => onClose(false);
     document.addEventListener("mousedown", outside, true);
-    // Il clic destro altrove riapre il menu nel nuovo punto: questo si chiude prima.
+    // A right click elsewhere reopens the menu at the new point: this one closes first.
     document.addEventListener("contextmenu", outside, true);
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
@@ -84,7 +84,7 @@ export function ContextMenu({ x, y, items, label, onChoose, onClose }: Props) {
         break;
       case "Escape":
         event.preventDefault();
-        // Esc chiude il menu e non esce anche dalla modalità selezione.
+        // Esc closes the menu and does not also leave selection mode.
         event.stopPropagation();
         onClose(true);
         return;
@@ -108,7 +108,7 @@ export function ContextMenu({ x, y, items, label, onChoose, onClose }: Props) {
       style={{ left: position.left, top: position.top }}
       onKeyDown={onKeyDown}
       onBlur={(event) => {
-        // Il focus esce dal menu (cambio di tab da tastiera, un altro controllo): si chiude.
+        // Focus leaves the menu (tab change from the keyboard, another control): it closes.
         if (event.relatedTarget && !ref.current?.contains(event.relatedTarget as Node)) {
           onClose(false);
         }

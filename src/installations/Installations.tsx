@@ -7,17 +7,17 @@ import { Discovered } from "./Discovered";
 import { RowMenu } from "./RowMenu";
 
 type Props = {
-  /** La tab Options è aperta: la ricerca delle installazioni parte la prima volta. */
+  /** The Options tab is open: the installation scan starts the first time. */
   active: boolean;
   installations: Installation[];
-  /** L'installazione appena aggiunta diventa quella attiva (il selettore è nell'header). */
+  /** The installation just added becomes the active one (the selector is in the header). */
   onAdded: (id: string) => void;
   onChange: (installations: Installation[]) => void;
 };
 
 /**
- * La sezione "Installations" di Options: una scheda con le installazioni aggiunte e, sotto,
- * quelle trovate sul computer (issue #231). "Add installation" è il pulsante principale.
+ * The "Installations" section of Options: a panel with the added installations and, below,
+ * those found on the computer (issue #231). "Add installation" is the main button.
  */
 export function Installations({ active, installations, onAdded, onChange }: Props) {
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +26,7 @@ export function Installations({ active, installations, onAdded, onChange }: Prop
 
   async function add() {
     setError(null);
-    // Bloccato già mentre il selettore è aperto: un secondo clic non apre un altro selettore.
+    // Locked already while the picker is open: a second click does not open another picker.
     setBusy(true);
     try {
       const selected = await open({
@@ -34,10 +34,10 @@ export function Installations({ active, installations, onAdded, onChange }: Prop
         multiple: false,
         title: "Choose the World of Warcraft _<flavor>_ folder",
       });
-      // Selettore annullato: non succede niente.
+      // Picker cancelled: nothing happens.
       if (typeof selected !== "string") return;
       const added = await api.addInstallation(selected);
-      // La lista si rilegge dal backend invece di aggiungere a quella vista all'inizio.
+      // The list is read again from the backend instead of adding to the one seen at the start.
       onChange(await api.listInstallations());
       onAdded(added.id);
     } catch (err) {
@@ -121,8 +121,8 @@ type RowProps = {
 };
 
 /**
- * Una riga: nome, percorso e ultimi backup a sinistra; "Back up" in vista e la rimozione nel
- * menu "⋯", con una conferma in linea al posto delle azioni.
+ * A row: name, path and latest backups on the left; "Back up" in view and removal in the
+ * "⋯" menu, with an inline confirmation in place of the actions.
  */
 function InstallationRow({
   installation,
@@ -137,7 +137,7 @@ function InstallationRow({
 
   function cancel() {
     onCancel();
-    // Il menu torna al posto della conferma: il focus torna sul suo pulsante.
+    // The menu comes back in place of the confirmation: focus returns to its button.
     window.setTimeout(() => menuTrigger.current?.focus(), 0);
   }
 
@@ -162,8 +162,8 @@ function InstallationRow({
         </span>
       ) : (
         <span className="installation-actions">
-          {/* Il pulsante resta montato mentre il backup gira: il focus non salta e lo
-              stato si legge sul controllo stesso. */}
+          {/* The button stays mounted while the backup runs: focus does not jump and the
+              state is read on the control itself. */}
           <button
             className="button secondary small"
             onClick={() => void backups.create()}

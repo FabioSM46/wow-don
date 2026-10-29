@@ -218,7 +218,7 @@ describe("statusLine when off", () => {
   });
 
   it("disappears after a successful Undo", () => {
-    // L'Undo emette lo stato senza il giro annullabile; il giro annullato resta in `lastRound`.
+    // Undo emits the status without the undoable round; the undone round stays in `lastRound`.
     const after = status("install", [report({ updated: [outcome("A", "updated")] })]);
     assert.equal(statusLine(after, "retail", "off", clock, "T2"), null);
     assert.equal(statusLine(after, "retail", "off", clock), null);

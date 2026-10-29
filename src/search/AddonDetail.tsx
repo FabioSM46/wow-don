@@ -16,22 +16,23 @@ import { galleryLabel, tabIndexForKey } from "./screenshots";
 
 type Props = {
   installationId: string;
-  /** La riga scelta nei risultati: l'intestazione si mostra subito, prima del dettaglio. */
+  /** The row chosen in the results: the header shows at once, before the detail. */
   addon: CatalogAddon;
-  /** La versione del gioco scelta nella ricerca; `null` lascia decidere al backend. */
+  /** The game version chosen in the search; `null` lets the backend decide. */
   versionType: number | null;
   versionTypes: VersionType[];
-  /** Cambia quando gli addon dell'installazione sono cambiati: il dettaglio si rilegge. */
+  /** Changes when the installation's addons have changed: the detail is read again. */
   refresh?: number;
-  /** La tab è visibile: Esc torna ai risultati solo allora. */
+  /** The tab is visible: only then does Esc go back to the results. */
   active: boolean;
   onBack: () => void;
-  /** Le azioni sull'addon (per esempio Install), a destra dell'intestazione. */
+  /** The actions on the addon (for example Install), on the right of the header. */
   renderActions?: (addon: CatalogAddon) => ReactNode;
-  /** Messaggi sull'addon (per esempio l'esito di un'installazione), sotto l'intestazione. */
+  /** Messages about the addon (for example the outcome of an install), under the header. */
   children?: ReactNode;
-  /** Per un addon che CurseForge non lascia scaricare: il riquadro sotto l'intestazione, con
-   *  l'esito del mirror GitHub (issue #165). Senza, resta la frase sul download dal sito. */
+  /** For an addon CurseForge does not let you download: the box under the header, with the
+   *  outcome of the GitHub mirror (issue #165). Without it, the sentence on downloading from
+   *  the website remains. */
   blockedNote?: (addon: CatalogAddon) => ReactNode;
 };
 
@@ -40,7 +41,7 @@ type Load =
   | { status: "error"; message: string }
   | { status: "ready"; detail: AddonDetail };
 
-/** Il dettaglio di un addon dentro la tab Search: descrizione, gallery, file e dipendenze. */
+/** An addon's detail inside the Search tab: description, gallery, files and dependencies. */
 export function AddonDetailView({
   installationId,
   addon,
@@ -58,10 +59,10 @@ export function AddonDetailView({
   const [linkError, setLinkError] = useState<string | null>(null);
   const backRef = useRef<HTMLButtonElement>(null);
 
-  // Il dettaglio già caricato resta in vista mentre si rilegge lo stesso addon (`refresh`).
+  // The detail already loaded stays in view while the same addon is read again (`refresh`).
   const loadedKey = useRef<string | null>(null);
   useEffect(() => {
-    // Solo la risposta dell'ultima richiesta si applica (un altro addon, un nuovo tentativo).
+    // Only the answer to the latest request applies (another addon, a new attempt).
     let current = true;
     const key = `${installationId}:${addon.id}:${versionType}`;
     const same = loadedKey.current === key;
@@ -76,7 +77,7 @@ export function AddonDetailView({
     };
   }, [installationId, addon.id, versionType, retry, refresh]);
 
-  // Il focus va sul pulsante per tornare indietro: da tastiera la vista si lascia subito.
+  // Focus goes to the back button: from the keyboard the view can be left at once.
   useEffect(() => {
     backRef.current?.focus({ preventScroll: true });
   }, [addon.id]);
@@ -93,9 +94,9 @@ export function AddonDetailView({
   }, [active, onBack]);
 
   const detail = load.status === "ready" ? load.detail : null;
-  // Dopo il caricamento valgono i dati del dettaglio, più recenti di quelli della riga; il segno
-  // "installato" della riga vale anche dopo, perché un'installazione fatta dopo il caricamento
-  // lo cambia solo lì.
+  // After loading, the detail's data applies, newer than the row's; the row's "installed"
+  // mark applies afterwards too, because an install made after loading
+  // changes it only there.
   const shown: CatalogAddon = detail
     ? { ...detail, installed: detail.installed || addon.installed }
     : addon;
@@ -134,7 +135,7 @@ export function AddonDetailView({
         </div>
         {(shown.url || renderActions) && (
           <div className="detail-actions">
-            {/* L'unico collegamento a CurseForge del dettaglio (issue #229). */}
+            {/* The detail's only link to CurseForge (issue #229). */}
             {shown.url && (
               <button
                 className="button ghost"
@@ -154,8 +155,8 @@ export function AddonDetailView({
         )}
       </header>
 
-      {/* Perché un addon bloccato non si installa (o come si installa): un riquadro sotto
-          l'intestazione, non una nota minuta (issue #229). */}
+      {/* Why a blocked addon does not install (or how it installs): a box under the
+          header, not a tiny note (issue #229). */}
       {!shown.allowModDistribution &&
         (blockedNote ? (
           blockedNote(shown)
@@ -179,7 +180,7 @@ export function AddonDetailView({
         </p>
       )}
 
-      {/* La chiave riapre la tab Description quando cambia l'addon. */}
+      {/* The key reopens the Description tab when the addon changes. */}
       {detail && (
         <DetailBody
           key={detail.id}
@@ -219,8 +220,8 @@ function DetailBody({
     tabRefs.current[next]?.focus();
   }
 
-  // Stesso pattern delle tab dell'app: frecce con giro, Home e Fine; la tab si attiva insieme
-  // al focus.
+  // Same pattern as the app's tabs: arrows that wrap around, Home and End; the tab activates
+  // together with the focus.
   function onTabKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const next = tabIndexForKey(event.key, DETAIL_TABS.indexOf(tab), DETAIL_TABS.length);
     if (next === null) return;
@@ -266,7 +267,7 @@ function DetailBody({
           {text.length === 0 ? (
             <p className="empty">The author has not written a description.</p>
           ) : (
-            // Testo semplice: React lo mostra come testo, mai come HTML.
+            // Plain text: React shows it as text, never as HTML.
             text.map((paragraph, index) => <p key={index}>{paragraph}</p>)
           )}
         </div>

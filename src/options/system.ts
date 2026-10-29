@@ -1,11 +1,11 @@
-// I testi della sezione "System" di Options (issue #160), separati dal componente per i test.
+// The texts of the Options "System" section (issue #160), kept apart from the component for tests.
 
-/** La spiegazione di "Close to tray" disabilitata: senza icona la X chiude l'app. */
+/** The explanation of a disabled "Close to tray": without an icon the X closes the app. */
 export const TRAY_UNAVAILABLE = "The system tray isn't available on this desktop.";
 
 /**
- * Il suggerimento sotto "Close to tray". `trayAvailable` è `null` finché le impostazioni non
- * sono lette: vale il testo normale, la casella è comunque disabilitata.
+ * The hint under "Close to tray". `trayAvailable` is `null` until the settings have been
+ * read: the normal text applies, the checkbox is disabled anyway.
  */
 export function closeToTrayHint(trayAvailable: boolean | null): string {
   if (trayAvailable === false) return TRAY_UNAVAILABLE;
@@ -13,9 +13,9 @@ export function closeToTrayHint(trayAvailable: boolean | null): string {
 }
 
 /**
- * Il suggerimento sotto "Start with the system": dice cosa succede all'accesso con le altre
- * impostazioni di adesso. Il backend parte nascosto solo con "Close to tray" attiva e la tray
- * disponibile; altrimenti apre la finestra.
+ * The hint under "Start with the system": it says what happens at login with the other
+ * current settings. The backend starts hidden only with "Close to tray" on and the tray
+ * available; otherwise it opens the window.
  */
 export function autostartHint(closeToTray: boolean | null, trayAvailable: boolean | null): string {
   if (closeToTray === true && trayAvailable === true) {

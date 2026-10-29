@@ -2,20 +2,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorMessage, type BackupInfo } from "../api";
 
-/** Quanti backup si vedono sotto l'installazione; gli altri si trovano nella cartella. */
+/** How many backups are shown under the installation; the others are in the folder. */
 const VISIBLE = 3;
 
 const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" });
 const numberFormat = new Intl.NumberFormat("en", { maximumFractionDigits: 1 });
 
-/** `format` lancia un'eccezione su una data non valida: un `mtime` strano mostra "—". */
+/** `format` throws on an invalid date: an odd `mtime` shows "—". */
 function formatDate(ms: number | null): string {
   if (ms === null) return "—";
   const date = new Date(ms);
   return Number.isNaN(date.getTime()) ? "—" : dateFormat.format(date);
 }
 
-/** Byte in unità leggibili, in base 1024 (come i gestori file più diffusi). */
+/** Bytes in readable units, base 1024 (like the most common file managers). */
 function formatSize(bytes: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let value = bytes;
@@ -28,11 +28,11 @@ function formatSize(bytes: number): string {
 }
 
 export type Backups = {
-  /** `null` finché la prima lettura non è riuscita. */
+  /** `null` until the first read has succeeded. */
   list: BackupInfo[] | null;
-  /** Errore dell'ultima lettura dell'elenco; si azzera alla lettura successiva riuscita. */
+  /** Error of the last read of the list; cleared on the next successful read. */
   listError: string | null;
-  /** Errore dell'ultima azione (Backup, Apri cartella); si azzera all'azione successiva. */
+  /** Error of the last action (Backup, Open folder); cleared on the next action. */
   actionError: string | null;
   creating: boolean;
   reload: () => Promise<void>;
@@ -40,13 +40,13 @@ export type Backups = {
   reveal: (backup: BackupInfo) => Promise<void>;
 };
 
-/** Stato dei backup di un'installazione: elenco, creazione in corso ed errori in linea. */
+/** Backup state of an installation: list, creation in progress and inline errors. */
 export function useBackups(installationId: string): Backups {
   const [list, setList] = useState<BackupInfo[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  // Vale solo l'ultima lettura chiesta: una risposta vecchia non sovrascrive una più nuova.
+  // Only the latest requested read counts: an old answer does not overwrite a newer one.
   const request = useRef(0);
 
   const reload = useCallback(async () => {
@@ -64,7 +64,7 @@ export function useBackups(installationId: string): Backups {
 
   useEffect(() => {
     void reload();
-    // Smontato o installazione cambiata: le risposte in volo non contano più.
+    // Unmounted or installation changed: in-flight answers no longer count.
     return () => {
       request.current += 1;
     };
@@ -80,8 +80,8 @@ export function useBackups(installationId: string): Backups {
     } finally {
       setCreating(false);
     }
-    // L'elenco si rilegge dal backend anche dopo un errore: un backup parziale non c'è, ma
-    // la cartella può essere cambiata nel frattempo.
+    // The list is read again from the backend even after an error: there is no partial backup,
+    // but the folder may have changed in the meantime.
     await reload();
   }, [installationId, reload]);
 
@@ -97,11 +97,11 @@ export function useBackups(installationId: string): Backups {
   return { list, listError, actionError, creating, reload, create, reveal };
 }
 
-/** L'elenco compatto degli ultimi backup, sotto il percorso dell'installazione. */
+/** The compact list of the latest backups, under the installation path. */
 export function BackupList({ backups }: { backups: Backups }) {
   const { list, listError, actionError, reload, reveal } = backups;
-  // `list_backups` restituisce i backup dal più recente (ordinati nel backend, `backup.rs`):
-  // i primi `VISIBLE` sono gli ultimi fatti.
+  // `list_backups` returns the backups newest first (sorted in the backend, `backup.rs`):
+  // the first `VISIBLE` are the latest ones made.
   const hidden = list ? list.length - VISIBLE : 0;
 
   return (
@@ -120,7 +120,7 @@ export function BackupList({ backups }: { backups: Backups }) {
         </p>
       )}
       {list === null ? (
-        // Prima lettura fallita: basta l'errore, senza una frase che direbbe "nessun backup".
+        // First read failed: the error is enough, without a sentence that would say "no backups".
         !listError && <p className="backups-note">Loading backups…</p>
       ) : list.length === 0 ? (
         <p className="backups-note">
