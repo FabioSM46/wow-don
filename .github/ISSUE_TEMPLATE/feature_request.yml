@@ -1,5 +1,5 @@
-name: Funzionalità
-description: Richiedi una funzionalità o un miglioramento (strutturata per gli agenti AI)
+name: Feature
+description: Request a feature or an improvement (structured for AI agents)
 title: "[Feature]: "
 labels: ["feature", "needs-refinement"]
 assignees: []
@@ -8,11 +8,11 @@ body:
     id: workspace
     attributes:
       label: Area
-      description: Quale parte del repository tocca?
+      description: Which part of the repository does it touch?
       options:
         - backend (Rust / Tauri)
         - frontend (React / TypeScript)
-        - shared (Trasversale)
+        - shared (Cross-cutting)
       default: 0
     validations:
       required: true
@@ -20,24 +20,24 @@ body:
   - type: dropdown
     id: type
     attributes:
-      label: Tipo
-      description: Decide il prefisso del branch e il tipo di commit
+      label: Type
+      description: Decides the branch prefix and the commit type
       options:
-        - feature (Nuova funzionalità)
-        - enhancement (Miglioramento di una funzionalità esistente)
-        - refactor (Ristrutturazione senza cambi di comportamento)
+        - feature (New feature)
+        - enhancement (Improvement to an existing feature)
+        - refactor (Restructuring with no behaviour change)
     validations:
       required: true
 
   - type: dropdown
     id: priority
     attributes:
-      label: Priorità
-      description: Quanto è urgente?
+      label: Priority
+      description: How urgent is it?
       options:
-        - high (Blocca altro lavoro)
-        - medium (Priorità normale)
-        - low (Utile ma non urgente)
+        - high (Blocks other work)
+        - medium (Normal priority)
+        - low (Useful but not urgent)
       default: 1
     validations:
       required: true
@@ -46,90 +46,90 @@ body:
     id: user_story
     attributes:
       label: User story
-      description: Nella forma "Come [ruolo], voglio [obiettivo], così che [motivo]". Sii preciso, l'agente la legge alla lettera.
+      description: In the form "As a [role], I want [goal], so that [reason]". Be precise, the agent reads it literally.
       placeholder: |
-        Come giocatore che usa WoW dentro un prefisso Wine
-        voglio aggiungere a mano la cartella `_classic_beta_`
-        così che l'app legga gli addon di quella versione
+        As a player who runs WoW inside a Wine prefix
+        I want to add the `_classic_beta_` folder by hand
+        so that the app reads the addons of that version
     validations:
       required: true
 
   - type: textarea
     id: acceptance_criteria
     attributes:
-      label: Criteri di accettazione
-      description: Condizioni verificabili come passa/non passa. Niente voci vaghe come "funziona bene".
+      label: Acceptance criteria
+      description: Conditions verifiable as pass/fail. No vague items like "works well".
       placeholder: |
-        - [ ] Si può scegliere una cartella `_<flavor>_` dal selettore di file
-        - [ ] Una cartella senza `Interface/AddOns` viene rifiutata con un messaggio chiaro
-        - [ ] L'installazione aggiunta resta salvata dopo il riavvio dell'app
+        - [ ] A `_<flavor>_` folder can be chosen from the file picker
+        - [ ] A folder without `Interface/AddOns` is rejected with a clear message
+        - [ ] The added installation stays saved after the app restarts
     validations:
       required: true
 
   - type: textarea
     id: technical_context
     attributes:
-      label: Contesto tecnico
+      label: Technical context
       description: |
-        **OBBLIGATORIO**. È la guida principale dell'agente.
-        Sottosezioni consigliate: File da modificare, Pattern da seguire, Vincoli.
+        **REQUIRED**. It is the agent's main guide.
+        Suggested subsections: Files to modify, Patterns to follow, Constraints.
       placeholder: |
-        ### File da modificare
-        - src-tauri/src/installations.rs (nuovo modulo)
-        - src-tauri/src/commands.rs (comando `add_installation`)
-        - src/App.tsx (pulsante e lista)
+        ### Files to modify
+        - src-tauri/src/installations.rs (new module)
+        - src-tauri/src/commands.rs (`add_installation` command)
+        - src/App.tsx (button and list)
 
-        ### Pattern da seguire
-        - I comandi Tauri restituiscono `Result<T, String>` serializzabile
+        ### Patterns to follow
+        - Tauri commands return a serializable `Result<T, String>`
 
-        ### Vincoli
-        - Rete, disco e chiavi solo nel backend
-        - Nessuna nuova dipendenza (crate o pacchetti npm) senza discuterne
+        ### Constraints
+        - Network, disk and keys only in the backend
+        - No new dependencies (crates or npm packages) without discussing it
     validations:
       required: true
 
   - type: textarea
     id: out_of_scope
     attributes:
-      label: Fuori scope
+      label: Out of scope
       description: |
-        **OBBLIGATORIO**. Cosa questa issue NON copre.
-        Evita che l'agente faccia più del necessario.
+        **REQUIRED**. What this issue does NOT cover.
+        Keeps the agent from doing more than needed.
       placeholder: |
-        - Non implementare la scoperta automatica dei prefissi Lutris (issue separata)
-        - Non leggere ancora i file `.toc`
+        - Do not implement automatic discovery of Lutris prefixes (separate issue)
+        - Do not read `.toc` files yet
     validations:
       required: true
 
   - type: textarea
     id: code_pointers
     attributes:
-      label: Riferimenti nel codice
+      label: Code pointers
       description: |
-        Riferimenti `file:riga` al codice esistente da leggere per primo.
+        `file:line` references to existing code to read first.
       placeholder: |
-        - src-tauri/src/lib.rs:10 (registrazione dei comandi)
-        - src-tauri/src/config.rs:5 (lettura della configurazione)
+        - src-tauri/src/lib.rs:10 (command registration)
+        - src-tauri/src/config.rs:5 (configuration loading)
     validations:
       required: false
 
   - type: textarea
     id: dependencies
     attributes:
-      label: Dipendenze
-      description: Issue, PR o configurazioni che devono essere completate prima.
+      label: Dependencies
+      description: Issues, PRs or configuration that must be completed first.
       placeholder: |
-        - Richiede #12 (stato locale persistente)
+        - Requires #12 (persistent local state)
     validations:
       required: false
 
   - type: textarea
     id: test_strategy
     attributes:
-      label: Strategia di test
-      description: Cosa testare, casi limite e come verificare il risultato.
+      label: Test strategy
+      description: What to test, edge cases and how to verify the result.
       placeholder: |
-        - Unit test: una cartella senza `Interface/AddOns` viene rifiutata
-        - Caso limite: percorso con spazi dentro `drive_c/Program Files (x86)`
+        - Unit test: a folder without `Interface/AddOns` is rejected
+        - Edge case: path with spaces inside `drive_c/Program Files (x86)`
     validations:
       required: false

@@ -82,8 +82,7 @@ render_codex_skill() {
       -e 's|/process-pr|$process-pr|g' \
       -e 's|/scrum-master|$scrum-master|g' \
       -e 's|/develop-iteration|$develop-iteration|g' \
-      -e 's|the \*\*Agent tool\*\*|the **Codex collaboration sub-agent tools**|g' \
-      -e 's|lo \*\*strumento Agent\*\*|gli **strumenti di collaborazione di Codex per i sotto-agenti**|g'
+      -e 's|the \*\*Agent tool\*\*|the **Codex collaboration sub-agent tools**|g'
   } >"$output"
 }
 
@@ -118,8 +117,7 @@ render_opencode_skill() {
     printf '%s\n' '  opencode/autoinvoke: "false"'
     printf '%s\n\n' '---'
     skill_body "$source" | sed \
-      -e 's|the \*\*Agent tool\*\*|the **Task tool**|g' \
-      -e 's|lo \*\*strumento Agent\*\*|lo **strumento Task**|g'
+      -e 's|the \*\*Agent tool\*\*|the **Task tool**|g'
   } >"$output"
 }
 
