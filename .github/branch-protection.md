@@ -1,68 +1,69 @@
-# Protezione dei merge
+# Merge protection
 
-Il contratto di merge per `main` e `develop` è imposto da due **ruleset** GitHub. Questo file
-dice cosa impongono, perché sono due e come ricrearli. Configurazione portata da voxelheim-v2.
+The merge contract for `main` and `develop` is enforced by two GitHub **rulesets**. This file
+says what they enforce, why there are two and how to recreate them. Configuration ported from
+voxelheim-v2.
 
-Nella UI stanno in **Settings → Rules → Rulesets**.
+In the UI they live under **Settings → Rules → Rulesets**.
 
-## Cosa viene imposto
+## What is enforced
 
-| Ruleset | Regola | Chi può aggirarla |
-| ------- | ------ | ----------------- |
-| `PR required — unresolved review threads block merge` | `pull_request`: `required_review_thread_resolution: true`, `required_approving_review_count: 0` | **nessuno** |
-| `ci-gate must pass (admin can bypass)` | `required_status_checks`: `ci-gate` | admin del repository (`bypass_mode: always`) |
+| Ruleset | Rule | Who can bypass it |
+| ------- | ---- | ----------------- |
+| `PR required — unresolved review threads block merge` | `pull_request`: `required_review_thread_resolution: true`, `required_approving_review_count: 0` | **nobody** |
+| `ci-gate must pass (admin can bypass)` | `required_status_checks`: `ci-gate` | repository admin (`bypass_mode: always`) |
 
-Entrambi valgono per `refs/heads/develop` e `refs/heads/main`.
+Both apply to `refs/heads/develop` and `refs/heads/main`.
 
-In pratica:
+In practice:
 
-- **Un thread di review non risolto blocca il merge per tutti**, proprietario compreso. Si legge
-  il finding, lo si corregge o lo si respinge con una motivazione, si risolve il thread.
-- **Un `ci-gate` rosso, in corso o mancante blocca il merge, ma l'admin vede l'opzione di
-  bypass** e può forzare con una conferma esplicita. Serve quando la CI non può essere verde per
-  motivi esterni al diff.
+- **An unresolved review thread blocks the merge for everyone**, the owner included. You read
+  the finding, fix it or reject it with a reason, and resolve the thread.
+- **A red, pending or missing `ci-gate` blocks the merge, but the admin sees the bypass
+  option** and can force it with an explicit confirmation. It is there for when CI cannot be
+  green for reasons outside the diff.
 
-## Perché due ruleset
+## Why two rulesets
 
-**La lista di bypass appartiene al ruleset, non alla regola.** Con un solo ruleset le due regole
-sarebbero entrambe aggirabili o nessuna delle due. L'API lo riporta per ruleset come
-`current_user_can_bypass`: `never` per il primo, `always` per il secondo.
+**The bypass list belongs to the ruleset, not to the rule.** With a single ruleset the two rules
+would both be bypassable or neither would. The API reports it per ruleset as
+`current_user_can_bypass`: `never` for the first, `always` for the second.
 
-## Conseguenze da sapere
+## Consequences to know
 
-- **La regola `pull_request` blocca anche i push diretti su `develop` e `main`**, per tutti e
-  senza bypass. Tutto passa da una PR.
-- **`required_approving_review_count` è 0 di proposito.** GitHub non permette all'autore di
-  approvare la propria PR; su un repository con un solo sviluppatore un'approvazione
-  obbligatoria renderebbe ogni PR non mergiabile se non con il bypass.
-- **`strict_required_status_checks_policy` è false**: i branch non devono essere allineati alla
-  base. Con più PR aperte in parallelo servirebbe un nuovo push dopo ogni merge.
-- **È richiesto solo `ci-gate`.** `labeler` e `review` restano fuori: DeepSeek salta i run quando
-  il budget di round è finito, e richiedere `review` bloccherebbe le PR. `ci-gate` è l'unico
-  check stabile e contiene la regola per branch:
-  - verso basi diverse da `main`: i job selezionati dal diff e `automation` devono avere
-    successo; i job non selezionati possono risultare `SKIPPED`. `backend-windows` segue lo
-    stesso selettore di `backend`; `backend-macos` ha un selettore proprio e gira solo sulle
-    PR che modificano `ci.yml`, altrimenti risulta `SKIPPED`;
-  - verso `main`: tutti i job devono girare e avere successo.
+- **The `pull_request` rule also blocks direct pushes to `develop` and `main`**, for everyone
+  and without bypass. Everything goes through a PR.
+- **`required_approving_review_count` is 0 on purpose.** GitHub does not let the author
+  approve their own PR; on a repository with a single developer a mandatory approval would
+  make every PR unmergeable except through the bypass.
+- **`strict_required_status_checks_policy` is false**: branches do not have to be up to date
+  with the base. With several PRs open in parallel, every merge would require a new push.
+- **Only `ci-gate` is required.** `labeler` and `review` stay out: DeepSeek skips runs when the
+  round budget is exhausted, and requiring `review` would block PRs. `ci-gate` is the only
+  stable check and contains the per-branch rule:
+  - towards bases other than `main`: the jobs selected by the diff and `automation` must
+    succeed; jobs not selected may come out `SKIPPED`. `backend-windows` follows the same
+    selector as `backend`; `backend-macos` has its own selector and runs only on PRs that
+    modify `ci.yml`, otherwise it comes out `SKIPPED`;
+  - towards `main`: every job must run and succeed.
 
-## Perché `READY TO MERGE` non è ridondante
+## Why `READY TO MERGE` is not redundant
 
-Il ruleset è un pavimento. La regola nativa di GitHub conta i **thread** di review, ma DeepSeek
-può lasciare finding anche nel **corpo** della review, che non crea thread. Una review fatta solo
-di quelli conta zero thread aperti e GitHub lascerebbe fare il merge.
+The ruleset is a floor. GitHub's native rule counts review **threads**, but DeepSeek can also
+leave findings in the review **body**, which creates no thread. A review made only of those
+counts zero open threads and GitHub would allow the merge.
 
-`pr-status-json` li conta a parte come `deepseek_unread_findings`, e li considera letti con la
-label datata `DEEPSEEK_REVIEW_READ`. Un umano la può applicare dopo aver letto i finding; l'AI
-solo dopo aver corretto o respinto con prove ogni finding e aver pubblicato le motivazioni sulla
-PR. `NO_DEEPSEEK_REVIEW` resta un'esenzione solo umana. Quindi:
+`pr-status-json` counts them separately as `deepseek_unread_findings`, and treats them as read
+via the dated `DEEPSEEK_REVIEW_READ` label. A human may apply it after reading the findings; the
+AI only after fixing or rejecting every finding with evidence and posting the reasons on the
+PR. `NO_DEEPSEEK_REVIEW` remains a human-only exemption. So:
 
-- il **ruleset** garantisce che nessuno faccia merge per sbaglio sopra un thread aperto o un
-  `ci-gate` rosso;
-- la **label `READY TO MERGE`** garantisce in più che la review è stata letta, il round è
-  finito e la PR è davvero mergiabile.
+- the **ruleset** guarantees that nobody merges by mistake on top of an open thread or a red
+  `ci-gate`;
+- the **`READY TO MERGE` label** additionally guarantees that the review was read, the round is
+  over and the PR is genuinely mergeable.
 
-## Ricreare la configurazione
+## Recreating the configuration
 
 ```bash
 gh api repos/OWNER/REPO/rulesets -X POST --input - <<'JSON'
@@ -105,23 +106,23 @@ gh api repos/OWNER/REPO/rulesets -X POST --input - <<'JSON'
 JSON
 ```
 
-`actor_id: 5` con `actor_type: RepositoryRole` è il ruolo **admin**.
+`actor_id: 5` with `actor_type: RepositoryRole` is the **admin** role.
 
-## Ordine di attivazione
+## Activation order
 
-Non richiedere `ci-gate` prima che abbia girato su una PR vera: un check obbligatorio mai
-eseguito lascia ogni PR in "expected, waiting". L'ordine sicuro è:
+Do not require `ci-gate` before it has run on a real PR: a required check that has never run
+leaves every PR in "expected, waiting". The safe order is:
 
-1. Creare il primo ruleset (PR obbligatoria).
-2. Aprire una PR verso `develop` e verificare che riporti un `ci-gate` verde.
-3. Solo allora creare il secondo ruleset.
+1. Create the first ruleset (PR required).
+2. Open a PR towards `develop` and check that it reports a green `ci-gate`.
+3. Only then create the second ruleset.
 
-## Verificare
+## Verifying
 
 ```bash
 gh api repos/OWNER/REPO/rulesets --jq '.[] | "\(.name) → \(.enforcement)"'
 gh pr view <number> --json mergeable,mergeStateStatus
 ```
 
-`mergeable: MERGEABLE` insieme a `mergeStateStatus: BLOCKED` indica una regola che trattiene il
-merge: la PR è pulita, è la policy a dire di no.
+`mergeable: MERGEABLE` together with `mergeStateStatus: BLOCKED` points to a rule holding the
+merge back: the PR is clean, it is the policy saying no.
