@@ -1,12 +1,12 @@
-//! Fonti degli addon dietro un'interfaccia comune (D12). CurseForge è la prima implementazione
-//! (`updates::CurseForgeSource`); tra le fonti libere (D31) ci sono Tukui ([`tukui`]),
-//! WoWInterface ([`wowinterface`]) e GitHub Releases ([`github`]). [`github_mirror`] cerca su
-//! GitHub lo stesso file di un progetto CurseForge che non si può scaricare (issue #162).
+//! Addon sources behind a common interface (D12). CurseForge is the first implementation
+//! (`updates::CurseForgeSource`); the free sources (D31) include Tukui ([`tukui`]),
+//! WoWInterface ([`wowinterface`]) and GitHub Releases ([`github`]). [`github_mirror`] looks on
+//! GitHub for the same file of a CurseForge project that cannot be downloaded (issue #162).
 //!
-//! Il controllo degli aggiornamenti (`updates::check_updates`) offre le cartelle installate alle
-//! fonti nell'ordine di D33: una cartella registrata in `installed-addons.json` va solo alla fonte
-//! del record, le altre a tutte, nell'ordine dell'elenco (CurseForge prima delle fonti libere);
-//! una cartella reclamata da una fonte non si offre alle successive.
+//! The update check (`updates::check_updates`) offers the installed folders to the sources in
+//! the order of D33: a folder registered in `installed-addons.json` goes only to the source of
+//! its record, the others to all of them, in list order (CurseForge before the free sources);
+//! a folder claimed by a source is not offered to the following ones.
 
 use std::path::Path;
 
@@ -27,42 +27,42 @@ pub mod wowinterface;
 
 pub use crate::store::SourceKind;
 
-/// Un progetto di una fonte: la fonte e l'id del progetto in quella fonte, come stringa
-/// (`61284` per CurseForge, `owner/repo` per GitHub, `-2` per ElvUI su Tukui).
+/// A project of a source: the source and the project's id in that source, as a string
+/// (`61284` for CurseForge, `owner/repo` for GitHub, `-2` for ElvUI on Tukui).
 ///
-/// In JSON è `{ "source": …, "key": … }`, gli stessi due campi di `project` in un `AddonUpdate`
-/// (`updates::Project`): il frontend costruisce un `ProjectKey` da `{ source: project.source,
-/// key: project.key }` e confronta gli esclusi di `get_auto_update` su quei due campi, mai su
-/// `project.id`, che vale `0` fuori da CurseForge.
+/// In JSON it is `{ "source": …, "key": … }`, the same two fields as `project` in an `AddonUpdate`
+/// (`updates::Project`): the frontend builds a `ProjectKey` from `{ source: project.source,
+/// key: project.key }` and compares the exclusions of `get_auto_update` on those two fields, never
+/// on `project.id`, which is `0` outside CurseForge.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ProjectKey {
     pub source: SourceKind,
     pub key: String,
 }
 
-/// Quello che serve a una fonte per aggiornare un progetto: il controllo appena rifatto su
-/// tutta l'installazione.
+/// What a source needs to update a project: the check just redone on the whole
+/// installation.
 pub struct UpdateTarget<'a> {
-    /// L'id del progetto nella fonte.
+    /// The project's id in the source.
     pub key: &'a str,
     pub addons_dir: &'a Path,
-    /// Il `flavor` dell'installazione, per le fonti che scelgono il file solo al momento di
-    /// reinstallare (GitHub, issue #148).
+    /// The installation's `flavor`, for the sources that pick the file only when
+    /// reinstalling (GitHub, issue #148).
     pub flavor: &'a str,
-    /// La scansione di `Interface/AddOns`.
+    /// The scan of `Interface/AddOns`.
     pub addons: &'a [InstalledAddon],
-    /// Il controllo di tutte le fonti, una voce per cartella.
+    /// The check of all sources, one entry per folder.
     pub updates: &'a [AddonUpdate],
-    /// Dove riportare download, estrazione e installazione del progetto (issue #127).
+    /// Where to report download, extraction and installation of the project (issue #127).
     pub progress: &'a ProgressSink<'a>,
-    /// Reinstallare anche un progetto già aggiornato (issue #148): la fonte scarica il file che
-    /// sceglierebbe per un aggiornamento, anche se è la versione installata.
+    /// Reinstall even a project that is already up to date (issue #148): the source downloads the
+    /// file it would pick for an update, even if it is the installed version.
     pub reinstall: bool,
 }
 
 impl UpdateTarget<'_> {
-    /// L'esito di un progetto che il controllo non ha trovato tra le cartelle installate. Per una
-    /// reinstallazione il motivo è che nessuna cartella è legata a una fonte con quel progetto.
+    /// The outcome for a project the check did not find among the installed folders. For a
+    /// reinstall the reason is that no folder is linked to a source with that project.
     pub fn not_found(&self, source: SourceKind) -> UpdateOutcome {
         let message = if self.reinstall {
             "Not linked to a source: cannot reinstall."
@@ -73,37 +73,37 @@ impl UpdateTarget<'_> {
     }
 }
 
-/// Quello che una fonte dice di un progetto prima di installarlo da un link (issue #109).
+/// What a source says about a project before installing it from a link (issue #109).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkInfo {
     pub name: String,
-    /// La versione che si installerebbe, come la scrive la fonte.
+    /// The version that would be installed, as the source writes it.
     pub version: String,
-    /// Se WoW-don lo può scaricare per il gioco dell'installazione.
+    /// Whether WoW-don can download it for the installation's game.
     pub downloadable: bool,
-    /// Perché non si può scaricare, o un avviso su quello che si installerebbe.
+    /// Why it cannot be downloaded, or a warning about what would be installed.
     pub message: Option<String>,
-    /// La pagina del progetto sul sito della fonte.
+    /// The project's page on the source's site.
     pub url: String,
 }
 
-/// Controlla le cartelle di primo livello di uno zip estratto prima che sostituiscano quelle in
-/// `AddOns`: un `Err` annulla l'installazione senza toccare il disco.
+/// Checks the top-level folders of an extracted zip before they replace the ones in
+/// `AddOns`: an `Err` cancels the installation without touching the disk.
 pub type FolderCheck<'a> = dyn Fn(&[String]) -> Result<(), String> + 'a;
 
-/// Scrive in `installed-addons.json` quello che una fonte ha appena installato.
+/// Writes to `installed-addons.json` what a source has just installed.
 pub type RecordWriter<'a> = dyn FnMut(SourceKind, &str, SourceRecord) -> Result<(), String> + 'a;
 
-/// Una fonte di addon.
+/// An addon source.
 pub trait Source {
     fn kind(&self) -> SourceKind;
 
-    /// Abbina le cartelle `offered` ai progetti della fonte e valuta gli aggiornamenti. Solo
-    /// una voce con un progetto reclama la cartella. Una voce con stato `error` e senza progetto
-    /// non la reclama: la cartella resta alle fonti successive e l'errore si mostra solo se
-    /// nessuna la riconosce. Le cartelle che la fonte non riconosce si possono omettere o
-    /// restituire come `notMatched`. `records` sono i record
-    /// della fonte per l'installazione. Un `Err` vale per tutte le cartelle offerte.
+    /// Matches the `offered` folders to the source's projects and evaluates the updates. Only
+    /// an entry with a project claims the folder. An entry with status `error` and no project
+    /// does not claim it: the folder stays with the following sources and the error is shown only
+    /// if none recognises it. The folders the source does not recognise can be omitted or
+    /// returned as `notMatched`. `records` are the source's records
+    /// for the installation. An `Err` applies to all offered folders.
     fn check(
         &self,
         installation: &Installation,
@@ -111,15 +111,15 @@ pub trait Source {
         records: &ProjectRecords,
     ) -> Result<Vec<AddonUpdate>, String>;
 
-    /// Aggiorna il progetto `target.key` all'ultima versione trovata dal controllo: scarica,
-    /// sostituisce le cartelle e registra con `record`. Con `target.reinstall` lo fa anche per un
-    /// progetto già aggiornato. Le regole di distribuzione della fonte
-    /// (per CurseForge `allowModDistribution`, D13) restano qui.
+    /// Updates project `target.key` to the latest version found by the check: downloads, replaces
+    /// the folders and registers with `record`. With `target.reinstall` it does so even for
+    /// a project that is already up to date. The source's distribution rules
+    /// (for CurseForge `allowModDistribution`, D13) stay here.
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome;
 
-    /// Dopo il controllo di tutte le fonti, con le voci finali: il lavoro che non deve passare
-    /// prima delle fonti successive. CurseForge calcola qui il mirror GitHub dei progetti
-    /// bloccati (D34, issue #163), dopo le richieste della fonte GitHub. Di default niente.
+    /// After the check of all sources, with the final entries: the work that must not run
+    /// before the following sources. CurseForge computes here the GitHub mirror of blocked
+    /// projects (D34, issue #163), after the GitHub source's requests. By default nothing.
     fn finish(&self, installation: &Installation, updates: &mut [AddonUpdate]) {
         let _ = (installation, updates);
     }

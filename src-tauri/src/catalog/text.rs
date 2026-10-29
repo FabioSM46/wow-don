@@ -1,21 +1,22 @@
-//! Dall'HTML della descrizione di un addon al testo semplice.
+//! From the HTML of an addon's description to plain text.
 //!
-//! È una difesa: l'HTML scritto da un autore, mostrato nella webview, avrebbe accesso a
-//! `invoke()`. Al frontend arriva solo testo: niente tag, il contenuto di `<script>` e
-//! `<style>` scartato, le entità comuni decodificate. I paragrafi e i blocchi diventano una
-//! riga vuota, `<br>` e `<li>` un a capo, gli spazi ripetuti uno solo. Non è un parser HTML
-//! completo e non serve che lo sia: quello che non riconosce lo scarta o lo lascia come testo.
+//! It is a defence: HTML written by an author, shown in the webview, would have access to
+//! `invoke()`. Only text reaches the frontend: no tags, the content of `<script>` and
+//! `<style>` discarded, the common entities decoded. Paragraphs and blocks become a blank
+//! line, `<br>` and `<li>` a line break, repeated whitespace a single space. It is not a
+//! complete HTML parser and does not need to be: what it does not recognise it discards or
+//! leaves as text.
 //!
-//! **Il risultato è testo, non HTML sicuro.** Decodificare le entità rimette in chiaro i
-//! caratteri del markup: `&lt;img src=x onerror=...&gt;` diventa la stringa
-//! `<img src=x onerror=...>`. È corretto finché resta testo, quindi il contratto con il
-//! frontend è che `description` si mostra **solo come testo** (il binding di testo di React,
-//! `{description}`, o `textContent`), **mai** con `innerHTML` o `dangerouslySetInnerHTML`.
-//! Qui non si fa l'escape di `<`, `>` e `&`: il binding di testo lo fa già, e un escape doppio
-//! mostrerebbe `&lt;3` invece di `<3`.
+//! **The result is text, not safe HTML.** Decoding the entities turns the markup characters
+//! back into plain characters: `&lt;img src=x onerror=...&gt;` becomes the string
+//! `<img src=x onerror=...>`. That is correct as long as it stays text, so the contract with
+//! the frontend is that `description` is shown **only as text** (React's text binding,
+//! `{description}`, or `textContent`), **never** with `innerHTML` or `dangerouslySetInnerHTML`.
+//! `<`, `>` and `&` are not escaped here: the text binding already does it, and a double
+//! escape would show `&lt;3` instead of `<3`.
 
-/// Il testo semplice di un frammento HTML. Va mostrato come testo, mai come HTML (vedi il
-/// modulo).
+/// The plain text of an HTML fragment. It must be shown as text, never as HTML (see the
+/// module).
 pub fn plain_text(html: &str) -> String {
     let mut out = Writer::default();
     let mut rest = html;
@@ -39,13 +40,13 @@ pub fn plain_text(html: &str) -> String {
     out.out
 }
 
-/// Il testo prodotto, con gli spazi e gli a capo ancora da scrivere: si scrivono solo prima
-/// del carattere successivo, così non restano mai all'inizio o alla fine.
+/// The produced text, with the spaces and line breaks still to be written: they are written
+/// only before the next character, so they never remain at the start or at the end.
 #[derive(Default)]
 struct Writer {
     out: String,
     space: bool,
-    /// 0 niente, 1 un a capo, 2 una riga vuota.
+    /// 0 nothing, 1 a line break, 2 a blank line.
     breaks: u8,
 }
 
@@ -73,12 +74,12 @@ impl Writer {
     }
 }
 
-/// Elabora il tag all'inizio di `rest` e restituisce quello che segue.
+/// Processes the tag at the start of `rest` and returns what follows it.
 fn tag<'a>(rest: &'a str, out: &mut Writer) -> &'a str {
     if let Some(comment) = rest.strip_prefix("<!--") {
         return comment.find("-->").map_or("", |end| &comment[end + 3..]);
     }
-    // `a < b` è testo: un tag inizia con una lettera, `/`, `!` o `?`.
+    // `a < b` is text: a tag starts with a letter, `/`, `!` or `?`.
     let opens_tag = rest[1..]
         .chars()
         .next()
@@ -87,7 +88,7 @@ fn tag<'a>(rest: &'a str, out: &mut Writer) -> &'a str {
         out.push('<');
         return &rest[1..];
     }
-    // Un tag non chiuso alla fine del testo si scarta con quello che segue.
+    // An unclosed tag at the end of the text is discarded along with what follows it.
     let Some(end) = tag_end(rest) else {
         return "";
     };
@@ -123,8 +124,8 @@ fn tag<'a>(rest: &'a str, out: &mut Writer) -> &'a str {
     }
 }
 
-/// L'indice del `>` che chiude il tag all'inizio di `rest`, senza contare quelli tra virgolette
-/// negli attributi.
+/// The index of the `>` that closes the tag at the start of `rest`, not counting those inside
+/// quotes in the attributes.
 fn tag_end(rest: &str) -> Option<usize> {
     let mut quote = None;
     for (i, c) in rest.char_indices().skip(1) {
@@ -138,10 +139,10 @@ fn tag_end(rest: &str) -> Option<usize> {
     None
 }
 
-/// Salta il contenuto di `<script>` o `<style>` fino al tag di chiusura compreso; senza
-/// chiusura scarta tutto il resto.
+/// Skips the content of `<script>` or `<style>` up to and including the closing tag; without
+/// a closing tag it discards all the rest.
 fn skip_raw<'a>(rest: &'a str, name: &str) -> &'a str {
-    // `to_ascii_lowercase` non sposta i byte: gli indici valgono anche per `rest`.
+    // `to_ascii_lowercase` does not move bytes: the indices are valid for `rest` too.
     let lower = rest.to_ascii_lowercase();
     let Some(start) = lower.find(&format!("</{name}")) else {
         return "";
@@ -151,8 +152,8 @@ fn skip_raw<'a>(rest: &'a str, name: &str) -> &'a str {
         .map_or("", |end| &rest[start + end + 1..])
 }
 
-/// L'entità all'inizio di `rest` (che inizia con `&`) e quanti byte occupa. Un'entità che non
-/// riconosce vale come un `&` letterale.
+/// The entity at the start of `rest` (which starts with `&`) and how many bytes it takes. An
+/// entity it does not recognise counts as a literal `&`.
 fn entity(rest: &str) -> (Option<char>, usize) {
     let not_entity = (None, 1);
     let Some(semi) = rest.char_indices().take(12).find(|(_, c)| *c == ';') else {
@@ -184,7 +185,7 @@ fn named_entity(name: &str) -> Option<char> {
         "gt" => '>',
         "quot" => '"',
         "apos" => '\'',
-        // Uno spazio come gli altri: gli spazi ripetuti si riducono a uno.
+        // A space like any other: repeated spaces collapse into one.
         "nbsp" => ' ',
         "ndash" => '–',
         "mdash" => '—',
@@ -219,7 +220,7 @@ mod tests {
             plain_text(html),
             "Details!\n\nA damage meter.\nFor everyone.\n\nFast\nSmall\n\nEnd"
         );
-        // Due `<br>` fanno una riga vuota, non di più; i blocchi vuoti non si sommano.
+        // Two `<br>` make a blank line, no more; empty blocks do not add up.
         assert_eq!(plain_text("a<br><br><br>b"), "a\n\nb");
         assert_eq!(plain_text("<div><p></p><div>a</div></div>"), "a");
         assert_eq!(
@@ -235,14 +236,14 @@ mod tests {
             "Tom & Jerry <3 \"x\" 'y' café a b"
         );
         assert_eq!(plain_text("&mdash; &hellip; &rsquo;"), "— … ’");
-        // Quelle sconosciute o senza `;` restano come sono.
+        // Unknown ones or those without `;` stay as they are.
         assert_eq!(
             plain_text("&bogus; &amp &#xZZ; R&D"),
             "&bogus; &amp &#xZZ; R&D"
         );
         assert_eq!(plain_text("&#0;"), "\u{fffd}");
-        // Un'entità decodificata è testo, mai un tag: non si interpreta come markup qui, e il
-        // frontend non deve farlo (vedi il modulo).
+        // A decoded entity is text, never a tag: it is not interpreted as markup here, and the
+        // frontend must not do so either (see the module).
         assert_eq!(
             plain_text("&lt;script&gt;x&lt;/script&gt;"),
             "<script>x</script>"

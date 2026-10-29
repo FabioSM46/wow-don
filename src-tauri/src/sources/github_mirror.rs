@@ -1,24 +1,24 @@
-//! Il mirror GitHub di un progetto CurseForge che non si può scaricare (D34, issue #162).
+//! The GitHub mirror of a CurseForge project that cannot be downloaded (D34, issue #162).
 //!
-//! Quando l'autore vieta il download da app di terzi (`allowModDistribution` diverso da
-//! `true`, D13), lo stesso addon può essere pubblicato anche nelle release di GitHub. [`resolve`]
-//! dice se lo è, e se la release è la stessa del file CurseForge che l'app installerebbe:
+//! When the author forbids downloads from third-party apps (`allowModDistribution` other than
+//! `true`, D13), the same addon may also be published in GitHub releases. [`resolve`] says
+//! whether it is, and whether the release is the same as the CurseForge file the app installs:
 //!
-//! - il repository si ricava **solo** dal `sourceUrl` del progetto, quando punta a
-//!   `github.com/<owner>/<repo>` (con il parsing dei link di `install_link::parse_link`); un
-//!   altro host o nessun `sourceUrl` non fa nessuna richiesta. Mai ricerca per nome;
-//! - la release si legge con [`GithubSource`], senza l'API (issue #179): stessa cache, stessa
-//!   scelta dello zip dal `release.json` per il flavor del gioco, e il blocco dopo il limite di
-//!   richieste solo per una release senza `release.json`, che passa dall'API;
-//! - la regola della stessa versione è [`same_version`], una funzione pura.
+//! - the repository is derived **only** from the project's `sourceUrl`, when it points to
+//!   `github.com/<owner>/<repo>` (with the link parsing of `install_link::parse_link`); another
+//!   host or no `sourceUrl` makes no request at all. Never a search by name;
+//! - the release is read with [`GithubSource`], without the API (issue #179): same cache, same
+//!   choice of the zip from `release.json` for the game's flavor, and the block after the rate
+//!   limit only for a release without `release.json`, which goes through the API;
+//! - the same-version rule is [`same_version`], a pure function.
 //!
-//! Dati verificati il 2026-10-26: Bartender4 (`4.18.3.1`) e Deadly Boss Mods (`12.1.17`) hanno
-//! release con `release.json`; Details ha l'ultima release del 2021; Auctionator e Leatrix Plus
-//! non hanno release (404).
+//! Data verified on 2026-10-26: Bartender4 (`4.18.3.1`) and Deadly Boss Mods (`12.1.17`) have
+//! releases with `release.json`; Details has its latest release from 2021; Auctionator and Leatrix
+//! Plus have no releases (404).
 //!
-//! Gli aggiornamenti e la reinstallazione (issue #163) usano il mirror attraverso
-//! [`MirrorSource`]: scaricano lo zip di GitHub con [`install`] e scrivono il record
-//! **CurseForge** del file che combacia, così il progetto resta abbinato a CurseForge.
+//! Updates and reinstalls (issue #163) use the mirror through
+//! [`MirrorSource`]: they download the GitHub zip with [`install`] and write the **CurseForge**
+//! record of the matching file, so the project stays matched to CurseForge.
 
 use std::path::Path;
 
@@ -32,14 +32,14 @@ use crate::progress::Reporter;
 use crate::sources::SourceKind;
 use crate::updates;
 
-/// Quello che la fonte CurseForge chiede a GitHub per un progetto bloccato: l'esito del mirror e
-/// il download del suo zip. Un trait a oggetti, così `CurseForgeSource` non ha un secondo
-/// parametro di tipo per il trasporto di GitHub.
+/// What the CurseForge source asks GitHub for a blocked project: the mirror's outcome and
+/// the download of its zip. A trait object, so `CurseForgeSource` does not have a second
+/// type parameter for GitHub's transport.
 pub(crate) trait MirrorSource {
-    /// [`resolve`] con la fonte GitHub.
+    /// [`resolve`] with the GitHub source.
     fn resolve(&self, project: &Mod, file: &File, flavor: &str) -> Outcome;
 
-    /// Lo zip `asset`, con le regole di download di `github.rs` (domini, dimensione).
+    /// The `asset` zip, with the download rules of `github.rs` (domains, size).
     fn download(
         &self,
         asset: &Asset,
@@ -61,7 +61,7 @@ impl<T: PublicTransport> MirrorSource for GithubSource<T> {
     }
 }
 
-/// Il mirror di un progetto, come lo vede il frontend: `{ repo, tag }`.
+/// A project's mirror, as the frontend sees it: `{ repo, tag }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GithubMirror {
     /// `owner/repo`.
@@ -69,22 +69,22 @@ pub struct GithubMirror {
     pub tag: String,
 }
 
-/// I campi del mirror in `AddonUpdate` (`githubMirror`, `githubMirrorReason`): entrambi `null`
-/// quando il mirror non è stato calcolato (progetto non bloccato, aggiornato o di un'altra
-/// fonte).
+/// The mirror fields in `AddonUpdate` (`githubMirror`, `githubMirrorReason`): both `null`
+/// when the mirror has not been computed (project not blocked, up to date or from another
+/// source).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MirrorStatus {
     pub github_mirror: Option<GithubMirror>,
-    /// Perché il mirror non si può usare (D27, in inglese).
+    /// Why the mirror cannot be used (D27, in English).
     pub github_mirror_reason: Option<String>,
-    /// Il progetto e il file da cui calcolare il mirror alla fine del controllo
-    /// (`updates::resolve_mirrors`); vuoto dopo. Resta nel backend.
+    /// The project and the file from which to compute the mirror at the end of the check
+    /// (`updates::resolve_mirrors`); empty afterwards. Stays in the backend.
     #[serde(skip)]
     pub pending: Option<Box<Pending>>,
 }
 
-/// Il progetto CurseForge bloccato e il file da confrontare con la release di GitHub.
+/// The blocked CurseForge project and the file to compare with the GitHub release.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pending {
     pub project: Mod,
@@ -111,11 +111,11 @@ impl MirrorStatus {
     }
 }
 
-/// Scarica lo zip `asset` del mirror e lo installa al posto di `old_modules`, con l'estrazione
-/// sicura degli aggiornamenti (`updates::install_bytes`). Restituisce le cartelle installate:
-/// il record, CurseForge, lo scrive chi chiama (gli aggiornamenti qui, l'installazione dalla
-/// Search con la issue #164). `check` può rifiutare le cartelle dello zip prima che tocchino il
-/// disco.
+/// Downloads the mirror's `asset` zip and installs it in place of `old_modules`, with the safe
+/// extraction of updates (`updates::install_bytes`). Returns the installed folders:
+/// the record, CurseForge, is written by the caller (the updates here, the installation from
+/// Search with issue #164). `check` can reject the zip's folders before they touch the
+/// disk.
 pub(crate) fn install(
     github: &dyn MirrorSource,
     asset: &Asset,
@@ -128,8 +128,8 @@ pub(crate) fn install(
     updates::install_bytes(&bytes, addons_dir, old_modules, check, reporter)
 }
 
-/// Scarica lo zip `asset` del mirror riportando l'avanzamento: la parte di rete di [`install`],
-/// che l'installazione di un progetto nuovo usa anche da sola (issue #180).
+/// Downloads the mirror's `asset` zip reporting progress: the network part of [`install`],
+/// which the installation of a new project also uses on its own (issue #180).
 pub(crate) fn download(
     github: &dyn MirrorSource,
     asset: &Asset,
@@ -143,13 +143,13 @@ pub(crate) fn download(
     Ok(bytes)
 }
 
-/// Il messaggio dell'esito di un'installazione dal mirror.
+/// The outcome message of an installation from the mirror.
 pub(crate) fn installed_message(repo: &str, tag: &str) -> String {
     format!("Installed from GitHub ({repo} {tag}): CurseForge blocks third-party downloads.")
 }
 
-/// Il messaggio di un progetto bloccato che non si può prendere da GitHub, con il motivo:
-/// aggiornamenti, reinstallazione e installazione dalla Search.
+/// The message for a blocked project that cannot be taken from GitHub, with the reason:
+/// updates, reinstall and installation from Search.
 pub(crate) fn unavailable_message(reason: &Reason) -> String {
     format!(
         "The author does not allow downloads from third-party apps and the GitHub copy cannot be used. {}",
@@ -157,10 +157,10 @@ pub(crate) fn unavailable_message(reason: &Reason) -> String {
     )
 }
 
-/// L'esito della ricerca del mirror.
+/// The outcome of the mirror lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Outcome {
-    /// Lo zip di GitHub da scaricare al posto del file CurseForge.
+    /// The GitHub zip to download in place of the CurseForge file.
     Mirror {
         /// `owner/repo`.
         repo: String,
@@ -172,23 +172,23 @@ pub(crate) enum Outcome {
     },
 }
 
-/// Perché un progetto non ha un mirror utilizzabile. [`Reason::message`] è il testo in inglese
-/// (D27) da mostrare.
+/// Why a project has no usable mirror. [`Reason::message`] is the English text
+/// (D27) to show.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Reason {
-    /// CurseForge permette il download: il mirror non serve e GitHub non si interroga.
+    /// CurseForge allows the download: the mirror is not needed and GitHub is not queried.
     NotBlocked,
-    /// Il progetto non ha un `sourceUrl` verso un repository GitHub.
+    /// The project has no `sourceUrl` pointing to a GitHub repository.
     NoGithubSource,
-    /// Il repository non esiste o non ha release pubblicate.
+    /// The repository does not exist or has no published releases.
     NoRelease(String),
-    /// La release non ha uno zip per questa versione del gioco.
+    /// The release has no zip for this game version.
     NoZip(String),
-    /// La release di GitHub non è il file di CurseForge.
+    /// The GitHub release is not the CurseForge file.
     DifferentVersion { github: String, curseforge: String },
-    /// Il limite di richieste di GitHub, con l'ora di sblocco.
+    /// GitHub's rate limit, with the reset time.
     RateLimited(String),
-    /// Rete o risposta illeggibile, della release o del suo `release.json`.
+    /// Network or unreadable response, of the release or of its `release.json`.
     Failed(String),
 }
 
@@ -216,12 +216,12 @@ fn unavailable(reason: Reason) -> Outcome {
     Outcome::Unavailable { reason }
 }
 
-/// Il mirror di `project` per `file`, il file CurseForge che `curseforge::pick_file` sceglie per
-/// l'installazione (stessa regola, stessa opzione della Beta), con lo zip di GitHub per il gioco
-/// `flavor` (il flavor dell'installazione, come per `GithubSource::choose`).
+/// The mirror of `project` for `file`, the CurseForge file that `curseforge::pick_file` picks for
+/// the installation (same rule, same Beta option), with the GitHub zip for the `flavor`
+/// game (the installation's flavor, as for `GithubSource::choose`).
 ///
-/// Nessuna richiesta per un progetto che CurseForge non blocca o senza `sourceUrl` GitHub; le
-/// altre passano tutte da `github`.
+/// No request for a project that CurseForge does not block or without a GitHub `sourceUrl`; the
+/// others all go through `github`.
 pub(crate) fn resolve<T: PublicTransport>(
     github: &GithubSource<T>,
     project: &Mod,
@@ -249,8 +249,8 @@ pub(crate) fn resolve<T: PublicTransport>(
     };
     let asset = match github.choose_zip(&release, flavor) {
         Ok(Some(asset)) => asset,
-        // Senza zip per il gioco una release diversa resta il motivo più utile: il tag basta a
-        // dirlo, anche quando il `release.json` non si legge.
+        // Without a zip for the game a different release stays the more useful reason: the tag is
+        // enough to say so, even when the `release.json` cannot be read.
         Ok(None) if !same_version(&tag, None, file) => return different(),
         Err(_) if !same_version(&tag, None, file) => return different(),
         Ok(None) => {
@@ -268,8 +268,8 @@ pub(crate) fn resolve<T: PublicTransport>(
     Outcome::Mirror { repo, tag, asset }
 }
 
-/// Il nome con cui il file CurseForge compare nei motivi: il nome dello zip, altrimenti quello
-/// mostrato dal sito.
+/// The name under which the CurseForge file appears in the reasons: the zip's name, otherwise the
+/// one shown by the site.
 fn curseforge_version(file: &File) -> String {
     file.file_name
         .clone()
@@ -277,9 +277,9 @@ fn curseforge_version(file: &File) -> String {
         .unwrap_or_else(|| file.display_name.clone())
 }
 
-/// `owner/repo` dal `sourceUrl` di un progetto CurseForge, solo quando punta a
-/// `github.com/<owner>/<repo>` (con o senza `www`, `.git`, slash finale, sottopercorsi). Un
-/// altro host, un percorso riservato di GitHub o `None` non danno un repository. Nessuna rete.
+/// `owner/repo` from a CurseForge project's `sourceUrl`, only when it points to
+/// `github.com/<owner>/<repo>` (with or without `www`, `.git`, trailing slash, subpaths). Another
+/// host, a reserved GitHub path or `None` give no repository. No network.
 pub(crate) fn github_repo(source_url: Option<&str>) -> Option<String> {
     let source_url = source_url?.trim();
     if source_url.is_empty() {
@@ -291,13 +291,13 @@ pub(crate) fn github_repo(source_url: Option<&str>) -> Option<String> {
         .map(|project| project.key)
 }
 
-/// La regola della stessa versione, scelta dell'utente: la release `tag` di GitHub, con il suo
-/// zip `github_zip` quando c'è, è il file CurseForge `file` se
+/// The same-version rule, the user's choice: GitHub release `tag`, with its
+/// zip `github_zip` when there is one, is CurseForge file `file` if
 ///
-/// - lo zip ha lo stesso nome del file CurseForge (senza distinguere maiuscole e minuscole),
-///   oppure
-/// - il tag, senza la `v` iniziale, compare come versione intera nel `fileName` o nel
-///   `displayName` del file (vedi [`contains_version`]).
+/// - the zip has the same name as the CurseForge file (case-insensitively),
+///   or
+/// - the tag, without the leading `v`, appears as a whole version in the file's `fileName` or
+///   `displayName` (see [`contains_version`]).
 pub(crate) fn same_version(tag: &str, github_zip: Option<&str>, file: &File) -> bool {
     if let (Some(zip), Some(name)) = (github_zip, file.file_name.as_deref())
         && !zip.is_empty()
@@ -314,11 +314,11 @@ pub(crate) fn same_version(tag: &str, github_zip: Option<&str>, file: &File) -> 
         .any(|text| contains_version(text, version))
 }
 
-/// Se `version` compare in `text` come versione intera, senza distinguere maiuscole e
-/// minuscole. Prima della versione: l'inizio del testo, `-`, `_` o uno spazio, anche seguiti da
-/// una `v` (`BigWigs-v427.8.zip`). Dopo: la fine del testo, `_`, uno spazio, `.zip`, oppure `-`
-/// non seguito da una cifra. Così `4.18.3.1` non combacia con `4.18.3.10` né con l'Alpha
-/// `4.18.3.1-1-g8339c74` (il suffisso di `git describe`).
+/// Whether `version` appears in `text` as a whole version, case-insensitively. Before
+/// the version: the start of the text, `-`, `_` or a space, optionally followed by
+/// a `v` (`BigWigs-v427.8.zip`). After: the end of the text, `_`, a space, `.zip`, or a `-`
+/// not followed by a digit. So `4.18.3.1` does not match `4.18.3.10` nor the Alpha
+/// `4.18.3.1-1-g8339c74` (the `git describe` suffix).
 pub(crate) fn contains_version(text: &str, version: &str) -> bool {
     if version.is_empty() {
         return false;
@@ -362,10 +362,10 @@ mod tests {
 
     const API: &str = "https://api.github.com/repos";
 
-    /// Le risposte del trasporto finto per URL, con le richieste fatte.
+    /// The fake transport's responses by URL, with the requests made.
     #[derive(Default)]
     struct Fake {
-        /// `releases/latest` sul sito → (stato, `Location`).
+        /// `releases/latest` on the site → (status, `Location`).
         redirects: HashMap<String, (u16, Option<String>)>,
         api: HashMap<String, ApiResponse>,
         json: HashMap<String, String>,
@@ -423,9 +423,9 @@ mod tests {
         format!("https://github.com/{repo}/releases/latest")
     }
 
-    /// Una release di `repo` con gli asset `assets` e, se `flavors` non è vuoto, un
-    /// `release.json` che assegna il primo zip a quei flavor. Il sito rimanda al tag; l'API
-    /// elenca gli asset.
+    /// A release of `repo` with the assets `assets` and, if `flavors` is not empty, a
+    /// `release.json` that assigns the first zip to those flavors. The site redirects to the tag;
+    /// the API lists the assets.
     fn release(fake: &mut Fake, repo: &str, tag: &str, assets: &[&str], flavors: &[&str]) {
         fake.redirects.insert(
             latest(repo),
@@ -522,7 +522,7 @@ mod tests {
         let same = |tag: &str, zip: Option<&str>, name: &str, display: &str| {
             same_version(tag, zip, &file(name, display))
         };
-        // Bartender4: stesso nome dello zip, e il tag nel nome.
+        // Bartender4: same zip name, and the tag in the name.
         assert!(same(
             "4.18.3.1",
             Some("Bartender4-4.18.3.1.zip"),
@@ -535,16 +535,16 @@ mod tests {
             "Bartender4-4.18.3.1.zip",
             "Bartender4"
         ));
-        // DBM: lo zip di GitHub ha un altro nome, il tag è nel file CurseForge.
+        // DBM: the GitHub zip has another name, the tag is in the CurseForge file.
         assert!(same(
             "12.1.17",
             Some("DeadlyBossMods-12.1.17.zip"),
             "DBM-Core-12.1.17.zip",
             "DBM"
         ));
-        // Solo nel `displayName`.
+        // Only in the `displayName`.
         assert!(same("12.1.17", None, "dbm.zip", "Deadly Boss Mods 12.1.17"));
-        // Una versione più lunga e l'Alpha di `git describe` non sono la stessa versione.
+        // A longer version and the `git describe` Alpha are not the same version.
         assert!(!same(
             "4.18.3.1",
             None,
@@ -558,7 +558,7 @@ mod tests {
             "4.18.3.1-1-g8339c74"
         ));
         assert!(!same("4.18.3.1", None, "Bartender4-14.18.3.1.zip", ""));
-        // La `v` iniziale del tag, le maiuscole, la `v` nel nome del file.
+        // The tag's leading `v`, upper case, the `v` in the file name.
         assert!(same("v12.1.17", None, "DBM-Core-12.1.17.zip", ""));
         assert!(same("V12.1.17", None, "DBM-CORE-12.1.17.ZIP", ""));
         assert!(same("v427.8", None, "BigWigs-v427.8.zip", ""));
@@ -568,12 +568,12 @@ mod tests {
             "Bartender4-4.18.3.1.zip",
             ""
         ));
-        // Altri delimitatori.
+        // Other delimiters.
         assert!(same("1.2", None, "Addon_1.2_classic.zip", ""));
         assert!(same("1.2", None, "Addon-1.2-classic.zip", ""));
         assert!(same("1.2", None, "", "1.2"));
         assert!(!same("1.2", None, "Addon-1.2.3.zip", "Addon1.2"));
-        // Un tag vuoto non combacia con niente.
+        // An empty tag matches nothing.
         assert!(!same("v", None, "Addon-v.zip", "v"));
     }
 
@@ -596,7 +596,7 @@ mod tests {
             "https://gitlab.com/owner/repo",
             "https://github.com/Nevcairiel",
             "https://github.com/orgs/Nevcairiel",
-            // Host che somigliano a GitHub senza esserlo.
+            // Hosts that look like GitHub without being it.
             "https://evilgithub.com/Nevcairiel/Bartender4",
             "https://github.com.evil.example/Nevcairiel/Bartender4",
             "https://api.github.com/repos/Nevcairiel/Bartender4",
@@ -606,8 +606,8 @@ mod tests {
         ] {
             assert_eq!(repo(Some(url)), None, "{url}");
         }
-        // Credenziali nell'URL: l'host vero è quello dopo la chiocciola (composto qui perché il
-        // controllo di privacy non lo scambi per un indirizzo email).
+        // Credentials in the URL: the real host is the one after the at sign (assembled here so
+        // that the privacy check does not mistake it for an email address).
         let userinfo = format!(
             "https://github.com{}evil.example/Nevcairiel/Bartender4",
             '@'
@@ -647,8 +647,8 @@ mod tests {
             )
         );
 
-        // DBM: lo zip di GitHub ha un altro nome, il tag decide. `allowModDistribution` assente
-        // vale come bloccato.
+        // DBM: the GitHub zip has another name, the tag decides. A missing `allowModDistribution`
+        // counts as blocked.
         let repo = "DeadlyBossMods/DeadlyBossMods";
         let mut fake = Fake::default();
         release(
@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn a_missing_release_or_zip_is_unavailable() {
-        // Auctionator e Leatrix Plus: nessuna release (404).
+        // Auctionator and Leatrix Plus: no releases (404).
         let repo = "Auctionator/Auctionator";
         let mut fake = Fake::default();
         fake.redirects.insert(latest(repo), (404, None));
@@ -727,7 +727,7 @@ mod tests {
             )
         );
 
-        // La release giusta senza zip per il gioco.
+        // The right release without a zip for the game.
         let source = Some("https://github.com/Nevcairiel/Bartender4");
         let mut fake = Fake::default();
         release(
@@ -748,7 +748,7 @@ mod tests {
             Reason::NoZip("The latest GitHub release has no file for this game version.".into())
         );
 
-        // Due zip senza `release.json`: nessuno zip da scegliere.
+        // Two zips without `release.json`: no zip to choose.
         let mut fake = Fake::default();
         release(
             &mut fake,
@@ -798,7 +798,7 @@ mod tests {
 
     #[test]
     fn a_different_release_names_both_versions() {
-        // Details: l'ultima release GitHub è del 2021.
+        // Details: the latest GitHub release is from 2021.
         let repo = "Tercioo/Details-Damage-Meter";
         let mut fake = Fake::default();
         release(
@@ -825,7 +825,7 @@ mod tests {
             "The latest GitHub release (Details.20210101.8241.143) is not the CurseForge file (Details-20261020.14110.169.zip)."
         );
 
-        // Senza zip per il gioco, una release diversa resta "diversa".
+        // Without a zip for the game, a different release stays "different".
         let mut fake = Fake::default();
         release(
             &mut fake,
@@ -850,7 +850,7 @@ mod tests {
 
     #[test]
     fn the_rate_limit_names_the_reset_time() {
-        // Senza `release.json` lo zip si sceglie dall'API, che risponde con il limite.
+        // Without `release.json` the zip is chosen from the API, which answers with the rate limit.
         let mut fake = Fake::default();
         release(
             &mut fake,
@@ -878,7 +878,7 @@ mod tests {
             )
         );
 
-        // Un errore di rete non è il limite.
+        // A network error is not the rate limit.
         let why = reason(resolve_with(
             Fake::default(),
             &project(

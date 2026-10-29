@@ -1,15 +1,15 @@
-//! Tukui come fonte (D31): l'API pubblica `https://api.tukui.org/v1/addons`, senza chiave, con
-//! ElvUI (id `-2`) e Tukui (id `-1`).
+//! Tukui as a source (D31): the public API `https://api.tukui.org/v1/addons`, without a key, with
+//! ElvUI (id `-2`) and Tukui (id `-1`).
 //!
-//! Risposta verificata il 2026-10-25: un array di addon con `id`, `name`, `url` (lo zip, con un
-//! token che cambia a ogni richiesta e che non va nei log), `version` (`16.00`), `patch` (le
-//! versioni del gioco, `12.1.0`, `1.15.9`…), `web_url`, `last_update` e `directories` (le cartelle
-//! dello zip). Il `.toc` di ElvUI scrive la versione con la `v` (`## Version: v16.00`).
+//! Response verified on 2026-10-25: an array of addons with `id`, `name`, `url` (the zip, with a
+//! token that changes on every request and must not go into the logs), `version` (`16.00`), `patch`
+//! (the game versions, `12.1.0`, `1.15.9`…), `web_url`, `last_update` and `directories` (the zip's
+//! folders). ElvUI's `.toc` writes the version with the `v` (`## Version: v16.00`).
 //!
-//! Un addon è installato quando tutte le sue `directories` sono in `AddOns` (senza distinguere
-//! maiuscole e minuscole) o quando l'app l'ha registrato. La versione installata è quella del
-//! record, altrimenti `## Version` del `.toc` della prima cartella; c'è un aggiornamento quando
-//! è diversa da `version`, senza contare una `v` iniziale.
+//! An addon is installed when all its `directories` are in `AddOns` (case-insensitively) or
+//! when the app has registered it. The installed version is the record's, otherwise
+//! `## Version` from the first folder's `.toc`; there is an update when it differs from
+//! `version`, ignoring a leading `v`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,7 +29,7 @@ use crate::store::{ProjectRecords, SourceRecord};
 use crate::updates::{self, AddonUpdate, FileSummary, Project, UpdateOutcome, UpdateStatus};
 
 pub const ADDONS_URL: &str = "https://api.tukui.org/v1/addons";
-/// I domini da cui Tukui serve l'API e gli zip, con i loro sottodomini.
+/// The domains from which Tukui serves the API and the zips, with their subdomains.
 pub const DOMAINS: [&str; 1] = ["tukui.org"];
 
 const TUKUI: SourceKind = SourceKind::Tukui;
@@ -46,13 +46,13 @@ pub struct TukuiAddon {
     pub web_url: Option<String>,
     #[serde(default)]
     pub last_update: Option<String>,
-    /// Le cartelle dello zip; un addon senza cartelle non si abbina mai.
+    /// The zip's folders; an addon without folders never matches.
     #[serde(default)]
     pub directories: Vec<String>,
 }
 
-/// La fonte Tukui. L'elenco si legge una volta per controllo e si riusa per l'aggiornamento che
-/// lo segue (`update_addons` rifà il controllo e poi aggiorna).
+/// The Tukui source. The list is read once per check and reused for the update that follows
+/// it (`update_addons` redoes the check and then updates).
 pub struct TukuiSource<T: PublicTransport> {
     transport: T,
     addons: Mutex<Option<Vec<TukuiAddon>>>,
@@ -82,8 +82,8 @@ impl<T: PublicTransport> TukuiSource<T> {
                 response.status
             ));
         }
-        // Una voce che non si legge (un addon nuovo con un campo diverso) si salta: non deve
-        // togliere tutta la fonte. Una risposta che non è un elenco resta un errore.
+        // An entry that cannot be read (a new addon with a different field) is skipped: it must not
+        // take down the whole source. A response that is not a list stays an error.
         let entries: Vec<serde_json::Value> = serde_json::from_str(&response.body)
             .map_err(|_| "Unrecognized response from Tukui.".to_owned())?;
         let addons: Vec<TukuiAddon> = entries
@@ -137,17 +137,17 @@ impl<T: PublicTransport> TukuiSource<T> {
 }
 
 impl<T: PublicTransport> TukuiSource<T> {
-    /// Gli addon che Tukui elenca: l'anteprima di un import li usa per sapere se un progetto si
-    /// può installare.
+    /// The addons Tukui lists: an import preview uses them to know whether a project can be
+    /// installed.
     pub fn listed(&self) -> Result<Vec<TukuiAddon>, String> {
         self.cached()
     }
 
-    /// Installa un progetto Tukui che non c'è ancora (l'import, issue #134). Vale se `patch`
-    /// elenca il gioco dell'installazione oppure se un `.toc` dello zip lo dichiara, come per
-    /// il controllo (`patch` non elenca WoW Forever). `check` può rifiutare le cartelle dello zip
-    /// prima che tocchino il disco. L'esito usa la forma di un aggiornamento: `updated` vuol dire
-    /// installato.
+    /// Installs a Tukui project that is not there yet (the import, issue #134). It applies if
+    /// `patch` lists the installation's game or if a `.toc` in the zip declares it, as for the
+    /// check (`patch` does not list WoW Forever). `check` can reject the zip's folders before
+    /// they touch the disk. The outcome uses the shape of an update: `updated` means
+    /// installed.
     pub fn install_new(
         &self,
         installation: &Installation,
@@ -164,8 +164,8 @@ impl<T: PublicTransport> TukuiSource<T> {
         }
     }
 
-    /// La parte di rete di [`install_new`](Self::install_new): il progetto nell'elenco e il suo
-    /// zip, senza toccare il disco. L'import la fa per più progetti insieme (issue #180).
+    /// The network part of [`install_new`](Self::install_new): the project in the list and its zip,
+    /// without touching the disk. The import does it for several projects together (issue #180).
     pub fn download_new(
         &self,
         key: &str,
@@ -202,15 +202,15 @@ impl<T: PublicTransport> TukuiSource<T> {
     }
 }
 
-/// Un progetto Tukui con il suo zip, scaricato e non ancora installato. Né `Clone` né un
-/// `Debug` con i byte: lo zip può pesare decine di MB.
+/// A Tukui project with its zip, downloaded and not yet installed. Neither `Clone` nor a
+/// `Debug` with the bytes: the zip can weigh tens of MB.
 pub struct TukuiDownload {
     addon: TukuiAddon,
     zip: Vec<u8>,
 }
 
 impl TukuiDownload {
-    /// Il nome del progetto nell'elenco di Tukui.
+    /// The project's name in Tukui's list.
     pub fn name(&self) -> &str {
         &self.addon.name
     }
@@ -225,8 +225,8 @@ impl std::fmt::Debug for TukuiDownload {
     }
 }
 
-/// La parte su disco di [`TukuiSource::install_new`]: estrae `download`, controlla il gioco e le
-/// cartelle, lo installa e lo registra.
+/// The on-disk part of [`TukuiSource::install_new`]: extracts `download`, checks the game and the
+/// folders, installs it and registers it.
 pub fn install_downloaded(
     installation: &Installation,
     key: &str,
@@ -288,10 +288,10 @@ pub fn install_downloaded(
 }
 
 impl<T: PublicTransport> TukuiSource<T> {
-    /// L'anteprima di un link (issue #109): nome, versione e pagina dall'elenco di Tukui. Si
-    /// può scaricare se Tukui lo elenca; se `patch` non nomina il gioco dell'installazione lo
-    /// dice il messaggio, perché l'installazione guarda anche i `.toc` dello zip (`patch` non
-    /// elenca WoW Forever). `Err` se l'elenco non si legge o non contiene il progetto.
+    /// The preview of a link (issue #109): name, version and page from Tukui's list. It
+    /// can be downloaded if Tukui lists it; if `patch` does not name the installation's game the
+    /// message says so, because the installation also looks at the zip's `.toc` files (`patch` does
+    /// not list WoW Forever). `Err` if the list cannot be read or does not contain the project.
     pub fn preview(&self, installation: &Installation, key: &str) -> Result<LinkInfo, String> {
         let addon = self
             .cached()?
@@ -322,8 +322,8 @@ impl<T: PublicTransport> TukuiSource<T> {
     }
 }
 
-/// Se un `.toc` delle cartelle estratte in `staging` dichiara un `## Interface` del gioco
-/// `flavor`.
+/// Whether a `.toc` among the folders extracted into `staging` declares an `## Interface` of the
+/// `flavor` game.
 fn declares_game(staging: &Path, folders: &[String], flavor: &str) -> bool {
     folders.iter().any(|folder| {
         let dir = staging.join(folder);
@@ -353,7 +353,7 @@ fn network_error(error: TransportError) -> String {
     }
 }
 
-/// La versione senza spazi e senza una `v` iniziale: `v16.00` e `16.00` sono la stessa.
+/// The version without spaces and without a leading `v`: `v16.00` and `16.00` are the same.
 fn normalized(version: &str) -> &str {
     let version = version.trim();
     version
@@ -362,30 +362,30 @@ fn normalized(version: &str) -> &str {
         .unwrap_or(version)
 }
 
-/// `12.1.0` → `120100`, come i numeri di `## Interface`.
+/// `12.1.0` → `120100`, like the numbers of `## Interface`.
 fn patch_interface(patch: &str) -> Option<u32> {
     let mut parts = patch.trim().split('.').map(|part| part.parse::<u32>().ok());
     let major = parts.next()??;
     let minor = parts.next().unwrap_or(Some(0))?;
     let fix = parts.next().unwrap_or(Some(0))?;
-    // Il testo viene dalla rete: un numero enorme non deve traboccare.
+    // The text comes from the network: a huge number must not overflow.
     major
         .checked_mul(10_000)?
         .checked_add(minor.checked_mul(100)?)?
         .checked_add(fix)
 }
 
-/// Se un numero di `## Interface` appartiene al gioco della cartella `flavor`. La tabella:
+/// Whether an `## Interface` number belongs to the game of the `flavor` folder. The table:
 ///
-/// | Cartella | Gioco | Interface |
+/// | Folder | Game | Interface |
 /// | --- | --- | --- |
-/// | `_retail_` | Retail | da 100000 (10.0) |
+/// | `_retail_` | Retail | from 100000 (10.0) |
 /// | `_classic_era_` | Classic Era | 11000–11599 (1.10–1.15) |
 /// | `_forever_`, `_classic_beta_` | WoW Forever | 16000–16999 (1.16) |
 /// | `_anniversary_` | Anniversary | 20000–29999 (2.x) |
-/// | `_classic_` | Classic progressiva | 30000–99999 (3.x–9.x, oggi Mists 5.x) |
+/// | `_classic_` | Progressive Classic | 30000–99999 (3.x–9.x, today Mists 5.x) |
 ///
-/// Un'altra cartella non ha un gioco noto: niente vale.
+/// Any other folder has no known game: nothing matches.
 fn fits(flavor: &str, interface: u32) -> bool {
     match flavor.trim_matches('_').to_ascii_lowercase().as_str() {
         "retail" => interface >= 100_000,
@@ -397,9 +397,9 @@ fn fits(flavor: &str, interface: u32) -> bool {
     }
 }
 
-/// L'addon vale per l'installazione se `patch` contiene una versione del suo gioco, oppure se
-/// il `.toc` installato la dichiara già: `patch` non elenca WoW Forever, che lo zip di ElvUI
-/// supporta (`## Interface: …, 16001, …`, verificato il 2026-10-25).
+/// The addon applies to the installation if `patch` contains a version of its game, or if
+/// the installed `.toc` already declares it: `patch` does not list WoW Forever, which the ElvUI
+/// zip supports (`## Interface: …, 16001, …`, verified on 2026-10-25).
 fn compatible(addon: &TukuiAddon, flavor: &str, installed: &[&InstalledAddon]) -> bool {
     addon
         .patch
@@ -504,15 +504,15 @@ impl<T: PublicTransport> Source for TukuiSource<T> {
             return target.not_found(TUKUI);
         };
         let name = project.name.as_str();
-        // Con `reinstall` (issue #148) un addon aggiornato si riscarica comunque: Tukui elenca una
-        // sola versione, quella installata.
+        // With `reinstall` (issue #148) an up-to-date addon is downloaded again anyway: Tukui lists
+        // a single version, the installed one.
         let wanted = |status: &UpdateStatus| match status {
             UpdateStatus::UpdateAvailable { .. } => true,
             UpdateStatus::UpToDate => target.reinstall,
             _ => false,
         };
         if !folders.iter().any(|u| wanted(&u.status)) {
-            // Un addon non elencato per questo gioco riporta il motivo, non "aggiornato".
+            // An addon not listed for this game reports the reason, not "up to date".
             let reason = folders.iter().find_map(|u| match &u.status {
                 UpdateStatus::Error { message } => Some(message.as_str()),
                 _ => None,
@@ -539,8 +539,8 @@ impl<T: PublicTransport> Source for TukuiSource<T> {
             Ok(bytes) => bytes,
             Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
         };
-        // Le cartelle del progetto sul disco: quelle che il nuovo zip non ha più si tolgono, come
-        // per CurseForge, invece di restare come addon sconosciuti.
+        // The project's folders on disk: those the new zip no longer has are removed, as
+        // for CurseForge, instead of staying behind as unknown addons.
         let old_folders: Vec<String> = folders.iter().map(|u| u.folder.clone()).collect();
         reporter.downloaded(bytes.len() as u64);
         let installed = match updates::install_bytes(
@@ -553,8 +553,8 @@ impl<T: PublicTransport> Source for TukuiSource<T> {
             Ok(folders) => folders,
             Err(error) => return UpdateOutcome::error(TUKUI, key, name, error),
         };
-        // Le cartelle sono già sostituite: se il registro non si salva l'aggiornamento resta
-        // riuscito, e il messaggio lo dice.
+        // The folders are already replaced: if the registry is not saved the update still
+        // succeeded, and the message says so.
         let message = record(
             TUKUI,
             key,
@@ -575,7 +575,7 @@ impl<T: PublicTransport> Source for TukuiSource<T> {
     }
 }
 
-/// Un file Tukui: nessun id numerico, la versione come nome (vedi `FileSummary`).
+/// A Tukui file: no numeric id, the version as the name (see `FileSummary`).
 fn summary(version: &str, date: Option<&str>) -> FileSummary {
     FileSummary {
         id: 0,
@@ -601,7 +601,7 @@ mod tests {
 
     const DOWNLOAD: &str = "https://api.tukui.org/v1/download/elvui/token";
 
-    /// La risposta reale del 2026-10-25, ridotta ai campi usati.
+    /// The real response of 2026-10-25, reduced to the fields used.
     fn body(elvui_version: &str) -> String {
         serde_json::json!([
             {
@@ -776,7 +776,7 @@ mod tests {
                 folders: vec!["ElvUI".to_owned()],
             },
         )]);
-        // Senza `ElvUI_Options` sul disco il record basta ad abbinare le cartelle presenti.
+        // Without `ElvUI_Options` on disk the record is enough to match the folders present.
         let mut addons = elvui("v15.00");
         addons.retain(|a| a.folder != "ElvUI_Options");
         let updates = source("16.01")
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn compatibility_comes_from_patch_or_the_installed_toc() {
         let tukui = vec![addon("Tukui", Some("20.463"), &[16001])];
-        // `patch` di Tukui non elenca Anniversary (2.x): nessun aggiornamento proposto.
+        // Tukui's `patch` does not list Anniversary (2.x): no update offered.
         let no_patch = vec![addon("Tukui", Some("20.000"), &[])];
         let updates = source("16.00")
             .check(
@@ -799,7 +799,7 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(updates[0].status, UpdateStatus::Error { .. }));
-        // WoW Forever non è in `patch`, ma il `.toc` installato lo dichiara.
+        // WoW Forever is not in `patch`, but the installed `.toc` declares it.
         let updates = source("16.00")
             .check(
                 &installation("_classic_beta_"),
@@ -808,7 +808,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(updates[0].status, UpdateStatus::UpToDate);
-        // Classic Era è in `patch` (1.15.7).
+        // Classic Era is in `patch` (1.15.7).
         let updates = source("16.00")
             .check(
                 &installation("_classic_era_"),
@@ -880,7 +880,7 @@ mod tests {
         );
     }
 
-    // ── Aggiornamento ──
+    // ── Update ──
 
     fn zip_of(files: &[(&str, &str)]) -> Vec<u8> {
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
@@ -986,11 +986,11 @@ mod tests {
                 }
             )]
         );
-        // L'elenco si legge una volta: l'aggiornamento riusa quello del controllo.
+        // The list is read once: the update reuses the one from the check.
         assert_eq!(*calls.lock().unwrap(), [ADDONS_URL, DOWNLOAD]);
     }
 
-    /// Issue #148: con `reinstall` un ElvUI già aggiornato si riscarica comunque.
+    /// Issue #148: with `reinstall` an up-to-date ElvUI is downloaded again anyway.
     #[test]
     fn reinstall_downloads_the_installed_version_again() {
         let tmp = TempDir::new();
@@ -1003,7 +1003,7 @@ mod tests {
                 "## Interface: 120100\n## Version: v16.01\n",
             );
         }
-        // Un file estraneo che la reinstallazione toglie.
+        // A stray file that the reinstall removes.
         fs::write(addons.join("ElvUI").join("Junk.lua"), "junk").unwrap();
         let installation = Installation {
             id: "test".to_owned(),
@@ -1085,7 +1085,7 @@ mod tests {
         assert!(error.contains("unrecognized download address"), "{error}");
     }
 
-    /// Legge l'API vera: `cargo test --locked live_tukui_addons -- --ignored`.
+    /// Reads the real API: `cargo test --locked live_tukui_addons -- --ignored`.
     #[test]
     #[ignore = "needs the network"]
     fn live_tukui_addons() {
@@ -1100,7 +1100,7 @@ mod tests {
     #[test]
     fn a_malformed_entry_does_not_hide_the_others() {
         let mut entries: Vec<serde_json::Value> = serde_json::from_str(&body("16.00")).unwrap();
-        // Una voce senza `name` e una senza `directories`.
+        // An entry without `name` and one without `directories`.
         entries.push(serde_json::json!({"id": -3, "url": "x", "version": "1"}));
         entries.push(serde_json::json!({"id": -4, "name": "New", "url": "x", "version": "1"}));
         let source = TukuiSource::new(Fake {
@@ -1200,7 +1200,7 @@ mod tests {
         assert_eq!(names, ["ElvUI", "ElvUI_Libraries", "Other"]);
     }
 
-    // ── Installazione di un progetto nuovo (import, issue #134) ──
+    // ── Installing a new project (import, issue #134) ──
 
     fn new_install(
         flavor: &str,
@@ -1262,7 +1262,7 @@ mod tests {
 
     #[test]
     fn the_download_touches_no_disk_and_the_install_uses_it() {
-        // L'import (issue #180): prima lo zip, poi l'installazione con quello zip.
+        // The import (issue #180): first the zip, then the installation with that zip.
         let tmp = TempDir::new();
         let path = tmp.path().join("World of Warcraft").join("_retail_");
         let addons = path.join("Interface").join("AddOns");
@@ -1307,7 +1307,7 @@ mod tests {
 
     #[test]
     fn a_new_project_counts_for_forever_when_its_toc_declares_it() {
-        // `patch` non elenca WoW Forever: decide il `.toc` dello zip.
+        // `patch` does not list WoW Forever: the zip's `.toc` decides.
         let (_tmp, addons, outcome, _) =
             new_install("_classic_beta_", "## Interface: 11508, 16001\n", "-2");
         assert_eq!(
@@ -1329,7 +1329,7 @@ mod tests {
         );
         assert!(!addons.join("ElvUI").exists());
         assert!(written.is_empty());
-        // Nemmeno la cartella di appoggio resta.
+        // Not even the staging folder remains.
         assert_eq!(fs::read_dir(addons.parent().unwrap()).unwrap().count(), 1);
     }
 

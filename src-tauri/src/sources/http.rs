@@ -1,14 +1,14 @@
-//! Lo strato HTTP comune alle fonti: le risposte, gli errori di trasporto e la lettura con un
-//! limite di dimensione, usati anche dal client di CurseForge. Per le fonti libere (D31), che
-//! non hanno chiave, c'è [`PublicTransport`]: una richiesta `GET` per le risposte JSON e una per
-//! gli zip, entrambe con un limite. I test usano risposte scritte a mano dietro il trait, senza
-//! rete.
+//! The HTTP layer shared by the sources: the responses, the transport errors and reading with a
+//! size limit, also used by the CurseForge client. For the free sources (D31), which have no
+//! key, there is [`PublicTransport`]: one `GET` request for JSON responses and one for zips,
+//! both with a limit. The tests use hand-written responses behind the trait, without the
+//! network.
 
 use std::io::Read;
 use std::time::Duration;
 
-/// Dimensione massima di una risposta JSON di una fonte libera: l'elenco di Tukui pesa pochi
-/// KiB, il dettaglio di un file WoWInterface meno ancora.
+/// Maximum size of a free source's JSON response: the Tukui list weighs a few KiB, the
+/// detail of a WoWInterface file even less.
 pub const MAX_JSON_BYTES: u64 = 4 * 1024 * 1024;
 
 pub struct HttpResponse {
@@ -16,8 +16,8 @@ pub struct HttpResponse {
     pub body: String,
 }
 
-/// Una risposta JSON con le intestazioni che una fonte legge: oggi solo il limite di richieste
-/// di GitHub (`x-ratelimit-remaining`, `x-ratelimit-reset` in secondi Unix).
+/// A JSON response with the headers a source reads: today only GitHub's rate limit
+/// (`x-ratelimit-remaining`, `x-ratelimit-reset` in Unix seconds).
 pub struct ApiResponse {
     pub status: u16,
     pub body: String,
@@ -25,8 +25,8 @@ pub struct ApiResponse {
     pub ratelimit_reset: Option<u64>,
 }
 
-/// La risposta di una richiesta che non segue i redirect: lo stato e l'intestazione `Location`,
-/// senza il corpo. Serve a GitHub per leggere il tag di `releases/latest` (issue #179).
+/// The response to a request that does not follow redirects: the status and the `Location`
+/// header, without the body. GitHub uses it to read the tag of `releases/latest` (issue #179).
 pub struct RedirectResponse {
     pub status: u16,
     pub location: Option<String>,
@@ -37,13 +37,13 @@ pub struct BytesResponse {
     pub body: Vec<u8>,
 }
 
-/// Perché una richiesta non ha avuto risposta. Non contiene testo del trasporto, che
-/// potrebbe riportare dettagli della richiesta.
+/// Why a request got no response. It contains no transport text, which could carry
+/// details of the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportError {
     Timeout,
     Connect,
-    /// Il corpo supera il limite chiesto dal chiamante.
+    /// The body exceeds the limit requested by the caller.
     TooLarge,
     Other,
 }
@@ -58,11 +58,11 @@ pub fn transport_error(error: reqwest::Error) -> TransportError {
     }
 }
 
-/// Legge al massimo `max_len` byte: appena il corpo li supererebbe si ferma con
-/// [`TransportError::TooLarge`], senza aggiungere il blocco di troppo. Anche la capacità del
-/// buffer resta entro `max_len`: la crescita raddoppia come quella di `Vec`, ma senza superare
-/// il limite. `declared` è il `Content-Length` già confrontato con il limite, usato per
-/// allocare una volta sola.
+/// Reads at most `max_len` bytes: as soon as the body would exceed them it stops with
+/// [`TransportError::TooLarge`], without appending the excess chunk. The buffer's capacity
+/// also stays within `max_len`: growth doubles like `Vec`'s, but without exceeding the
+/// limit. `declared` is the `Content-Length` already compared with the limit, used to
+/// allocate only once.
 pub fn read_limited(
     reader: &mut impl Read,
     max_len: u64,
@@ -71,8 +71,8 @@ pub fn read_limited(
     read_limited_with(reader, max_len, declared, &mut |_| {})
 }
 
-/// Come [`read_limited`], e dopo ogni blocco aggiunto chiama `on_read` con i byte letti finora
-/// (issue #127). Limiti ed errori sono gli stessi.
+/// Like [`read_limited`], and after every appended chunk calls `on_read` with the bytes read so
+/// far (issue #127). Limits and errors are the same.
 pub fn read_limited_with(
     reader: &mut impl Read,
     max_len: u64,
@@ -106,17 +106,17 @@ pub fn read_limited_with(
     }
 }
 
-/// Riceve i byte letti finora da [`read_limited_with`].
+/// Receives the bytes read so far from [`read_limited_with`].
 pub type ReadProgress<'a> = dyn FnMut(u64) + 'a;
 
-/// Riceve i byte scaricati finora e quelli dichiarati dal server, se li dichiara.
+/// Receives the bytes downloaded so far and those declared by the server, if it declares them.
 pub type DownloadProgress<'a> = dyn FnMut(u64, Option<u64>) + 'a;
 
 pub trait PublicTransport: Send + Sync {
-    /// Una risposta JSON, al massimo [`MAX_JSON_BYTES`]: oltre, [`TransportError::TooLarge`].
+    /// A JSON response, at most [`MAX_JSON_BYTES`]: beyond that, [`TransportError::TooLarge`].
     fn get(&self, url: &str) -> Result<HttpResponse, TransportError>;
-    /// Come [`get`](Self::get) con l'intestazione `Accept` data, e con le intestazioni del limite
-    /// di richieste. Senza una versione propria il trasporto non le riporta.
+    /// Like [`get`](Self::get) with the given `Accept` header, and with the rate-limit
+    /// headers. Without its own version the transport does not report them.
     fn get_api(&self, url: &str, accept: &str) -> Result<ApiResponse, TransportError> {
         let _ = accept;
         let response = self.get(url)?;
@@ -127,19 +127,19 @@ pub trait PublicTransport: Send + Sync {
             ratelimit_reset: None,
         })
     }
-    /// Una richiesta `GET` che **non** segue i redirect, per leggere `Location`; il corpo non si
-    /// legge. Chi chiama valida l'URL e la `Location` con [`is_allowed_url`]. Senza una versione
-    /// propria il trasporto non la sa fare e risponde [`TransportError::Other`].
+    /// A `GET` request that does **not** follow redirects, to read `Location`; the body is not
+    /// read. The caller validates the URL and the `Location` with [`is_allowed_url`]. Without its
+    /// own version the transport cannot do it and answers [`TransportError::Other`].
     fn get_redirect(&self, url: &str) -> Result<RedirectResponse, TransportError> {
         let _ = url;
         Err(TransportError::Other)
     }
-    /// Scarica un file. Un corpo più lungo di `max_len` byte dà [`TransportError::TooLarge`]
-    /// senza tenerne in memoria più di `max_len`. Chi chiama valida l'URL con
-    /// [`is_allowed_url`]; il trasporto reale applica la stessa regola ai redirect.
+    /// Downloads a file. A body longer than `max_len` bytes gives [`TransportError::TooLarge`]
+    /// without holding more than `max_len` of it in memory. The caller validates the URL with
+    /// [`is_allowed_url`]; the real transport applies the same rule to redirects.
     fn get_bytes(&self, url: &str, max_len: u64) -> Result<BytesResponse, TransportError>;
-    /// Come [`get_bytes`](Self::get_bytes), riportando a `progress` i byte scaricati. Senza una
-    /// versione propria il trasporto riporta solo la fine.
+    /// Like [`get_bytes`](Self::get_bytes), reporting the downloaded bytes to `progress`. Without
+    /// its own version the transport reports only the end.
     fn get_bytes_with_progress(
         &self,
         url: &str,
@@ -153,9 +153,9 @@ pub trait PublicTransport: Send + Sync {
     }
 }
 
-/// Il trasporto reale: `reqwest` bloccante con TLS `rustls`, che segue i redirect solo verso i
-/// domini della fonte, più un secondo client che non li segue mai ([`get_redirect`]). Va usato
-/// fuori dal thread principale.
+/// The real transport: blocking `reqwest` with `rustls` TLS, which follows redirects only to the
+/// source's domains, plus a second client that never follows them ([`get_redirect`]). Must be
+/// used off the main thread.
 ///
 /// [`get_redirect`]: PublicTransport::get_redirect
 pub struct PublicReqwestTransport {
@@ -167,7 +167,7 @@ impl PublicReqwestTransport {
     pub fn new(domains: &'static [&'static str]) -> Result<Self, TransportError> {
         let builder = || {
             reqwest::blocking::Client::builder()
-                // Vale per la connessione e per ogni lettura, non per l'intero download.
+                // Applies to the connection and to every read, not to the whole download.
                 .timeout(Duration::from_secs(30))
                 .user_agent(concat!("wow-don/", env!("CARGO_PKG_VERSION")))
         };
@@ -259,8 +259,8 @@ impl PublicTransport for PublicReqwestTransport {
     }
 }
 
-/// Invia la richiesta di un download e ne legge il corpo con [`read_limited_with`], riportando
-/// a `progress` i byte ricevuti e il `Content-Length`. Comune ai trasporti reali.
+/// Sends a download request and reads its body with [`read_limited_with`], reporting the
+/// received bytes and the `Content-Length` to `progress`. Shared by the real transports.
 pub fn download(
     request: reqwest::blocking::RequestBuilder,
     max_len: u64,
@@ -278,8 +278,8 @@ pub fn download(
     Ok(BytesResponse { status, body })
 }
 
-/// Un URL ammesso: `https`, senza credenziali né porta esplicita, verso uno dei `domains` o un
-/// suo sottodominio.
+/// An allowed URL: `https`, without credentials or an explicit port, to one of the `domains` or
+/// one of their subdomains.
 pub fn is_allowed_url(url: &reqwest::Url, domains: &[&str]) -> bool {
     let Some(host) = url.host_str() else {
         return false;
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn reading_reports_the_bytes_read_after_each_chunk() {
-        // Un lettore che consegna 100 KiB a pezzi da 40 KiB.
+        // A reader that delivers 100 KiB in 40 KiB pieces.
         struct Chunks(Vec<u8>, usize);
         impl Read for Chunks {
             fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -321,7 +321,7 @@ mod tests {
         let body = read_limited_with(&mut reader, 200 * 1024, None, &mut |n| seen.push(n)).unwrap();
         assert_eq!(body.len(), 100 * 1024);
         assert_eq!(seen, [40 * 1024, 80 * 1024, 100 * 1024]);
-        // Oltre il limite si ferma come prima, senza riportare il blocco di troppo.
+        // Beyond the limit it stops as before, without reporting the excess chunk.
         let mut reader = Chunks(vec![7; 100 * 1024], 0);
         let mut seen = Vec::new();
         let error = read_limited_with(&mut reader, 50 * 1024, None, &mut |n| seen.push(n));

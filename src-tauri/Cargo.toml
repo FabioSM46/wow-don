@@ -30,14 +30,14 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "j
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 tauri-plugin-autostart = "2"
 
-# Lettura di `InstallPath` dal registro per la ricerca delle installazioni (D30).
+# Reads `InstallPath` from the registry for the installation search (D30).
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
 
 
-# `tauri dev` usa questo profilo: senza ottimizzazioni la scansione degli addon (fingerprint di
-# centinaia di MB di file), l'estrazione degli zip e TLS sono un ordine di grandezza più lenti.
-# Il codice del progetto resta a `opt-level = 1` per non allungare troppo la compilazione.
+# `tauri dev` uses this profile: without optimizations the addon scan (fingerprints of hundreds
+# of MB of files), zip extraction and TLS are an order of magnitude slower.
+# The project's own code stays at `opt-level = 1` so compilation does not get too long.
 [profile.dev]
 opt-level = 1
 

@@ -1,18 +1,18 @@
-//! Lavoro di rete in parallelo con i thread della libreria standard (issue #180): l'import
-//! risolve e scarica più voci insieme, poi le installa una alla volta.
+//! Parallel network work with standard library threads (issue #180): the import resolves and
+//! downloads several entries at once, then installs them one at a time.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
-/// Quante voci di un import si risolvono e si scaricano insieme. Abbastanza per coprire la
-/// latenza di CurseForge e della sua CDN; poche per non sembrare un abuso a fonti che non hanno
-/// un limite dichiarato (Tukui, GitHub senza token) e per tenere pochi zip in memoria a metà.
+/// How many entries of an import are resolved and downloaded at once. Enough to cover the
+/// latency of CurseForge and its CDN; few enough not to look like abuse to sources that have no
+/// declared limit (Tukui, GitHub without a token) and to keep few half-done zips in memory.
 pub const DOWNLOADS_AT_ONCE: usize = 6;
 
-/// `f` su ogni elemento, con al massimo [`DOWNLOADS_AT_ONCE`] chiamate insieme; i risultati
-/// tornano nell'ordine di `items`. Con zero o un elemento non crea thread. Un panico in `f` si
-/// propaga al chiamante, come in una chiamata normale.
+/// `f` on every item, with at most [`DOWNLOADS_AT_ONCE`] calls at once; the results come back
+/// in the order of `items`. With zero or one item it creates no threads. A panic in `f`
+/// propagates to the caller, as in a normal call.
 pub fn map<T, R, F>(items: &[T], f: F) -> Vec<R>
 where
     T: Sync,
@@ -54,7 +54,7 @@ mod tests {
     #[test]
     fn results_keep_the_order_of_the_items() {
         let items: Vec<u64> = (0..20).collect();
-        // I primi finiscono per ultimi.
+        // The first ones finish last.
         let doubled = map(&items, |n| {
             thread::sleep(Duration::from_millis(20 - n));
             n * 2
@@ -74,7 +74,7 @@ mod tests {
             thread::sleep(Duration::from_millis(150));
             running.fetch_sub(1, Ordering::SeqCst);
         });
-        // Due giri da 150 ms, non dodici.
+        // Two rounds of 150 ms, not twelve.
         let elapsed = start.elapsed();
         assert!(elapsed < Duration::from_millis(150 * 5), "{elapsed:?}");
         assert_eq!(peak.load(Ordering::SeqCst), DOWNLOADS_AT_ONCE);
