@@ -25,7 +25,10 @@ use crate::store::AppSettingsStore;
 
 /// The label of the main window (the one in `tauri.conf.json`, without `label`).
 const MAIN_WINDOW: &str = "main";
-const TRAY_ID: &str = "main";
+/// Specific to the app, not `"main"`: on Linux tray-icon writes the image to
+/// `tray-icon-<id>-<n>.png` in the runtime folder and deletes it on exit, so another app with
+/// the same ID would overwrite or remove ours (issue #252).
+const TRAY_ID: &str = "wow-don";
 const MENU_SHOW: &str = "show";
 const MENU_QUIT: &str = "quit";
 const MENU_UPDATES: &str = "updates";
