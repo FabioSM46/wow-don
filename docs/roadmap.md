@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-10-27.
+Last updated: 2026-10-29.
 
 ## M0 — Scaffolding (done)
 
@@ -107,10 +107,10 @@ D41, issues #199–#204:
 
 ## M5 — Third-party application key and first release
 
-- Send CurseForge/Overwolf the form for the application key.
+- CurseForge/Overwolf application key: form sent, key granted (2026-10-29).
 - Ask Wago for read access to the API (D39), in parallel.
-- Key granted (2026-10-29). It never reaches the app: it lives in the wow-don-proxy Worker and
-  the backend calls the proxy, in development too (D44, #247).
+- The key never reaches the app: it lives in the wow-don-proxy Worker and the backend calls the
+  proxy, in development too (D44, #247).
 - First tested release: PR `develop → main` (the first to run `backend-macos` on the
   complete backend), then the `.deb`, NSIS installer and `.dmg` built by CI (D24) at the first tag.
 

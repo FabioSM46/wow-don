@@ -36,7 +36,7 @@ replaces it, and the old one is marked as superseded.
 | --- | --- | --- | --- |
 | D7 | Main source: the CurseForge API | Largest catalogue | Confirmed |
 | D8 | ~~In development the personal CurseForge API key is used~~ Superseded by D44: development goes through the proxy too | Available right away from the console | Superseded |
-| D9 | The request for a third-party application key is sent once the project stands on its own | A project to show is needed; the personal key is enough for development | Confirmed |
+| D9 | ~~The request for a third-party application key is sent once the project stands on its own~~ Done: the key was granted on 2026-10-29 and lives only in the proxy (D44) | A project to show was needed | Superseded |
 | D10 | ~~The key lives in `.env` (gitignored) as `CURSEFORGE_API_KEY` and never leaves the Rust backend~~ Superseded by D44 | Security; CurseForge's terms forbid exposing it | Superseded |
 | D11 | No scraping of the CurseForge site and no reuse of WowUp's key | They violate the terms of use | Confirmed |
 | D12 | Sources are plugins behind a common interface | Allows adding Wago, WoWInterface and GitHub without touching the rest. Confirmed with the "Free sources" specification (issue #105) | Confirmed |
