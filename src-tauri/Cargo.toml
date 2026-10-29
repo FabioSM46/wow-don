@@ -1,6 +1,6 @@
 [package]
 name = "wow-don"
-version = "0.1.0"
+version = "0.1.1"
 description = "World of Warcraft addon manager for Linux, Windows and macOS"
 authors = ["FabioSM46 <124870035+FabioSM46@users.noreply.github.com>"]
 edition = "2024"
