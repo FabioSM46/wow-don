@@ -232,12 +232,12 @@ impl Schedule {
 }
 
 /// Whether a round should be repeated soon: at least one source failed the check entirely, and
-/// it is not CurseForge without a key (the missing key is not a network error and is not fixed
-/// by retrying).
-pub fn needs_retry(failed: &[SourceKind], curseforge_has_key: bool) -> bool {
+/// it is not CurseForge without an address (a configuration problem, not a network error, and
+/// not fixed by retrying).
+pub fn needs_retry(failed: &[SourceKind], curseforge_configured: bool) -> bool {
     failed
         .iter()
-        .any(|kind| *kind != SourceKind::Curseforge || curseforge_has_key)
+        .any(|kind| *kind != SourceKind::Curseforge || curseforge_configured)
 }
 
 /// What the check tells the round for one installation.
@@ -624,15 +624,12 @@ fn round_installations(app: &AppHandle, mode: AutoUpdateMode) -> (Vec<Installati
     if installations.is_empty() {
         return (Vec::new(), false);
     }
-    let key = app
-        .state::<crate::config::Config>()
-        .curseforge_api_key
-        .clone();
+    let base = Some(app.state::<crate::config::Config>().curseforge_url.clone());
     let settings = app.state::<Mutex<AddonSettingsStore>>();
     let installed = app.state::<Mutex<InstalledAddonsStore>>();
     let cache = app.state::<FingerprintCache>();
     let allow_beta = commands::beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
-    let sources = match LiveSources::new(key) {
+    let sources = match LiveSources::new(base) {
         Ok(sources) => sources,
         Err(error) => {
             // Without sources no installation is checked: it counts as a failed check.
@@ -699,7 +696,7 @@ fn round_installations(app: &AppHandle, mode: AutoUpdateMode) -> (Vec<Installati
                 });
             }
         }
-        retrying |= needs_retry(&failed, sources.has_curseforge_key());
+        retrying |= needs_retry(&failed, sources.curseforge_configured());
         reports.push(report);
     }
     (reports, retrying)

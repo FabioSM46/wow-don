@@ -372,7 +372,7 @@ pub(crate) fn declared_project(dir: &Path, folder: &str, flavor: &str) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::curseforge::{ApiKey, BytesResponse, HttpResponse, TransportError};
+    use crate::sources::curseforge::{BytesResponse, HttpResponse, TransportError};
     use crate::store::InstalledRecord;
     use crate::test_support::TempDir;
     use crate::updates::{CLASSIC_ERA, FOREVER};
@@ -386,7 +386,7 @@ mod tests {
     }
 
     impl Transport for Fake {
-        fn get(&self, url: &str, _key: &ApiKey) -> Result<HttpResponse, TransportError> {
+        fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
             self.seen.lock().unwrap().push(url.to_owned());
             Ok(HttpResponse {
                 status: self.status,
@@ -394,12 +394,7 @@ mod tests {
             })
         }
 
-        fn post_json(
-            &self,
-            url: &str,
-            _key: &ApiKey,
-            _body: String,
-        ) -> Result<HttpResponse, TransportError> {
+        fn post_json(&self, url: &str, _body: String) -> Result<HttpResponse, TransportError> {
             panic!("unexpected POST to {url}");
         }
 
@@ -415,7 +410,7 @@ mod tests {
                 body,
                 seen: Mutex::new(Vec::new()),
             },
-            Some("test-key-7f3a9c".to_owned()),
+            Some("https://proxy.example.com".to_owned()),
         )
     }
 
@@ -532,7 +527,7 @@ mod tests {
         assert_eq!(
             seen(&client),
             [
-                "https://api.curseforge.com/v1/mods/search?gameId=1&searchFilter=details\
+                "https://proxy.example.com/v1/mods/search?gameId=1&searchFilter=details\
               &gameVersionTypeId=517&sortField=2&sortOrder=desc&index=50&pageSize=50"
             ]
         );
@@ -579,7 +574,7 @@ mod tests {
         assert_eq!(
             seen(&client),
             [
-                "https://api.curseforge.com/v1/mods/search?gameId=1&categoryId=7\
+                "https://proxy.example.com/v1/mods/search?gameId=1&categoryId=7\
               &gameVersionTypeId=67408&sortField=2&sortOrder=desc&index=0&pageSize=50"
             ]
         );
@@ -633,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn api_errors_are_english_messages_without_the_key() {
+    fn api_errors_are_english_messages() {
         let tmp = TempDir::new();
         let client = client(429, "");
         let error = search_catalog(
@@ -644,7 +639,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.starts_with("Too many requests"), "{error}");
-        assert!(!error.contains("test-key-7f3a9c"));
         assert!(
             list_categories(&self::client(500, ""))
                 .unwrap_err()
@@ -718,7 +712,7 @@ mod tests {
         );
         assert_eq!(
             seen(&client),
-            ["https://api.curseforge.com/v1/categories?gameId=1"]
+            ["https://proxy.example.com/v1/categories?gameId=1"]
         );
     }
 

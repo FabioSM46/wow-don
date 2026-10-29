@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type AppStatus = {
   version: string;
-  curseforgeKeyConfigured: boolean;
 };
 
 /** The interface theme; `system` follows the operating system. */

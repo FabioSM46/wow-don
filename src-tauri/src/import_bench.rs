@@ -3,14 +3,13 @@
 //! `addon_import::run_import`), in a fake installation under a temporary folder. It never touches
 //! a real game folder and does not run in CI (`#[ignore]`).
 //!
-//! It reads only two environment variables: `CURSEFORGE_API_KEY` (never printed) and
-//! `WOWDON_IMPORT_LIST`, the path of a file holding a `WOWDON1` string. From the repository
-//! root:
+//! It reaches CurseForge through the proxy, as the app does (D44), and reads one environment
+//! variable: `WOWDON_IMPORT_LIST`, the path of a file holding a `WOWDON1` string. From the
+//! repository root:
 //!
 //! ```text
 //! cd src-tauri
-//! CURSEFORGE_API_KEY=<key> WOWDON_IMPORT_LIST=<file> \
-//!   cargo test --locked --lib import_bench -- --ignored --nocapture
+//! WOWDON_IMPORT_LIST=<file> cargo test --locked --lib import_bench -- --ignored --nocapture
 //! ```
 //!
 //! It prints the total time and the time of each phase, derived from the progress events: every
@@ -60,12 +59,8 @@ impl Timeline {
 }
 
 #[test]
-#[ignore = "real network and API key: run by hand, see the module documentation"]
+#[ignore = "real network through the proxy: run by hand, see the module documentation"]
 fn import_bench() {
-    let key = std::env::var("CURSEFORGE_API_KEY")
-        .ok()
-        .filter(|key| !key.trim().is_empty())
-        .expect("CURSEFORGE_API_KEY is not set");
     let list = std::env::var("WOWDON_IMPORT_LIST").expect("WOWDON_IMPORT_LIST is not set");
     let text = fs::read_to_string(list).expect("the WOWDON_IMPORT_LIST file is not readable");
     let decoded = addon_list::decode(&text).expect("not a WOWDON1 string");
@@ -100,11 +95,13 @@ fn import_bench() {
 
     let start = Instant::now();
     let transport = ReqwestTransport::new().unwrap();
-    let client = CurseForgeClient::new(transport, Some(key));
+    let client = CurseForgeClient::new(
+        transport,
+        Some(crate::config::Config::load().curseforge_url),
+    );
     let tukui = tukui_source().unwrap();
     let github = github_source().unwrap();
-    let (availability, lookup_error) =
-        import_availability(&decoded.list.addons, &client, true, &tukui);
+    let (availability, lookup_error) = import_availability(&decoded.list.addons, &client, &tukui);
     let checked = Instant::now();
     let mut installer = CommandInstaller {
         installation: &installation,

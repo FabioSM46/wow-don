@@ -246,7 +246,7 @@ fn required_dependencies<T: Transport>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::curseforge::{ApiKey, BytesResponse, HttpResponse, TransportError};
+    use crate::sources::curseforge::{BytesResponse, HttpResponse, TransportError};
     use crate::test_support::TempDir;
     use crate::updates::{CLASSIC_ERA, FOREVER, RETAIL};
     use std::collections::HashMap;
@@ -327,7 +327,7 @@ mod tests {
     }
 
     impl Transport for Fake {
-        fn get(&self, url: &str, _key: &ApiKey) -> Result<HttpResponse, TransportError> {
+        fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
             self.seen.lock().unwrap().push((url.to_owned(), None));
             let body = if url.ends_with("/description") {
                 DESCRIPTION
@@ -348,12 +348,7 @@ mod tests {
             })
         }
 
-        fn post_json(
-            &self,
-            url: &str,
-            _key: &ApiKey,
-            body: String,
-        ) -> Result<HttpResponse, TransportError> {
+        fn post_json(&self, url: &str, body: String) -> Result<HttpResponse, TransportError> {
             self.seen.lock().unwrap().push((url.to_owned(), Some(body)));
             Ok(HttpResponse {
                 status: 200,
@@ -381,7 +376,7 @@ mod tests {
                 file: FILE_30.to_owned(),
                 seen: Mutex::new(Vec::new()),
             },
-            Some("test-key-7f3a9c".to_owned()),
+            Some("https://proxy.example.com".to_owned()),
         )
     }
 
@@ -503,10 +498,10 @@ mod tests {
         assert_eq!(
             urls,
             [
-                "https://api.curseforge.com/v1/mods/61284",
-                "https://api.curseforge.com/v1/mods/61284/description",
-                "https://api.curseforge.com/v1/mods/61284/files?gameVersionTypeId=517&index=0&pageSize=50",
-                "https://api.curseforge.com/v1/mods",
+                "https://proxy.example.com/v1/mods/61284",
+                "https://proxy.example.com/v1/mods/61284/description",
+                "https://proxy.example.com/v1/mods/61284/files?gameVersionTypeId=517&index=0&pageSize=50",
+                "https://proxy.example.com/v1/mods",
             ]
         );
         assert_eq!(seen[3].1.as_deref(), Some(r#"{"modIds":[3358,404]}"#));
@@ -623,7 +618,7 @@ mod tests {
         let seen = seen(&client);
         assert_eq!(
             seen[3].0,
-            "https://api.curseforge.com/v1/mods/61284/files/30"
+            "https://proxy.example.com/v1/mods/61284/files/30"
         );
         assert_eq!(seen[4].1.as_deref(), Some(r#"{"modIds":[3358]}"#));
     }

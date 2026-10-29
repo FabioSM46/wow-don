@@ -680,14 +680,14 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
     }
 
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome {
-        // Without a key the check failed and the project is not among the recognized ones: the
-        // real reason is the key, not "not found".
-        if !self.client.has_key() {
+        // Without a CurseForge address the check failed and the project is not among the
+        // recognized ones: the real reason is the configuration, not "not found".
+        if !self.client.is_configured() {
             return UpdateOutcome::error(
                 SourceKind::Curseforge,
                 target.key,
                 "",
-                CurseForgeError::MissingKey.to_string(),
+                CurseForgeError::NotConfigured.to_string(),
             );
         }
         let Ok(mod_id) = target.key.parse::<u32>() else {
@@ -2048,11 +2048,11 @@ mod tests {
 
         use super::super::*;
         use super::{Mode, cf_check_updates, cf_update_addons, cf_update_addons_with};
-        use crate::sources::curseforge::{ApiKey, BytesResponse, HttpResponse, TransportError};
+        use crate::sources::curseforge::{BytesResponse, HttpResponse, TransportError};
         use crate::store::InstalledRecord;
         use crate::test_support::TempDir;
 
-        const API: &str = "https://api.curseforge.com";
+        const API: &str = "https://proxy.example.com";
 
         /// Fake transport that answers by URL and records the requests.
         #[derive(Default)]
@@ -2088,17 +2088,12 @@ mod tests {
         }
 
         impl Transport for Routes {
-            fn get(&self, url: &str, _key: &ApiKey) -> Result<HttpResponse, TransportError> {
+            fn get(&self, url: &str) -> Result<HttpResponse, TransportError> {
                 self.log.gets.lock().unwrap().push(url.to_owned());
                 reply(self.files.get(url))
             }
 
-            fn post_json(
-                &self,
-                url: &str,
-                _key: &ApiKey,
-                _body: String,
-            ) -> Result<HttpResponse, TransportError> {
+            fn post_json(&self, url: &str, _body: String) -> Result<HttpResponse, TransportError> {
                 self.log.posts.lock().unwrap().push(url.to_owned());
                 if url == format!("{API}/v1/fingerprints/1") {
                     reply(Some(&self.fingerprints))
@@ -2234,7 +2229,7 @@ mod tests {
         }
 
         fn client(routes: Routes) -> CurseForgeClient<Routes> {
-            CurseForgeClient::new(routes, Some("test-key".to_owned()))
+            CurseForgeClient::new(routes, Some("https://proxy.example.com".to_owned()))
         }
 
         fn names(dir: &Path) -> Vec<String> {
@@ -3169,7 +3164,7 @@ mod tests {
             assert_eq!(ess.status, UpdateStatus::NotMatched);
             assert_eq!(ess.source, None);
             let json = serde_json::to_string(&updates).unwrap();
-            assert!(!json.contains("Unreadable") && !json.contains("test-key"));
+            assert!(!json.contains("Unreadable") && !json.contains("https://proxy.example.com"));
         }
 
         #[test]
@@ -3369,15 +3364,15 @@ mod tests {
         }
 
         /// Really updates the addons of a real installation: **modifies `Interface/AddOns`**,
-        /// so it is worth making a backup first. The user runs it, by hand, with the key
-        /// from the environment (or from `.env` in debug), the path of the `_<flavor>_` folder and
+        /// so it is worth making a backup first. The user runs it, by hand, through the proxy,
+        /// with the path of the `_<flavor>_` folder and
         /// the projects to update separated by commas:
         ///
         /// `WOW_DON_LIVE_INSTALL=<_flavor_-folder> WOW_DON_LIVE_MOD_IDS=61284 cargo test --manifest-path src-tauri/Cargo.toml live_update_addons -- --ignored --nocapture`
         ///
         /// Without `WOW_DON_LIVE_MOD_IDS` it prints only the projects with an update.
         #[test]
-        #[ignore = "uses the network, the real CurseForge key and modifies a real installation"]
+        #[ignore = "uses the network, the wow-don-proxy and modifies a real installation"]
         fn live_update_addons() {
             use crate::sources::curseforge::ReqwestTransport;
 
@@ -3386,7 +3381,7 @@ mod tests {
             let config = crate::config::Config::load();
             let client = CurseForgeClient::new(
                 ReqwestTransport::new().unwrap(),
-                config.curseforge_api_key.clone(),
+                Some(config.curseforge_url.clone()),
             );
             let mod_ids: Vec<u32> = std::env::var("WOW_DON_LIVE_MOD_IDS")
                 .unwrap_or_default()
@@ -3782,13 +3777,13 @@ mod tests {
             );
         }
 
-        /// CurseForge without a key, as in the app without `CURSEFORGE_API_KEY` (#123).
+        /// CurseForge without an address, which the app never is since D44 (#123).
         fn keyless() -> CurseForgeClient<Routes> {
             CurseForgeClient::new(Routes::default(), None)
         }
 
         fn missing_key() -> String {
-            CurseForgeError::MissingKey.to_string()
+            CurseForgeError::NotConfigured.to_string()
         }
 
         #[test]

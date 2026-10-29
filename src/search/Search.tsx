@@ -57,8 +57,6 @@ type Props = {
   installation: Installation;
   /** The tab is visible: the first search starts only when it is opened. */
   active: boolean;
-  /** `false` when the CurseForge key is missing; `null` until the state is known. */
-  keyConfigured: boolean | null;
   /** The Beta option (issue #141): when it changes, the search restarts. The backend reads it
    * on its own; here it only serves to know when the results are no longer valid. */
   betaWhenNoRelease?: boolean | null;
@@ -87,7 +85,6 @@ type Selection = { installationId: string; addon: CatalogAddon };
 export function Search({
   installation,
   active,
-  keyConfigured,
   betaWhenNoRelease,
   onInstalled,
   stale,
@@ -137,8 +134,6 @@ export function Search({
   const resultsRef = useRef<HTMLDivElement>(null);
   const savedScroll = useRef(0);
   const shown = useRef({ open: false, installationId: installation.id });
-
-  const missingKey = keyConfigured === false;
 
   // The installations started in the session and the projects installed after the search
   // response, which the response's "installed" mark does not know about yet.
@@ -428,7 +423,7 @@ export function Search({
 
   // Categories and game versions do not change during the session: a single request.
   useEffect(() => {
-    if (!started || missingKey) return;
+    if (!started) return;
     api
       .listCategories()
       .then(setCategories)
@@ -437,7 +432,7 @@ export function Search({
       .listVersionTypes()
       .then(setVersionTypes)
       .catch(() => setVersionTypes([]));
-  }, [started, missingKey]);
+  }, [started]);
 
   useEffect(() => {
     const query = normalizeQuery(text);
@@ -450,7 +445,7 @@ export function Search({
 
   // A new search restarts from the first page; only the last response applies.
   useEffect(() => {
-    if (!started || missingKey) return;
+    if (!started) return;
     const id = tracker.current.next();
     setLoad((previous) => ({ ...previous, loading: true, error: null }));
     setLoadingMore(false);
@@ -469,7 +464,7 @@ export function Search({
         if (!tracker.current.isLatest(id)) return;
         setLoad({ results: null, loading: false, error: errorMessage(err) });
       });
-  }, [started, missingKey, installation.id, params, retry, refresh, betaWhenNoRelease]);
+  }, [started, installation.id, params, retry, refresh, betaWhenNoRelease]);
 
   // The visible blocked ones with a GitHub repository are checked automatically (issue #223),
   // in list order and at most `MIRROR_CHECKS_AT_ONCE` at a time. Only with the results of the
@@ -550,16 +545,14 @@ export function Search({
     setSearch((previous) => ({ ...previous, query: "", categoryId: null }));
   }
 
-  // "Add by link" does not use CurseForge: it remains even without the key, and then it is
-  // always open. With the key it opens from the bar's button (issue #229), which exists only in
-  // that branch: without the key the early return below does not draw the bar. Closed hides
-  // only the field: preview, progress and outcome stay in view, and stay mounted. Its state
-  // applies to the installation, so it remounts when that changes.
+  // "Add by link" opens from the bar's button (issue #229). Closed hides only the field:
+  // preview, progress and outcome stay in view, and stay mounted. Its state applies to the
+  // installation, so it remounts when that changes.
   const addByLink = (
     <AddByLink
       key={installation.id}
       id="add-by-link"
-      open={missingKey || linkOpen}
+      open={linkOpen}
       installationId={installation.id}
       onInstalled={() => {
         onInstalled?.();
@@ -568,18 +561,6 @@ export function Search({
       }}
     />
   );
-
-  if (missingKey) {
-    return (
-      <section aria-label="Search">
-        {addByLink}
-        <p className="empty">
-          Search needs a CurseForge API key. Set <code>CURSEFORGE_API_KEY</code> in the{" "}
-          <code>.env</code> file and restart the app.
-        </p>
-      </section>
-    );
-  }
 
   const options = categoryOptions(categories);
   const results = load.results;
