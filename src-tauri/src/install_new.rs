@@ -1,25 +1,26 @@
-//! Installazione di un addon nuovo dal catalogo (`install_addon`, issue #70), con le sue
-//! dipendenze obbligatorie (issue #71).
+//! Installation of a new addon from the catalog (`install_addon`, issue #70), with its
+//! required dependencies (issue #71).
 //!
-//! Segue il flusso di `updates::update_addons` e ne riusa `install_file`: download, estrazione
-//! sicura in staging, sostituzione con ripristino. In più, prima di toccare il disco:
-//! - un progetto già presente (stessa regola del flag `installed` della ricerca,
-//!   [`catalog::installed_projects`]) si salta senza nessuna chiamata di rete;
-//! - una cartella dello zip che esiste già e appartiene a un altro progetto (nei record di
-//!   `installed-addons.json` o, senza record, per il `## X-Curse-Project-ID` del suo `.toc`)
-//!   fa fallire l'installazione; una cartella esistente senza record né id di progetto
-//!   (installata a mano) si sostituisce.
+//! It follows the flow of `updates::update_addons` and reuses its `install_file`: download, safe
+//! extraction into staging, replacement with restore. In addition, before touching the disk:
+//! - a project already present (same rule as the search's `installed` flag,
+//!   [`catalog::installed_projects`]) is skipped without any network call;
+//! - a zip folder that already exists and belongs to another project (in the records of
+//!   `installed-addons.json` or, without records, by the `## X-Curse-Project-ID` of its `.toc`)
+//!   makes the installation fail; an existing folder with neither record nor project id
+//!   (installed by hand) is replaced.
 //!
-//! Come in WowUp, dopo un'installazione riuscita si installano le dipendenze del file con
-//! `relationType = 3` (RequiredDependency), e ricorsivamente le loro, con le stesse regole.
+//! As in WowUp, after a successful installation the file's dependencies with
+//! `relationType = 3` (RequiredDependency) are installed, and recursively theirs, with the same
+//! rules.
 //!
-//! Un progetto che CurseForge non lascia scaricare (D13) si installa dal suo mirror GitHub
-//! (D34, issue #164) quando la release è la stessa del file CurseForge scelto: si scarica lo zip
-//! di GitHub con le stesse regole e lo stesso controllo delle cartelle, e il record resta
-//! **CurseForge**, con l'id del file che combacia. [`github_mirror`] dà lo stesso esito su
-//! richiesta, senza installare: la ricerca non interroga GitHub.
+//! A project that CurseForge does not let you download (D13) is installed from its GitHub mirror
+//! (D34, issue #164) when the release is the same as the chosen CurseForge file: the GitHub zip is
+//! downloaded with the same rules and the same folder check, and the record stays
+//! **CurseForge**, with the id of the matching file. [`github_mirror`] gives the same outcome on
+//! request, without installing: the search does not query GitHub.
 //!
-//! Bloccante: va chiamato fuori dal thread principale.
+//! Blocking: it must be called off the main thread.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -43,8 +44,8 @@ use crate::sources::github_mirror::{self, MirrorSource, Outcome, Reason};
 use crate::store::{InstalledRecord, InstalledRecords};
 use crate::updates::{self, FileSummary, VersionOverrides};
 
-/// Quanti livelli di dipendenze si seguono: il progetto scelto è il livello 0, le sue
-/// dipendenze il livello 1. Le dipendenze più profonde non si installano e l'esito lo dice.
+/// How many levels of dependencies are followed: the chosen project is level 0, its
+/// dependencies level 1. Deeper dependencies are not installed and the outcome says so.
 pub const MAX_DEPENDENCY_DEPTH: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -55,23 +56,23 @@ pub enum InstallStatus {
     Error,
 }
 
-/// L'esito dell'installazione di un progetto, con la stessa forma di `UpdateOutcome` più
-/// `dependencyOf` per le dipendenze.
+/// The outcome of installing a project, with the same shape as `UpdateOutcome` plus
+/// `dependencyOf` for the dependencies.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallOutcome {
     pub mod_id: u32,
-    /// Il nome del progetto; vuoto se non è stato letto da CurseForge (per esempio quando il
-    /// progetto è già installato e non serve chiederlo).
+    /// The project's name; empty if it was not read from CurseForge (for example when the
+    /// project is already installed and there is no need to ask).
     pub name: String,
     pub status: InstallStatus,
-    /// Perché è stato saltato, cosa è andato storto o un avviso su un'installazione riuscita.
+    /// Why it was skipped, what went wrong or a warning on a successful installation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// Il file installato, solo per `installed`.
+    /// The installed file, only for `installed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<FileSummary>,
-    /// Per una dipendenza, l'id del progetto che la richiede; assente per il progetto scelto.
+    /// For a dependency, the id of the project that requires it; absent for the chosen project.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dependency_of: Option<u32>,
 }
@@ -100,26 +101,26 @@ impl InstallOutcome {
     }
 }
 
-/// Installa il progetto `mod_id` nell'installazione: il file `file_id` se indicato (purché sia
-/// di quel progetto), altrimenti l'ultimo file Release per la versione del gioco forzata per il
-/// progetto (`overrides`) o per quella dell'installazione. `records` sono i record di
-/// `installed-addons.json` dell'installazione; `record` salva quello appena installato.
+/// Installs the project `mod_id` into the installation: the file `file_id` if given (as long as it
+/// belongs to that project), otherwise the latest Release file for the game version forced for the
+/// project (`overrides`) or for the installation's. `records` are the installation's records in
+/// `installed-addons.json`; `record` saves the one just installed.
 ///
-/// Se il progetto si installa, si installano anche le sue dipendenze obbligatorie, un livello
-/// alla volta fino a [`MAX_DEPENDENCY_DEPTH`] livelli: ognuna con l'ultimo Release per la
-/// stessa versione del gioco del progetto scelto e con le stesse regole, ogni progetto al
-/// massimo una volta (cicli e dipendenze condivise). Le dipendenze di un progetto già
-/// installato o non installato non si seguono. Per ogni livello i progetti si leggono con una
-/// sola `get_mods`, che dà il nome anche a quelli già installati o troppo profondi. Dopo ogni
-/// installazione i record locali e l'insieme dei progetti installati includono quella appena
-/// fatta, così una dipendenza appena installata conta come installata e le sue cartelle come
-/// registrate.
+/// If the project installs, its required dependencies are installed too, one level
+/// at a time up to [`MAX_DEPENDENCY_DEPTH`] levels: each with the latest Release for the
+/// same game version as the chosen project and with the same rules, each project at
+/// most once (cycles and shared dependencies). The dependencies of a project that is already
+/// installed or not installed are not followed. For each level the projects are read with a
+/// single `get_mods`, which gives the name also to those already installed or too deep. After each
+/// installation the local records and the set of installed projects include the one just
+/// done, so a dependency just installed counts as installed and its folders as
+/// registered.
 ///
-/// Un progetto bloccato da CurseForge (anche una dipendenza) si installa dal mirror GitHub con
-/// `github` (D34); senza `github`, o senza un mirror utilizzabile, resta saltato con il motivo.
+/// A project blocked by CurseForge (a dependency too) is installed from the GitHub mirror with
+/// `github` (D34); without `github`, or without a usable mirror, it stays skipped with the reason.
 ///
-/// Restituisce l'esito del progetto scelto seguito da uno per ogni dipendenza visitata, mai
-/// `Err`: un errore su una dipendenza non tocca il progetto scelto né le altre dipendenze.
+/// Returns the outcome of the chosen project followed by one for each visited dependency, never
+/// `Err`: an error on a dependency does not touch the chosen project or the other dependencies.
 #[allow(clippy::too_many_arguments)]
 pub fn install_addon<T: Transport>(
     installation: &Installation,
@@ -150,9 +151,9 @@ pub fn install_addon<T: Transport>(
     )
 }
 
-/// [`install_addon`] con progetti, file e zip presi da `fetcher`: le richieste vere
-/// ([`Live`]) oppure quelle già fatte dalla prima fase di un import ([`Cached`], issue #180).
-/// Il disco si tocca solo qui, una installazione alla volta.
+/// [`install_addon`] with projects, files and zips taken from `fetcher`: the real requests
+/// ([`Live`]) or those already made by the first phase of an import ([`Cached`], issue #180).
+/// The disk is touched only here, one installation at a time.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn install_addon_with(
     installation: &Installation,
@@ -164,13 +165,13 @@ pub(crate) fn install_addon_with(
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
     progress: &ProgressSink<'_>,
 ) -> Vec<InstallOutcome> {
-    // Un'installazione aggiunge progetti e non ne toglie: la cartella di un altro progetto non
-    // si sostituisce, quindi basta leggere il disco una volta e aggiungere quelli installati.
+    // An installation adds projects and removes none: another project's folder is not
+    // replaced, so it is enough to read the disk once and add the installed ones.
     let installed = catalog::installed_projects(installation, records);
     if installed.contains(&mod_id) {
         return vec![InstallOutcome::skipped(mod_id, "", "Already installed.")];
     }
-    // La versione del gioco del progetto scelto vale anche per le sue dipendenze.
+    // The game version of the chosen project also applies to its dependencies.
     let version_type = version_type_of(installation, overrides, mod_id);
     let mut installer = Installer {
         installation,
@@ -201,7 +202,7 @@ pub(crate) fn install_addon_with(
     let mut outcomes = vec![outcome];
 
     let mut visited = HashSet::from([mod_id]);
-    // (dipendenza, progetto che la richiede) del livello corrente.
+    // (dependency, project that requires it) of the current level.
     let mut level = Vec::new();
     enqueue(&mut level, &mut visited, &dependencies, mod_id);
     let mut depth = 1;
@@ -254,7 +255,7 @@ pub(crate) fn install_addon_with(
     outcomes
 }
 
-/// Aggiunge al livello le dipendenze non ancora visitate, una volta sola ciascuna.
+/// Adds to the level the dependencies not visited yet, each only once.
 fn enqueue(
     level: &mut Vec<(u32, u32)>,
     visited: &mut HashSet<u32>,
@@ -268,8 +269,8 @@ fn enqueue(
     }
 }
 
-/// La versione del gioco per cui si sceglie il file di `mod_id`: quella forzata per il progetto
-/// o quella dell'installazione. Vale anche per le dipendenze del progetto.
+/// The game version for which the file of `mod_id` is chosen: the one forced for the project
+/// or the installation's. It also applies to the project's dependencies.
 pub(crate) fn version_type_of(
     installation: &Installation,
     overrides: &VersionOverrides,
@@ -281,13 +282,13 @@ pub(crate) fn version_type_of(
         .or_else(|| updates::version_type_for(&installation.flavor))
 }
 
-/// Il file scelto per un progetto con il suo zip già scaricato: la parte di rete di
-/// un'installazione, che non tocca il disco (issue #180).
-/// Né `Clone` né un `Debug` con i byte: lo zip può pesare decine di MB.
+/// The file chosen for a project with its zip already downloaded: the network part of
+/// an installation, which does not touch the disk (issue #180).
+/// Neither `Clone` nor a `Debug` with the bytes: the zip can weigh tens of MB.
 pub(crate) struct Fetched {
     file: File,
     zip: Vec<u8>,
-    /// Per lo zip del mirror GitHub, il messaggio dell'esito.
+    /// For the GitHub mirror zip, the outcome's message.
     note: Option<String>,
 }
 
@@ -301,15 +302,15 @@ impl std::fmt::Debug for Fetched {
     }
 }
 
-/// Da dove [`install_addon_with`] prende progetti, file e zip.
+/// Where [`install_addon_with`] takes projects, files and zips from.
 pub(crate) trait Fetcher {
-    /// I progetti `ids` come `get_mods`: quelli che CurseForge conosce, o l'errore della
-    /// richiesta.
+    /// The projects `ids` as `get_mods`: those CurseForge knows, or the error of the
+    /// request.
     fn mods(&self, ids: &[u32]) -> Result<Vec<Mod>, String>;
 
-    /// Il file da installare per `project` (il file `file_id`, o l'ultimo per `version_type`)
-    /// nel gioco di `installation` e il suo zip, oppure l'esito che dice perché non si installa.
-    /// L'installazione è quella di chi installa: una sola fonte per scelta e installazione.
+    /// The file to install for `project` (the file `file_id`, or the latest for `version_type`)
+    /// in the game of `installation` and its zip, or the outcome that says why it is not installed.
+    /// The installation is that of the installer: a single source per choice and installation.
     fn fetch(
         &self,
         installation: &Installation,
@@ -319,24 +320,24 @@ pub(crate) trait Fetcher {
         reporter: &Reporter<'_>,
     ) -> Result<Fetched, InstallOutcome>;
 
-    /// Se la lettura del progetto scelto si annuncia con `checking`: non quando la prima fase
-    /// di un import l'ha già fatta.
+    /// Whether reading the chosen project is announced with `checking`: not when the first phase
+    /// of an import has already done it.
     fn announces(&self) -> bool {
         true
     }
 }
 
-/// Le richieste vere, fatte quando servono: l'installazione dalla Search e dai link.
+/// The real requests, made when needed: installation from Search and from links.
 pub(crate) struct Live<'a, T: Transport> {
     pub client: &'a CurseForgeClient<T>,
-    /// Il mirror GitHub dei progetti bloccati (D34); `None` li salta.
+    /// The GitHub mirror of the blocked projects (D34); `None` skips them.
     pub github: Option<&'a (dyn MirrorSource + Sync)>,
-    /// Una Beta quando la versione non ha una Release (issue #141), anche per le dipendenze.
+    /// A Beta when the version has no Release (issue #141), for the dependencies too.
     pub allow_beta: bool,
 }
 
 impl<T: Transport> Live<'_, T> {
-    /// [`Fetcher::fetch`], con il file già letto in blocco se c'è (`known`).
+    /// [`Fetcher::fetch`], with the file already read in bulk if there is one (`known`).
     fn fetch_known(
         &self,
         installation: &Installation,
@@ -393,21 +394,21 @@ impl<T: Transport> Fetcher for Live<'_, T> {
     }
 }
 
-/// Il file con lo zip di un progetto, o l'esito che dice perché non c'è.
+/// The file with a project's zip, or the outcome that says why there is none.
 type FetchResult = Result<Fetched, InstallOutcome>;
 
-/// Quante voci si chiedono in una sola `get_mods` o `get_files`.
+/// How many entries are requested in a single `get_mods` or `get_files`.
 const IDS_PER_REQUEST: usize = 100;
 
-/// La prima fase di un import (issue #180): progetti, file e zip letti in anticipo da
-/// [`prefetch`], che [`Cached`] restituisce all'installazione.
+/// The first phase of an import (issue #180): projects, files and zips read in advance by
+/// [`prefetch`], which [`Cached`] returns to the installation.
 #[derive(Default)]
 pub(crate) struct Prefetched {
-    /// Ogni progetto letto con `get_mods`: `None` se CurseForge non lo conosce. Un progetto
-    /// la cui richiesta è fallita manca, così la seconda fase lo richiede.
+    /// Each project read with `get_mods`: `None` if CurseForge does not know it. A project
+    /// whose request failed is missing, so the second phase requests it.
     mods: Mutex<HashMap<u32, Option<Mod>>>,
-    /// Per (progetto, versione del gioco), il file con lo zip o l'esito che dice perché no. Uno
-    /// zip esce quando lo prende la sua installazione; un esito resta per chi lo chiede ancora.
+    /// By (project, game version), the file with the zip or the outcome that says why not. A
+    /// zip leaves when its installation takes it; an outcome stays for whoever still asks for it.
     files: Mutex<HashMap<(u32, Option<u32>), FetchResult>>,
 }
 
@@ -415,15 +416,15 @@ fn lock<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Risolve e scarica in parallelo, senza toccare il disco, i progetti `projects` (id e versione
-/// del gioco) e le loro dipendenze obbligatorie, come le installerebbe [`install_addon_with`]:
-/// fino a [`MAX_DEPENDENCY_DEPTH`] livelli, con la versione del gioco del progetto che le
-/// richiede. Un livello alla volta: una `get_mods` e una `get_files` per tutto il livello, poi
-/// al massimo [`parallel::DOWNLOADS_AT_ONCE`] download insieme. Ogni progetto si scarica una
-/// volta sola anche se più voci lo richiedono; quelli in `installed` non si scaricano. Si
-/// leggono anche le dipendenze già installate e quelle un livello oltre il limite, senza
-/// scaricarle: la seconda fase ne chiede il nome con lo stesso livello. Riporta `checking`, il
-/// download e `downloaded` per ogni progetto scaricato.
+/// Resolves and downloads in parallel, without touching the disk, the projects `projects` (id and
+/// game version) and their required dependencies, as [`install_addon_with`] would install them:
+/// up to [`MAX_DEPENDENCY_DEPTH`] levels, with the game version of the project that
+/// requires them. One level at a time: one `get_mods` and one `get_files` for the whole level, then
+/// at most [`parallel::DOWNLOADS_AT_ONCE`] downloads at once. Each project is downloaded only
+/// once even if several entries require it; those in `installed` are not downloaded. The
+/// dependencies already installed and those one level beyond the limit are also read, without
+/// downloading them: the second phase asks for their name with the same level. Reports `checking`,
+/// the download and `downloaded` for each downloaded project.
 pub(crate) fn prefetch<T: Transport>(
     installation: &Installation,
     live: &Live<'_, T>,
@@ -453,7 +454,7 @@ pub(crate) fn prefetch<T: Transport>(
             ids
         };
         for chunk in missing.chunks(IDS_PER_REQUEST) {
-            // Un pezzo che fallisce non si ricorda: la seconda fase lo richiede.
+            // A chunk that fails is not remembered: the second phase requests it.
             if let Ok(found) = live.mods(chunk) {
                 let mut by_id: HashMap<u32, Mod> = found.into_iter().map(|m| (m.id, m)).collect();
                 let mut mods = lock(&prefetched.mods);
@@ -462,11 +463,11 @@ pub(crate) fn prefetch<T: Transport>(
                 }
             }
         }
-        // Oltre il limite servono solo i nomi.
+        // Beyond the limit only the names are needed.
         if depth > MAX_DEPENDENCY_DEPTH {
             break;
         }
-        // I progetti trovati e non ancora scaricati, con l'id del file che si sceglierebbe.
+        // The projects found and not downloaded yet, with the id of the file that would be chosen.
         let todo: Vec<(Mod, Option<u32>, Option<u32>)> = {
             let mods = lock(&prefetched.mods);
             let files = lock(&prefetched.files);
@@ -483,7 +484,7 @@ pub(crate) fn prefetch<T: Transport>(
                 .collect()
         };
         let file_ids: Vec<u32> = todo.iter().filter_map(|(_, _, file)| *file).collect();
-        // Un file che manca qui (o una richiesta fallita) si legge da solo durante il download.
+        // A file missing here (or a failed request) is read on its own during the download.
         let known: HashMap<u32, File> = file_ids
             .chunks(IDS_PER_REQUEST)
             .filter_map(|chunk| live.client.get_files(chunk).ok())
@@ -520,8 +521,8 @@ pub(crate) fn prefetch<T: Transport>(
     }
 }
 
-/// [`Prefetched`] davanti alle richieste vere: quello che la prima fase non ha letto (un file
-/// scelto a mano, un progetto oltre il limite di profondità) si chiede a `live`.
+/// [`Prefetched`] in front of the real requests: what the first phase did not read (a file
+/// chosen by hand, a project beyond the depth limit) is asked of `live`.
 pub(crate) struct Cached<'a, T: Transport> {
     pub live: &'a Live<'a, T>,
     pub prefetched: &'a Prefetched,
@@ -567,24 +568,24 @@ impl<T: Transport> Fetcher for Cached<'_, T> {
     }
 }
 
-/// Lo stato condiviso dalle installazioni di una chiamata a [`install_addon_with`].
+/// The state shared by the installations of one call to [`install_addon_with`].
 struct Installer<'a> {
     installation: &'a Installation,
     fetcher: &'a dyn Fetcher,
-    /// La versione del gioco del progetto scelto, per i progetti senza `file_id`.
+    /// The game version of the chosen project, for projects without `file_id`.
     version_type: Option<u32>,
-    /// I record di partenza più quelli delle installazioni già fatte.
+    /// The starting records plus those of the installations already done.
     records: InstalledRecords,
-    /// I progetti installati, aggiornato dopo ogni installazione riuscita.
+    /// The installed projects, updated after each successful installation.
     installed: HashSet<u32>,
     record: &'a mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
-    /// Dove riportare l'avanzamento di ogni progetto installato (issue #127).
+    /// Where to report the progress of each installed project (issue #127).
     progress: &'a ProgressSink<'a>,
 }
 
 impl Installer<'_> {
-    /// Installa un progetto letto da CurseForge e non ancora installato. Restituisce l'esito
-    /// e, se è stato installato, le dipendenze obbligatorie del file.
+    /// Installs a project read from CurseForge and not installed yet. Returns the outcome
+    /// and, if it was installed, the file's required dependencies.
     fn install(&mut self, project: &Mod, file_id: Option<u32>) -> (InstallOutcome, Vec<u32>) {
         let key = project.id.to_string();
         let reporter = Reporter::new(
@@ -613,7 +614,7 @@ impl Installer<'_> {
         );
         if result.0.status == InstallStatus::Installed {
             self.installed.insert(project.id);
-            // Una Beta scelta dall'app, non dall'utente nel dettaglio: l'esito lo dice.
+            // A Beta chosen by the app, not by the user in the detail: the outcome says so.
             if file_id.is_none() && fetched.file.release_type == RELEASE_TYPE_BETA {
                 result.0.message.get_or_insert_with(|| {
                     "Installed the beta: there is no release for this game version.".to_owned()
@@ -624,11 +625,11 @@ impl Installer<'_> {
     }
 }
 
-/// Da dove si scarica il file scelto.
+/// Where the chosen file is downloaded from.
 enum Download<'a> {
-    /// Il `downloadUrl` del file CurseForge.
+    /// The `downloadUrl` of the CurseForge file.
     Curseforge,
-    /// Lo zip della release GitHub che combacia con il file CurseForge (D34).
+    /// The zip of the GitHub release that matches the CurseForge file (D34).
     Mirror {
         github: &'a (dyn MirrorSource + Sync),
         repo: String,
@@ -637,12 +638,13 @@ enum Download<'a> {
     },
 }
 
-/// Il messaggio di un progetto bloccato senza mirror GitHub da chiedere.
+/// The message for a blocked project without a GitHub mirror to ask.
 const BLOCKED: &str = "The author does not allow downloads from third-party apps: install it from the CurseForge website.";
 
-/// Il file da installare per il progetto, già controllato: file del progetto, e scaricabile da
-/// CurseForge (distribuzione permessa e un `downloadUrl`) o dal mirror GitHub per un progetto
-/// bloccato. Altrimenti l'esito che spiega perché no. `known` è il file già letto, se c'è.
+/// The file to install for the project, already checked: a file of the project, and downloadable
+/// from CurseForge (distribution allowed and a `downloadUrl`) or from the GitHub mirror for a
+/// blocked project. Otherwise the outcome that explains why not. `known` is the file already
+/// read, if any.
 #[allow(clippy::too_many_arguments)]
 fn find_file<'a, T: Transport>(
     installation: &Installation,
@@ -656,7 +658,7 @@ fn find_file<'a, T: Transport>(
 ) -> Result<(File, Download<'a>), InstallOutcome> {
     let mod_id = project.id;
     let name = project.name.as_str();
-    // D13: sconosciuto vale `false`.
+    // D13: unknown counts as `false`.
     let blocked = project.allow_mod_distribution != Some(true);
     let mirror = match (blocked, github) {
         (false, _) => None,
@@ -702,8 +704,8 @@ fn find_file<'a, T: Transport>(
     Ok((file, Download::Curseforge))
 }
 
-/// L'esito di un progetto bloccato senza un mirror utilizzabile: saltato con il motivo, oppure
-/// un errore quando GitHub non ha risposto (come negli aggiornamenti).
+/// The outcome of a blocked project without a usable mirror: skipped with the reason, or
+/// an error when GitHub did not answer (as in the updates).
 fn unavailable(mod_id: u32, name: &str, reason: &Reason) -> InstallOutcome {
     let message = github_mirror::unavailable_message(reason);
     match reason {
@@ -712,19 +714,19 @@ fn unavailable(mod_id: u32, name: &str, reason: &Reason) -> InstallOutcome {
     }
 }
 
-/// Perché non c'è un file da installare: un esito `skipped` o un errore.
+/// Why there is no file to install: a `skipped` outcome or an error.
 enum FileError {
     Skipped(String),
-    /// La versione del gioco dell'installazione non è supportata: un errore dell'installazione,
-    /// un motivo per il controllo del mirror.
+    /// The installation's game version is not supported: an error for the installation,
+    /// a reason for the mirror check.
     Unsupported(String),
     Error(String),
 }
 
-/// Il file CurseForge `file_id` del progetto se indicato, altrimenti l'ultimo per la versione del
-/// gioco (con la regola della Beta), letto da CurseForge e controllato come file del progetto.
-/// Non guarda se il file si può scaricare. `known` è il file già letto, se c'è: con l'id giusto
-/// evita la richiesta.
+/// The CurseForge file `file_id` of the project if given, otherwise the latest for the game
+/// version (with the Beta rule), read from CurseForge and checked as a file of the project.
+/// It does not check whether the file can be downloaded. `known` is the file already read, if any:
+/// with the right id it avoids the request.
 fn chosen_file<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
@@ -763,18 +765,18 @@ fn chosen_file<T: Transport>(
     Ok(file)
 }
 
-/// L'esito del mirror GitHub di un progetto CurseForge (comando `github_mirror`, issue #164).
+/// The outcome of the GitHub mirror of a CurseForge project (`github_mirror` command, issue #164).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MirrorAvailability {
-    /// Il progetto si installa dallo zip di GitHub.
+    /// The project is installed from the GitHub zip.
     pub available: bool,
-    /// `owner/repo`, solo con `available`.
+    /// `owner/repo`, only with `available`.
     pub repo: Option<String>,
-    /// Il tag della release, solo con `available`.
+    /// The release tag, only with `available`.
     pub tag: Option<String>,
-    /// Perché il mirror non si usa (D27, in inglese); `null` per un progetto che CurseForge
-    /// lascia scaricare, e quando il mirror c'è.
+    /// Why the mirror is not used (D27, in English); `null` for a project that CurseForge
+    /// lets you download, and when the mirror is there.
     pub reason: Option<String>,
 }
 
@@ -789,13 +791,13 @@ impl MirrorAvailability {
     }
 }
 
-/// Il mirror GitHub del progetto `mod_id` per l'installazione, con lo stesso file e la stessa
-/// regola di [`install_addon`] con lo stesso `file_id` (il file indicato, oppure l'ultimo per la
-/// versione del gioco): si chiama su richiesta (dettaglio o Install), mai durante la ricerca, per
-/// stare nel limite di 60 richieste l'ora. Un progetto che CurseForge lascia scaricare non fa
-/// nessuna richiesta a GitHub. `Err` solo quando CurseForge non risponde, non conosce il
-/// progetto o dà un file di un altro progetto; una versione del gioco non supportata, un file
-/// mancante e i problemi di GitHub sono un `reason`.
+/// The GitHub mirror of the project `mod_id` for the installation, with the same file and the same
+/// rule as [`install_addon`] with the same `file_id` (the given file, or the latest for the
+/// game version): it is called on request (detail or Install), never during the search, to
+/// stay within the limit of 60 requests per hour. A project that CurseForge lets you download makes
+/// no request to GitHub. `Err` only when CurseForge does not answer, does not know the
+/// project or gives a file of another project; an unsupported game version, a missing
+/// file and GitHub's problems are a `reason`.
 pub fn github_mirror<T: Transport>(
     installation: &Installation,
     client: &CurseForgeClient<T>,
@@ -848,10 +850,10 @@ pub fn github_mirror<T: Transport>(
     )
 }
 
-/// Il file da installare per la versione tra quelli che CurseForge indica come ultimi del
-/// progetto, con la regola di [`pick_file`] (una Beta solo con `allow_beta`). L'indice non ha la
-/// data: decide l'id, che CurseForge assegna in ordine crescente (come l'ultimo file della
-/// ricerca).
+/// The file to install for the version among those CurseForge lists as the project's latest,
+/// with the rule of [`pick_file`] (a Beta only with `allow_beta`). The index has no
+/// date: the id decides, which CurseForge assigns in increasing order (like the search's latest
+/// file).
 fn latest_file(project: &Mod, version_type: u32, allow_beta: bool) -> Option<u32> {
     let for_version = project
         .latest_files_indexes
@@ -866,11 +868,11 @@ fn latest_file(project: &Mod, version_type: u32, allow_beta: bool) -> Option<u32
     .map(|index| index.file_id)
 }
 
-/// Installa lo zip già scaricato di `fetched` (da CurseForge o, per un progetto bloccato, dal
-/// suo mirror GitHub), rifiutando le cartelle di altri progetti, poi lo registra sia con
-/// `record` sia nei `records` locali (anche se `record` fallisce: le cartelle sono sul disco e
-/// appartengono al progetto). Su un'installazione riuscita restituisce anche le dipendenze
-/// obbligatorie del file.
+/// Installs the already downloaded zip of `fetched` (from CurseForge or, for a blocked project,
+/// from its GitHub mirror), rejecting other projects' folders, then records it both with
+/// `record` and in the local `records` (even if `record` fails: the folders are on disk and
+/// belong to the project). On a successful installation it also returns the file's required
+/// dependencies.
 fn install_fetched(
     installation: &Installation,
     records: &mut InstalledRecords,
@@ -893,12 +895,12 @@ fn install_fetched(
         file_id: file.id,
         folders,
     };
-    // Le cartelle sono già al loro posto: se il registro non si salva l'installazione resta
-    // riuscita, e il messaggio lo dice (come in `update_addons`).
+    // The folders are already in place: if the registry is not saved the installation stays
+    // successful, and the message says so (as in `update_addons`).
     let failed = record(mod_id, installed.clone())
         .err()
         .map(|error| format!("Installed, but the app could not remember its folders: {error}"));
-    // Il record resta CurseForge anche dal mirror: l'esito dice che lo zip viene da GitHub.
+    // The record stays CurseForge even from the mirror: the outcome says the zip comes from GitHub.
     let message = match (fetched.note.clone(), failed) {
         (Some(note), Some(failed)) => Some(format!("{note} {failed}")),
         (note, failed) => note.or(failed),
@@ -917,7 +919,7 @@ fn install_fetched(
     )
 }
 
-/// Le dipendenze obbligatorie del file (`relationType = 3`).
+/// The file's required dependencies (`relationType = 3`).
 fn required_dependencies(file: &File) -> Vec<u32> {
     file.dependencies
         .iter()
@@ -926,13 +928,13 @@ fn required_dependencies(file: &File) -> Vec<u32> {
         .collect()
 }
 
-/// Rifiuta lo zip se una delle sue cartelle esiste già in `AddOns` e appartiene a un altro
-/// progetto: lo dice un record, oppure, per una cartella senza record, il
-/// `## X-Curse-Project-ID` del suo `.toc` per il flavor (la stessa regola di
-/// [`catalog::installed_projects`]). Una cartella senza record né id si sostituisce. Nomi
-/// confrontati senza distinguere maiuscole e minuscole, come fa il gioco. Una cartella `AddOns`
-/// che non esiste vale come vuota; una illeggibile fa fallire l'installazione, perché non si
-/// potrebbe sapere cosa si sostituisce.
+/// Rejects the zip if one of its folders already exists in `AddOns` and belongs to another
+/// project: a record says so, or, for a folder without a record, the
+/// `## X-Curse-Project-ID` of its `.toc` for the flavor (the same rule as
+/// [`catalog::installed_projects`]). A folder with neither record nor id is replaced. Names
+/// are compared ignoring case, as the game does. An `AddOns` folder
+/// that does not exist counts as empty; an unreadable one makes the installation fail, because it
+/// would be impossible to know what is being replaced.
 fn check_foreign_folders(
     addons_dir: &Path,
     flavor: &str,
@@ -951,7 +953,7 @@ fn check_foreign_folders(
             .filter(|(_, record)| record.folders.iter().any(|f| f.to_lowercase() == lower))
             .map(|(id, _)| *id)
             .collect();
-        // Il `.toc` conta solo per le cartelle che nessun record conosce, come nella ricerca.
+        // The `.toc` counts only for the folders no record knows, as in the search.
         let owner = if recorded.is_empty() {
             catalog::declared_project(&addons_dir.join(disk_name), disk_name, flavor)
                 .filter(|id| *id != mod_id)
@@ -967,7 +969,7 @@ fn check_foreign_folders(
     Ok(())
 }
 
-/// Le cartelle in `AddOns`: nome in minuscolo → nome sul disco.
+/// The folders in `AddOns`: lowercase name → name on disk.
 pub(crate) fn folder_names(addons_dir: &Path) -> Result<HashMap<String, String>, String> {
     let entries = match fs::read_dir(addons_dir) {
         Ok(entries) => entries,
@@ -1010,18 +1012,18 @@ mod tests {
 
     const API: &str = "https://api.curseforge.com";
 
-    /// Trasporto finto che risponde per URL e registra le richieste.
+    /// Fake transport that answers by URL and records the requests.
     #[derive(Default)]
     struct Routes {
-        /// I progetti di `POST /v1/mods`: la risposta contiene quelli chiesti nel corpo.
+        /// The projects of `POST /v1/mods`: the response contains those requested in the body.
         projects: Vec<Value>,
         files: HashMap<String, String>,
         zips: HashMap<String, Vec<u8>>,
-        /// Gli indirizzi per cui `get` fallisce come senza rete.
+        /// The addresses for which `get` fails as if there were no network.
         broken: Vec<String>,
-        /// Quanto dura ogni download: per vedere i download in parallelo.
+        /// How long each download takes: to see the downloads in parallel.
         delay: std::time::Duration,
-        /// Condiviso con il test, che non può rileggere il trasporto dal client.
+        /// Shared with the test, which cannot reread the transport from the client.
         log: Arc<Log>,
     }
 
@@ -1061,7 +1063,7 @@ mod tests {
         ) -> Result<HttpResponse, TransportError> {
             self.log.requests.lock().unwrap().push(url.to_owned());
             if url == format!("{API}/v1/mods/files") {
-                // I file chiesti tra quelli di `files`, come li darebbe `get_file`.
+                // The files requested among those of `files`, as `get_file` would give them.
                 let ids: Value = serde_json::from_str::<Value>(&body).unwrap()["fileIds"].clone();
                 let data: Vec<Value> = ids
                     .as_array()
@@ -1136,8 +1138,8 @@ mod tests {
         file
     }
 
-    /// Un progetto con un file Release per Retail (`id·10`) e uno per Classic Era (`id·10+1`),
-    /// più una beta Retail più recente che non va scelta.
+    /// A project with a Release file for Retail (`id·10`) and one for Classic Era (`id·10+1`),
+    /// plus a more recent Retail beta that must not be chosen.
     fn project(mod_id: u32, allow: Option<bool>) -> Value {
         let mut project = json!({
             "id": mod_id, "name": format!("Project {mod_id}"),
@@ -1183,7 +1185,7 @@ mod tests {
         fs::write(dir.join(format!("{folder}.lua")), "old").unwrap();
     }
 
-    /// Le rotte di un progetto installabile: file `file_id` con lo zip `zip`.
+    /// The routes of an installable project: file `file_id` with the zip `zip`.
     fn routes(mod_id: u32, file_id: u32, zip: &[(&str, &str)]) -> Routes {
         Routes {
             projects: vec![project(mod_id, Some(true))],
@@ -1196,9 +1198,9 @@ mod tests {
         }
     }
 
-    /// Le rotte di più progetti installabili, con le loro dipendenze `(id, relationType)`.
-    /// Ogni progetto ha i file Retail e Classic Era di [`project`], e lo zip di entrambi
-    /// contiene la cartella `P<id>`.
+    /// The routes of several installable projects, with their dependencies `(id, relationType)`.
+    /// Each project has the Retail and Classic Era files of [`project`], and the zip of both
+    /// contains the folder `P<id>`.
     fn graph(nodes: &[(u32, &[(u32, u8)])]) -> Routes {
         let mut routes = Routes::default();
         for (mod_id, dependencies) in nodes {
@@ -1224,7 +1226,7 @@ mod tests {
         routes
     }
 
-    /// `(modId, status, dependencyOf)` di ogni esito, nell'ordine.
+    /// `(modId, status, dependencyOf)` of each outcome, in order.
     fn summary(outcomes: &[InstallOutcome]) -> Vec<(u32, InstallStatus, Option<u32>)> {
         outcomes
             .iter()
@@ -1252,8 +1254,8 @@ mod tests {
         names
     }
 
-    /// Installa senza versioni forzate un progetto senza dipendenze, raccogliendo i record
-    /// scritti.
+    /// Installs a project without dependencies, with no forced versions, collecting the records
+    /// written.
     fn install(
         fx: &Fixture,
         routes: Routes,
@@ -1266,7 +1268,7 @@ mod tests {
         (outcomes.remove(0), written)
     }
 
-    /// Installa senza versioni forzate, con le dipendenze, raccogliendo i record scritti.
+    /// Installs with no forced versions, with the dependencies, collecting the records written.
     fn install_all(
         fx: &Fixture,
         routes: Routes,
@@ -1315,7 +1317,7 @@ mod tests {
         assert_eq!(names(&fx.addons), ["Alpha", "Alpha_Opt"]);
         assert_eq!(written, [(1, record(10, &["Alpha", "Alpha_Opt"]))]);
         assert_eq!(*log.downloads.lock().unwrap(), [download_url(10)]);
-        // Niente rimane accanto ad AddOns.
+        // Nothing remains next to AddOns.
         assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
     }
 
@@ -1439,7 +1441,7 @@ mod tests {
         );
     }
 
-    /// Un progetto che per WoW Forever ha solo una Beta (come RareScanner, issue #141).
+    /// A project that has only a Beta for WoW Forever (like RareScanner, issue #141).
     fn beta_only_routes() -> Routes {
         let mut routes = routes(1, 12, &[("Alpha/Alpha.toc", "")]);
         routes.projects = vec![json!({
@@ -1521,7 +1523,7 @@ mod tests {
     #[test]
     fn an_unrecorded_folder_of_another_project_leaves_the_disk_unchanged() {
         let fx = fixture();
-        // Nessun record, ma il `.toc` dice che `SharedLib` è del progetto 2.
+        // No record, but the `.toc` says `SharedLib` belongs to project 2.
         write_folder(&fx.addons, "sharedlib", "## X-Curse-Project-ID: 2\n");
         let routes = routes(
             1,
@@ -1546,7 +1548,7 @@ mod tests {
     #[test]
     fn a_recorded_folder_that_is_gone_does_not_block() {
         let fx = fixture();
-        // Il progetto 2 ha registrato `Alpha`, ma la cartella non c'è più.
+        // Project 2 recorded `Alpha`, but the folder is no longer there.
         let records = InstalledRecords::from([(2, record(20, &["Alpha"]))]);
         let (outcome, _) = install(
             &fx,
@@ -1635,7 +1637,7 @@ mod tests {
             Some("Addon not found on CurseForge.")
         );
 
-        // Il file indicato non esiste: 404 dall'API.
+        // The given file does not exist: 404 from the API.
         let (outcome, _) = install(
             &fx,
             routes(1, 10, &[]),
@@ -1707,7 +1709,7 @@ mod tests {
 
         let (outcomes, written) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
 
-        // Le dipendenze di una dipendenza già installata non si seguono.
+        // The dependencies of a dependency that is already installed are not followed.
         assert_eq!(
             summary(&outcomes),
             [(1, Installed, None), (2, Skipped, Some(1))]
@@ -1721,7 +1723,7 @@ mod tests {
     #[test]
     fn cycles_and_shared_dependencies_are_visited_once() {
         let fx = fixture();
-        // 1 → 2 → 1 è un ciclo; 3 è richiesto da 1 e da 2.
+        // 1 → 2 → 1 is a cycle; 3 is required by 1 and by 2.
         let routes = graph(&[
             (1, &[(2, REQUIRED), (3, REQUIRED)]),
             (2, &[(1, REQUIRED), (3, REQUIRED)]),
@@ -1762,7 +1764,7 @@ mod tests {
         assert_eq!(summary(&outcomes), expected);
         let message = outcomes[6].message.as_deref().unwrap();
         assert!(message.contains("more than 5 levels deep"), "{message}");
-        // Il nome arriva dalla `get_mods` del livello, anche senza installare.
+        // The name comes from the level's `get_mods`, even without installing.
         assert_eq!(outcomes[6].name, "Project 7");
         assert_eq!(log.downloads.lock().unwrap().len(), 6);
         assert!(
@@ -1814,7 +1816,7 @@ mod tests {
             .iter()
             .filter(|url| *url == &format!("{API}/v1/mods"))
             .count();
-        // Il progetto scelto, poi un livello [2, 3] e un livello [4, 5].
+        // The chosen project, then a level [2, 3] and a level [4, 5].
         assert_eq!(mods_calls, 3);
     }
 
@@ -1876,7 +1878,7 @@ mod tests {
         let mut written = Vec::new();
         let collected = progress::tests::Collected::default();
 
-        // La versione forzata del progetto scelto vale per la dipendenza, non la sua.
+        // The forced version of the chosen project applies to the dependency, not its own.
         let outcomes = install_addon(
             &fx.installation,
             &client(routes),
@@ -1898,7 +1900,7 @@ mod tests {
             [(1, Installed, None), (2, Installed, Some(1))]
         );
         assert_eq!(written, [(1, 11), (2, 21)]);
-        // Ogni progetto, dipendenza compresa, riporta le sue fasi con il suo id.
+        // Each project, dependency included, reports its phases with its own id.
         use progress::Phase::*;
         let steps = |key: &str| {
             [Checking, Downloading, Extracting, Installing].map(|phase| (key.to_owned(), phase))
@@ -1917,7 +1919,7 @@ mod tests {
     fn a_just_installed_dependency_owns_its_folders() {
         let fx = fixture();
         let mut routes = graph(&[(1, &[(2, REQUIRED), (3, REQUIRED)]), (2, &[]), (3, &[])]);
-        // 2 e 3 portano la stessa cartella: dopo 2, `Lib` è registrata come sua.
+        // 2 and 3 carry the same folder: after 2, `Lib` is registered as its own.
         for id in [2, 3] {
             routes
                 .zips
@@ -1952,11 +1954,11 @@ mod tests {
         assert!(log.downloads.lock().unwrap().is_empty());
     }
 
-    /// [`summary`] degli esiti di una voce.
+    /// [`summary`] of an entry's outcomes.
     type Summary = Vec<(u32, InstallStatus, Option<u32>)>;
 
-    /// Le dipendenze di `graph` per [`two_phase_imports_match_the_sequential_install`]: 1 e 4
-    /// richiedono entrambi 3, che richiede 6; 7 non esiste.
+    /// The dependencies of `graph` for [`two_phase_imports_match_the_sequential_install`]: 1 and 4
+    /// both require 3, which requires 6; 7 does not exist.
     fn import_graph() -> Routes {
         graph(&[
             (1, &[(2, REQUIRED), (3, REQUIRED)]),
@@ -1967,8 +1969,8 @@ mod tests {
         ])
     }
 
-    /// Installa `entries` una dopo l'altra con `fetcher`, come l'import: ogni voce vede i record
-    /// delle precedenti.
+    /// Installs `entries` one after another with `fetcher`, like the import: each entry sees the
+    /// records of the previous ones.
     fn install_entries(fx: &Fixture, fetcher: &dyn Fetcher, entries: &[u32]) -> Vec<Summary> {
         install_entries_with(
             fx,
@@ -1979,7 +1981,7 @@ mod tests {
         )
     }
 
-    /// [`install_entries`] partendo da `records` e con le versioni forzate `overrides`.
+    /// [`install_entries`] starting from `records` and with the forced versions `overrides`.
     fn install_entries_with(
         fx: &Fixture,
         fetcher: &dyn Fetcher,
@@ -2025,8 +2027,8 @@ mod tests {
             .collect()
     }
 
-    /// La prima e la seconda fase di `entries` su `fx`, partendo da `records` e con
-    /// `overrides`: gli esiti della seconda e le richieste e i download che ha fatto.
+    /// The first and second phase of `entries` on `fx`, starting from `records` and with
+    /// `overrides`: the outcomes of the second and the requests and downloads it made.
     fn two_phases(
         fx: &Fixture,
         routes: Routes,
@@ -2066,7 +2068,7 @@ mod tests {
 
     #[test]
     fn installed_and_too_deep_dependencies_need_no_request_in_the_second_phase() {
-        // 3 è già installato; la catena 10 → 11 → … → 17 va oltre il limite di profondità.
+        // 3 is already installed; the chain 10 → 11 → … → 17 goes beyond the depth limit.
         let chain: Vec<(u32, Vec<(u32, u8)>)> = (10..=17)
             .map(|id| {
                 (
@@ -2167,7 +2169,7 @@ mod tests {
             &prefetched,
             &|p: Progress| events.lock().unwrap().push((p.key, p.phase)),
         );
-        // Ogni zip una volta sola, anche 3 che serve a 1, a 4 e alla lista; i file in blocco.
+        // Each zip only once, even 3 which is needed by 1, by 4 and by the list; the files in bulk.
         let mut downloads = log.downloads.lock().unwrap().clone();
         downloads.sort();
         let mut unique = downloads.clone();
@@ -2179,7 +2181,7 @@ mod tests {
             requests.iter().all(|url| !url.contains("/files/")),
             "{requests:?}"
         );
-        // La prima fase non tocca il disco.
+        // The first phase does not touch the disk.
         assert!(names(&fx.addons).is_empty());
         assert!(events.lock().unwrap().iter().all(|(_, phase)| {
             matches!(
@@ -2196,7 +2198,7 @@ mod tests {
         let actual = install_entries(&fx, &cached, &entries);
         assert_eq!(actual, expected);
         assert_eq!(names(&fx.addons), names(&sequential.addons));
-        // La seconda fase non chiede niente alla rete.
+        // The second phase asks nothing of the network.
         assert_eq!(log.requests.lock().unwrap().len(), before);
         assert_eq!(log.downloads.lock().unwrap().len(), 5);
         assert_eq!(
@@ -2231,7 +2233,7 @@ mod tests {
             &prefetched,
             &|_| {},
         );
-        // Vicino al download più lento, non alla somma.
+        // Close to the slowest download, not to the sum.
         let elapsed = start.elapsed();
         assert!(elapsed < delay * 3, "{elapsed:?}");
         assert_eq!(lock(&prefetched.files).len(), entries.len());
@@ -2249,7 +2251,7 @@ mod tests {
             allow_beta: false,
         };
         let prefetched = Prefetched::default();
-        // 4 e 3 ci sono già: si scaricano solo 1 e la sua dipendenza 2.
+        // 4 and 3 are already there: only 1 and its dependency 2 are downloaded.
         prefetch(
             &fx.installation,
             &live,
@@ -2290,17 +2292,17 @@ mod tests {
         assert_eq!(serde_json::to_value(InstallStatus::Error).unwrap(), "error");
     }
 
-    // ── Mirror GitHub dei progetti bloccati (D34, issue #164) ───────────
+    // ── GitHub mirror of blocked projects (D34, issue #164) ───────────
 
     const REPO: &str = "owner/alpha";
 
-    /// Il mirror GitHub finto: l'esito di `resolve` per progetto e gli zip delle release, con le
-    /// richieste fatte.
+    /// The fake GitHub mirror: the `resolve` outcome per project and the release zips, with the
+    /// requests made.
     #[derive(Default)]
     struct FakeMirror {
         outcomes: HashMap<u32, Outcome>,
         zips: HashMap<String, Vec<u8>>,
-        /// `(progetto, file CurseForge)` di ogni `resolve`.
+        /// `(project, CurseForge file)` of each `resolve`.
         resolved: Mutex<Vec<(u32, u32)>>,
         downloads: Mutex<Vec<String>>,
     }
@@ -2335,7 +2337,7 @@ mod tests {
     }
 
     impl FakeMirror {
-        /// Una release `v1` che combacia per il progetto `mod_id`, con lo zip `zip`.
+        /// A `v1` release that matches for the project `mod_id`, with the zip `zip`.
         fn with_release(mut self, mod_id: u32, zip: &[(&str, &str)]) -> Self {
             let asset = Asset {
                 name: format!("P{mod_id}.zip"),
@@ -2360,7 +2362,7 @@ mod tests {
         }
     }
 
-    /// Le rotte di un progetto bloccato: il file `file_id` esiste ma senza `downloadUrl`.
+    /// The routes of a blocked project: the file `file_id` exists but without a `downloadUrl`.
     fn blocked_routes(mod_id: u32, file_id: u32) -> Routes {
         Routes {
             projects: vec![project(mod_id, Some(false))],
@@ -2372,7 +2374,7 @@ mod tests {
         }
     }
 
-    /// Installa con il mirror, con le dipendenze, raccogliendo i record scritti.
+    /// Installs with the mirror, with the dependencies, collecting the records written.
     fn install_mirrored(
         fx: &Fixture,
         routes: Routes,
@@ -2417,7 +2419,7 @@ mod tests {
                 "Installed from GitHub (owner/alpha v1): CurseForge blocks third-party downloads."
             )
         );
-        // Il file dell'esito e del record è quello di CurseForge che combacia.
+        // The file of the outcome and of the record is the matching CurseForge one.
         assert_eq!(outcome.file.as_ref().unwrap().id, 10);
         assert_eq!(written, [(1, record(10, &["Alpha"]))]);
         assert_eq!(*mirror.resolved.lock().unwrap(), [(1, 10)]);
@@ -2429,7 +2431,7 @@ mod tests {
 
     #[test]
     fn the_first_phase_of_an_import_downloads_the_mirror_zip() {
-        // Issue #180: il mirror GitHub si risolve e si scarica nella prima fase.
+        // Issue #180: the GitHub mirror is resolved and downloaded in the first phase.
         let fx = fixture();
         let mirror = FakeMirror::default().with_release(1, &[("Alpha/Alpha.toc", "")]);
         let client = client(blocked_routes(1, 10));
@@ -2470,7 +2472,7 @@ mod tests {
                 "Installed from GitHub (owner/alpha v1): CurseForge blocks third-party downloads."
             )
         );
-        // La seconda fase non chiede di nuovo a GitHub.
+        // The second phase does not ask GitHub again.
         assert_eq!(mirror.resolved.lock().unwrap().len(), 1);
         assert_eq!(mirror.downloads.lock().unwrap().len(), 1);
         assert_eq!(names(&fx.addons), ["Alpha"]);
@@ -2506,7 +2508,7 @@ mod tests {
         assert!(mirror.downloads.lock().unwrap().is_empty());
         assert!(names(&fx.addons).is_empty());
 
-        // GitHub che non risponde è un errore, non un salto.
+        // GitHub not answering is an error, not a skip.
         let mirror = FakeMirror::default().without(1, Reason::Failed("offline".to_owned()));
         let (outcomes, _) = install_mirrored(
             &fx,
@@ -2635,8 +2637,8 @@ mod tests {
 
     #[test]
     fn the_mirror_check_uses_the_requested_file_like_the_install() {
-        // Il file indicato (per esempio la Beta scelta nel dettaglio), anche senza un Release
-        // per la versione del gioco.
+        // The given file (for example the Beta chosen in the detail), even without a Release
+        // for the game version.
         let mut routes = blocked_routes(1, 12);
         routes.projects[0]["latestFilesIndexes"] = json!([]);
         let mirror = FakeMirror::default().with_release(1, &[]);
@@ -2673,7 +2675,7 @@ mod tests {
             })
         );
         assert_eq!(*mirror.resolved.lock().unwrap(), [(1, 10)]);
-        // Il controllo non scarica niente.
+        // The check downloads nothing.
         assert!(mirror.downloads.lock().unwrap().is_empty());
 
         let mirror = FakeMirror::default();
@@ -2687,7 +2689,7 @@ mod tests {
             })
         );
 
-        // Un progetto che CurseForge lascia scaricare: nessuna richiesta a GitHub.
+        // A project that CurseForge lets you download: no request to GitHub.
         let mirror = FakeMirror::default().with_release(1, &[("Alpha/Alpha.toc", "")]);
         assert_eq!(
             check_mirror(routes(1, 10, &[]), &mirror),
@@ -2704,7 +2706,7 @@ mod tests {
     #[test]
     fn the_mirror_check_without_a_file_or_project_asks_github_nothing() {
         let mirror = FakeMirror::default().with_release(1, &[]);
-        // Nessun file per la versione del gioco: il motivo è quello dell'installazione.
+        // No file for the game version: the reason is the installation's.
         let mut routes = blocked_routes(1, 10);
         routes.projects[0]["latestFilesIndexes"] = json!([]);
         let result = check_mirror(routes, &mirror).unwrap();
@@ -2713,7 +2715,7 @@ mod tests {
             result.reason.as_deref(),
             Some("There is no release file for this game version.")
         );
-        // Un progetto che CurseForge non conosce, o CurseForge che non risponde, è un errore.
+        // A project CurseForge does not know, or CurseForge not answering, is an error.
         assert_eq!(
             check_mirror(Routes::default(), &mirror),
             Err("Addon not found on CurseForge.".to_owned())

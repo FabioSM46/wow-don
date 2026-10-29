@@ -1,11 +1,11 @@
-//! Installazione di uno zip che l'utente ha scaricato a mano dal sito (D32), per gli addon che
-//! l'app non può scaricare da sola (per esempio `allowModDistribution = false`, D13).
+//! Installation of a zip the user downloaded by hand from the website (D32), for the addons the
+//! app cannot download on its own (for example `allowModDistribution = false`, D13).
 //!
-//! Solo funzioni su percorsi: niente rete, niente Tauri. Il flusso è quello degli altri
-//! chiamanti di [`install`]: `WorkDir::staging` → `extract` → controllo dei `.toc` → `replace`.
-//! Non scrive record in `installed-addons.json`: l'addon si riconosce poi dal fingerprint, come
-//! uno installato a mano. Il comando `install_zip` toglie poi i record dei progetti di cui ha
-//! sostituito le cartelle (`InstalledAddonsStore::forget_folders`, issue #117).
+//! Path-only functions: no network, no Tauri. The flow is the same as the other callers of
+//! [`install`]: `WorkDir::staging` → `extract` → `.toc` check → `replace`.
+//! It writes no record to `installed-addons.json`: the addon is then recognised by its
+//! fingerprint, like one installed by hand. The `install_zip` command then removes the records of
+//! the projects whose folders it replaced (`InstalledAddonsStore::forget_folders`, issue #117).
 
 use std::collections::HashSet;
 use std::fs;
@@ -18,31 +18,31 @@ use crate::install;
 use crate::progress::{Phase, ProgressSink, Reporter};
 use crate::sources::curseforge::MAX_DOWNLOAD_BYTES;
 
-/// Dimensione massima dello zip scelto dall'utente: la stessa di uno zip scaricato.
+/// Maximum size of the zip chosen by the user: the same as a downloaded zip.
 pub const MAX_ZIP_BYTES: u64 = MAX_DOWNLOAD_BYTES;
 
-/// Esito di un'installazione da zip locale.
+/// Outcome of an installation from a local zip.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalInstall {
-    /// Le cartelle dello zip, ora in `AddOns`, nell'ordine dello zip.
+    /// The folders of the zip, now in `AddOns`, in the zip's order.
     pub installed: Vec<String>,
-    /// Le cartelle che esistevano già con lo stesso nome (senza distinguere maiuscole e
-    /// minuscole) e sono state sostituite, con il nome che avevano sul disco.
+    /// The folders that already existed with the same name (ignoring case) and were replaced,
+    /// with the name they had on disk.
     pub replaced: Vec<String>,
-    /// Un avviso su un'installazione riuscita: per esempio i record dell'app che non si sono
-    /// potuti aggiornare.
+    /// A warning on a successful installation: for example the app's records that could not be
+    /// updated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
 }
 
-/// Installa in `addons_dir` lo zip in `zip_path`. Lo zip intero si rifiuta, senza toccare
-/// `AddOns`, se non è un file `.zip`, supera [`MAX_ZIP_BYTES`], non supera i controlli di
-/// [`install::extract`] o ha una cartella di primo livello senza un `.toc` con il suo nome.
-/// Le cartelle con lo stesso nome già presenti si sostituiscono senza conferma (D32).
+/// Installs the zip at `zip_path` into `addons_dir`. The whole zip is rejected, without touching
+/// `AddOns`, if it is not a `.zip` file, exceeds [`MAX_ZIP_BYTES`], fails the checks of
+/// [`install::extract`] or has a top-level folder without a `.toc` named after it.
+/// Folders with the same name that are already present are replaced without confirmation (D32).
 ///
-/// `progress` riceve le fasi `extracting` e `installing`, senza fonte e senza progetto: uno zip
-/// scelto dall'utente non ne ha.
+/// `progress` receives the `extracting` and `installing` phases, with no source and no project: a
+/// zip chosen by the user has neither.
 pub fn install_zip(
     addons_dir: &Path,
     zip_path: &Path,
@@ -70,8 +70,8 @@ pub fn install_zip(
     })
 }
 
-/// Legge lo zip, con i controlli su tipo, estensione e dimensione. I messaggi non contengono
-/// il percorso: l'utente sa quale file ha scelto.
+/// Reads the zip, with the checks on type, extension and size. The messages do not contain the
+/// path: the user knows which file they chose.
 fn read_zip(zip_path: &Path) -> Result<Vec<u8>, String> {
     let is_zip = zip_path
         .extension()
@@ -89,7 +89,7 @@ fn read_zip(zip_path: &Path) -> Result<Vec<u8>, String> {
     }
     let file = fs::File::open(zip_path).map_err(open_error)?;
     let mut bytes = Vec::new();
-    // Il file può crescere tra il controllo e la lettura: non si legge mai oltre il limite.
+    // The file can grow between the check and the read: we never read past the limit.
     file.take(MAX_ZIP_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(open_error)?;
@@ -113,10 +113,10 @@ fn open_error(error: io::Error) -> String {
     }
 }
 
-/// Se `dir` contiene un file `.toc` che il gioco caricherebbe per la cartella `folder`:
-/// `<folder>.toc`, oppure `<folder>_<suffisso>.toc` o `<folder>-<suffisso>.toc` (vedi
-/// `addons::toc::select_toc`), senza distinguere maiuscole e minuscole. Non serve che sia il
-/// `.toc` del flavor dell'installazione.
+/// Whether `dir` contains a `.toc` file the game would load for the folder `folder`:
+/// `<folder>.toc`, or `<folder>_<suffix>.toc` or `<folder>-<suffix>.toc` (see
+/// `addons::toc::select_toc`), ignoring case. It need not be the `.toc` of the installation's
+/// flavor.
 fn has_own_toc(dir: &Path, folder: &str) -> Result<bool, String> {
     let read_error = |error: io::Error| {
         format!(
@@ -147,7 +147,7 @@ fn has_own_toc(dir: &Path, folder: &str) -> Result<bool, String> {
     Ok(false)
 }
 
-/// Le voci di `addons_dir` che `replace` sostituirà, con il nome che hanno sul disco.
+/// The entries of `addons_dir` that `replace` will replace, with the name they have on disk.
 fn existing_folders(addons_dir: &Path, folders: &[String]) -> Result<Vec<String>, String> {
     let wanted: HashSet<String> = folders.iter().map(|name| name.to_lowercase()).collect();
     let entries = match fs::read_dir(addons_dir) {
@@ -195,8 +195,8 @@ mod tests {
         writer.finish().unwrap().into_inner()
     }
 
-    /// `Interface/AddOns` con spazi nel percorso, come nei prefissi Wine, e la cartella dei
-    /// download dell'utente.
+    /// `Interface/AddOns` with spaces in the path, as in Wine prefixes, and the user's downloads
+    /// folder.
     struct Fixture {
         _tmp: TempDir,
         addons: PathBuf,
@@ -239,7 +239,7 @@ mod tests {
         names
     }
 
-    /// Le uniche voci accanto ad `AddOns`: nessuna cartella di lavoro rimasta.
+    /// The only entries next to `AddOns`: no leftover work folder.
     fn assert_no_leftovers(fx: &Fixture) {
         assert_eq!(listing(fx.addons.parent().unwrap()), ["AddOns"]);
     }
@@ -256,7 +256,7 @@ mod tests {
         );
         let collected = progress::tests::Collected::default();
         let result = install_zip(&fx.addons, &zip, &collected.sink()).unwrap();
-        // Uno zip scelto dall'utente non ha fonte né download.
+        // A zip chosen by the user has no source and no download.
         assert_eq!(
             collected.phases(),
             [
@@ -321,17 +321,17 @@ mod tests {
         let fx = fixture();
         fs::create_dir_all(fx.addons.join("Good")).unwrap();
         let cases: &[&[(&str, &str)]] = &[
-            // Una cartella valida e una senza `.toc`.
+            // One valid folder and one without a `.toc`.
             &[("Good/Good.toc", ""), ("Libs/lib.lua", "")],
-            // Il `.toc` ha il nome di un'altra cartella.
+            // The `.toc` has the name of another folder.
             &[("Good/Other.toc", "")],
-            // Un prefisso che non è seguito da `_` o `-`.
+            // A prefix that is not followed by `_` or `-`.
             &[("Good/Goodies.toc", "")],
-            // Un suffisso vuoto.
+            // An empty suffix.
             &[("Good/Good_.toc", "")],
-            // Il `.toc` è in una sottocartella.
+            // The `.toc` is in a subfolder.
             &[("Good/sub/Good.toc", "")],
-            // Una cartella contenitore in più.
+            // One extra container folder.
             &[("Good-v1/Good/Good.toc", "")],
         ];
         for files in cases {
@@ -353,8 +353,8 @@ mod tests {
         assert!(listing(&fx.addons).is_empty());
         assert_no_leftovers(&fx);
 
-        // Uno zip valido senza voci non installa niente: `extract` lo rifiuta, quindi il controllo
-        // dei `.toc` non può passare a vuoto.
+        // A valid zip with no entries installs nothing: `extract` rejects it, so the `.toc` check
+        // cannot pass vacuously.
         let empty = fx.zip("empty.zip", &[]);
         assert_eq!(
             install_zip(&fx.addons, &empty, &progress::ignore).unwrap_err(),
@@ -407,7 +407,7 @@ mod tests {
         let fx = fixture();
         let big = fx.downloads.join("big.zip");
         let file = fs::File::create(&big).unwrap();
-        // Un file sparso: nessun byte scritto davvero.
+        // A sparse file: no byte actually written.
         file.set_len(MAX_ZIP_BYTES + 1).unwrap();
         let error = install_zip(&fx.addons, &big, &progress::ignore).unwrap_err();
         assert!(error.contains("larger than"), "{error}");

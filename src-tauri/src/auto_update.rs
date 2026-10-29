@@ -1,21 +1,21 @@
-//! Il giro automatico degli aggiornamenti (D41, issue #200): un thread del backend che controlla
-//! (modalità `notify`) o controlla e installa (`install`) gli aggiornamenti di ogni installazione
-//! che partecipa, poco dopo l'avvio e poi ogni `autoUpdateIntervalHours`.
+//! The automatic update round (D41, issue #200): a backend thread that checks (`notify` mode)
+//! or checks and installs (`install`) the updates of every participating installation, shortly
+//! after startup and then every `autoUpdateIntervalHours`.
 //!
-//! Il giro usa le stesse fonti, versioni forzate e opzione della Beta dei comandi manuali
-//! (`commands::LiveSources`) e gli stessi `check_updates_with` e `update_addons_with`. Prende
-//! [`InstallLock`] senza aspettare: se un comando lo tiene, il giro salta e riprova dopo
-//! [`BUSY_RETRY`]. Un controllo fallito per la rete riprova dopo [`BACKOFF`], mai oltre
-//! l'intervallo. La pianificazione ([`Schedule`]), il filtro dei progetti ([`plan`]) e la
-//! classificazione dei fallimenti ([`needs_retry`]) sono funzioni pure.
+//! The round uses the same sources, pinned versions and Beta option as the manual commands
+//! (`commands::LiveSources`) and the same `check_updates_with` and `update_addons_with`. It takes
+//! [`InstallLock`] without waiting: if a command holds it, the round skips and retries after
+//! [`BUSY_RETRY`]. A check that failed because of the network retries after [`BACKOFF`], never
+//! beyond the interval. Scheduling ([`Schedule`]), project filtering ([`plan`]) and failure
+//! classification ([`needs_retry`]) are pure functions.
 //!
-//! L'esito dell'ultimo giro resta in memoria in [`AutoUpdate`], si legge con
-//! `get_auto_update_status` e parte come evento [`EVENT`] alla fine di ogni giro: entrambi
-//! portano un [`AutoUpdateStatus`]. Nessun esito contiene la chiave CurseForge, URL o percorsi.
+//! The outcome of the last round stays in memory in [`AutoUpdate`], is read with
+//! `get_auto_update_status` and is sent as the [`EVENT`] event at the end of every round: both
+//! carry an [`AutoUpdateStatus`]. No outcome contains the CurseForge key, URLs or paths.
 //!
-//! In `install` il giro tiene la versione precedente delle cartelle che sostituisce
-//! ([`NextGeneration`], issue #201): l'ultimo giro di un'installazione si annulla con
-//! `undo_last_auto_update`, e lo stato dice quali installazioni hanno un giro annullabile.
+//! In `install` the round keeps the previous version of the folders it replaces
+//! ([`NextGeneration`], issue #201): the last round of an installation is undone with
+//! `undo_last_auto_update`, and the status says which installations have an undoable round.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -38,113 +38,116 @@ use crate::store::{
 };
 use crate::updates::{self, AddonUpdate, FileSummary, OutcomeStatus, UpdateOutcome, UpdateStatus};
 
-/// Nome dell'evento Tauri emesso alla fine di ogni giro, con un [`AutoUpdateStatus`].
+/// Name of the Tauri event emitted at the end of every round, with an [`AutoUpdateStatus`].
 pub const EVENT: &str = "auto-update";
 
-/// Quanto aspetta il primo giro dopo l'avvio: la finestra e la tray partono prima della rete.
+/// How long the first round waits after startup: the window and the tray start before the
+/// network.
 pub const STARTUP_DELAY: Duration = Duration::from_secs(30);
 
-/// Quanto aspetta un giro saltato perché un comando dell'utente teneva [`InstallLock`].
+/// How long a round waits when skipped because a user command held [`InstallLock`].
 pub const BUSY_RETRY: Duration = Duration::from_secs(5 * 60);
 
-/// Le attese dopo il primo, il secondo e il terzo (e ogni successivo) controllo fallito per la
-/// rete, ognuna limitata dall'intervallo scelto.
+/// The waits after the first, second and third (and every later) check failed because of the
+/// network, each capped by the chosen interval.
 pub const BACKOFF: [Duration; 3] = [
     Duration::from_secs(5 * 60),
     Duration::from_secs(15 * 60),
     Duration::from_secs(60 * 60),
 ];
 
-/// Gli estremi dell'intervallo tra due giri, in ore: quelli di [`AUTO_UPDATE_INTERVALS_HOURS`].
+/// The bounds of the interval between two rounds, in hours: those of
+/// [`AUTO_UPDATE_INTERVALS_HOURS`].
 const MIN_INTERVAL_HOURS: u32 = AUTO_UPDATE_INTERVALS_HOURS[0];
 const MAX_INTERVAL_HOURS: u32 = AUTO_UPDATE_INTERVALS_HOURS[AUTO_UPDATE_INTERVALS_HOURS.len() - 1];
 
-/// Il messaggio di un progetto con un aggiornamento che l'utente ha escluso (issue #199).
+/// The message for a project with an update the user has excluded (issue #199).
 const EXCLUDED: &str = "Excluded from automatic updates.";
 
-// ── Esito ───────────────────────────────────────────────────────────────────
+// ── Outcome ─────────────────────────────────────────────────────────────────
 
-/// Lo stato del giro automatico: la risposta di `get_auto_update_status` e il payload
-/// dell'evento [`EVENT`]. In JSON è camelCase.
+/// The status of the automatic round: the response of `get_auto_update_status` and the payload
+/// of the [`EVENT`] event. In JSON it is camelCase.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoUpdateStatus {
-    /// Un giro è in corso adesso.
+    /// A round is running right now.
     pub running: bool,
-    /// Quando è previsto il prossimo giro, ISO 8601 UTC (`2026-10-27T10:00:00Z`); `null` con la
-    /// modalità `off`, durante un giro e prima che il thread abbia pianificato il primo.
+    /// When the next round is due, ISO 8601 UTC (`2026-10-27T10:00:00Z`); `null` with the
+    /// `off` mode, during a round and before the thread has scheduled the first one.
     pub next_round_at: Option<String>,
-    /// L'ultimo giro finito; `null` prima del primo. Un giro saltato perché un comando teneva il
-    /// lock non lo sostituisce.
+    /// The last finished round; `null` before the first. A round skipped because a command held
+    /// the lock does not replace it.
     pub last_round: Option<RoundReport>,
-    /// Le installazioni con un giro automatico annullabile (`undo_last_auto_update`, issue
-    /// #201), nell'ordine di `installations.json`: una voce `{ installationId, roundAt, addons }`
-    /// per installazione, dove `addons` è quanti progetti l'Undo rimetterebbe. Un'installazione
-    /// senza voce non ha niente da annullare. Si legge dal manifesto `auto-update-previous.json`,
-    /// quindi vale anche dopo un riavvio, prima del primo giro.
+    /// The installations with an undoable automatic round (`undo_last_auto_update`, issue
+    /// #201), in the order of `installations.json`: one entry `{ installationId, roundAt, addons }`
+    /// per installation, where `addons` is how many projects Undo would put back. An installation
+    /// without an entry has nothing to undo. It is read from the `auto-update-previous.json`
+    /// manifest, so it holds even after a restart, before the first round.
     pub undoable: Vec<UndoableRound>,
 }
 
-/// Un giro finito.
+/// A finished round.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoundReport {
-    /// La modalità del giro: `notify` o `install` (con `off` non ci sono giri).
+    /// The mode of the round: `notify` or `install` (with `off` there are no rounds).
     pub mode: AutoUpdateMode,
     pub started_at: String,
     pub finished_at: String,
-    /// Almeno un controllo è fallito per la rete: il prossimo giro è anticipato (backoff).
+    /// At least one check failed because of the network: the next round is brought forward
+    /// (backoff).
     pub retrying: bool,
-    /// Una voce per installazione che partecipa, nell'ordine di `installations.json`; quelle
-    /// escluse per intero non ci sono.
+    /// One entry per participating installation, in the order of `installations.json`; those
+    /// excluded entirely are not there.
     pub installations: Vec<InstallationReport>,
 }
 
-/// L'esito di un giro su un'installazione.
+/// The outcome of a round on one installation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallationReport {
     pub installation_id: String,
     pub installation_name: String,
-    /// Quando è stato fatto il controllo, ISO 8601 UTC.
+    /// When the check was made, ISO 8601 UTC.
     pub checked_at: String,
-    /// I progetti con un aggiornamento che partecipano (non esclusi), uno per progetto. In
-    /// `notify` è l'elenco da segnalare; in `install` quello che il giro ha provato a installare.
+    /// The participating projects with an update (not excluded), one per project. In
+    /// `notify` it is the list to report; in `install` what the round tried to install.
     pub available: Vec<AvailableUpdate>,
-    /// Solo `install`: i progetti aggiornati, con il file installato (`file`).
+    /// `install` only: the updated projects, with the installed file (`file`).
     pub updated: Vec<UpdateOutcome>,
-    /// I progetti con un aggiornamento esclusi dall'utente, con `message`
-    /// `"Excluded from automatic updates."`: una scelta, non un problema (issue #214).
+    /// The projects with an update excluded by the user, with `message`
+    /// `"Excluded from automatic updates."`: a choice, not a problem (issue #214).
     pub excluded: Vec<UpdateOutcome>,
-    /// Solo `install`: i progetti con un aggiornamento che la fonte salta, con il motivo
-    /// (`message`), per esempio `allowModDistribution = false` senza mirror GitHub.
+    /// `install` only: the projects with an update that the source skips, with the reason
+    /// (`message`), for example `allowModDistribution = false` without a GitHub mirror.
     pub skipped: Vec<UpdateOutcome>,
-    /// Gli errori di singoli progetti o cartelle, con il messaggio di oggi: un aggiornamento
-    /// fallito (su Windows un file aperto dal gioco blocca il `rename`) o una cartella che
-    /// nessuna fonte ha potuto controllare. Si riprovano al giro successivo. In `install` c'è
-    /// anche, con `source`, `key` e `name` vuoti, l'errore della versione precedente che non si
-    /// è potuta tenere per l'Undo (gli aggiornamenti sono comunque installati).
+    /// The errors of single projects or folders, with today's message: a failed update (on
+    /// Windows a file opened by the game blocks the `rename`) or a folder that no source could
+    /// check. They are retried on the next round. In `install` there is also, with `source`,
+    /// `key` and `name` empty, the error for the previous version that could not be kept for
+    /// Undo (the updates are installed anyway).
     pub errors: Vec<AutoUpdateError>,
-    /// Il controllo dell'installazione è fallito per intero (cartella irraggiungibile, tutte le
-    /// fonti senza risposta, impostazioni illeggibili): le liste sopra restano vuote, o con quello
-    /// che si sapeva prima del fallimento.
+    /// The installation's check failed entirely (folder unreachable, no source answering,
+    /// unreadable settings): the lists above stay empty, or hold what was known before the
+    /// failure.
     pub check_error: Option<String>,
 }
 
-/// Un progetto con un aggiornamento disponibile.
+/// A project with an available update.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvailableUpdate {
     pub source: SourceKind,
-    /// L'id del progetto nella fonte, come in `ProjectKey`.
+    /// The project's id in the source, as in `ProjectKey`.
     pub key: String,
     pub name: String,
-    /// Il file che l'aggiornamento installerebbe.
+    /// The file the update would install.
     pub latest: FileSummary,
 }
 
-/// Un errore di un progetto (`source` e `key`) o di una cartella che nessuna fonte ha
-/// riconosciuto (`source` e `key` nulli, `name` è la cartella).
+/// An error of a project (`source` and `key`) or of a folder that no source recognised
+/// (`source` and `key` null, `name` is the folder).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoUpdateError {
@@ -165,37 +168,37 @@ impl From<UpdateOutcome> for AutoUpdateError {
     }
 }
 
-// ── Pianificazione (pura) ───────────────────────────────────────────────────
+// ── Scheduling (pure) ───────────────────────────────────────────────────────
 
-/// Com'è finito un giro, per decidere il prossimo.
+/// How a round ended, to decide the next one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoundResult {
-    /// Fatto, anche con errori di singoli progetti: il prossimo dopo l'intervallo.
+    /// Done, even with errors in single projects: the next one after the interval.
     Done,
-    /// Saltato perché un comando teneva [`InstallLock`]: riprova dopo [`BUSY_RETRY`].
+    /// Skipped because a command held [`InstallLock`]: retries after [`BUSY_RETRY`].
     Busy,
-    /// Un controllo è fallito per la rete: riprova dopo [`BACKOFF`].
+    /// A check failed because of the network: retries after [`BACKOFF`].
     Failed,
 }
 
-/// Quando fare il prossimo giro. I tempi sono durate dall'avvio del thread (un `Instant` di
-/// base), così la pianificazione si prova senza orologio.
+/// When to run the next round. Times are durations since the thread started (a base
+/// `Instant`), so scheduling can be tested without a clock.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Schedule {
-    /// La fine dell'ultimo tentativo, fatto o saltato.
+    /// The end of the last attempt, done or skipped.
     last_attempt: Option<Duration>,
-    /// Com'è finito l'ultimo tentativo.
+    /// How the last attempt ended.
     busy: bool,
-    /// I controlli falliti di fila; zero dopo un giro riuscito.
+    /// The consecutive failed checks; zero after a successful round.
     failures: usize,
 }
 
 impl Schedule {
-    /// Il prossimo giro, `None` con la modalità `off` (il thread aspetta di essere svegliato).
-    /// L'intervallo si rilegge a ogni chiamata: un cambio vale subito, anche all'indietro (un
-    /// giro già in ritardo parte subito). Si limita agli intervalli ammessi (da 1 a 24 ore): lo
-    /// store rimette già il default su un valore sconosciuto, ma uno zero qui farebbe girare il
-    /// thread senza pause e un valore enorme farebbe traboccare l'`Instant` del prossimo giro.
+    /// The next round, `None` with the `off` mode (the thread waits to be woken up).
+    /// The interval is re-read on every call: a change applies immediately, even backwards (a
+    /// round already overdue starts immediately). It is clamped to the allowed intervals (1 to 24
+    /// hours): the store already restores the default for an unknown value, but a zero here would
+    /// spin the thread without pauses and a huge value would overflow the next round's `Instant`.
     pub fn next_due(&self, mode: AutoUpdateMode, interval_hours: u32) -> Option<Duration> {
         if mode == AutoUpdateMode::Off {
             return None;
@@ -215,46 +218,47 @@ impl Schedule {
         Some(last + wait.min(interval))
     }
 
-    /// Registra la fine di un tentativo, `at` dall'avvio del thread.
+    /// Records the end of an attempt, `at` since the thread started.
     pub fn finished(&mut self, at: Duration, result: RoundResult) {
         self.last_attempt = Some(at);
         self.busy = result == RoundResult::Busy;
         match result {
             RoundResult::Done => self.failures = 0,
             RoundResult::Failed => self.failures += 1,
-            // Un giro saltato non dice niente sulla rete: il conteggio resta.
+            // A skipped round says nothing about the network: the count stays.
             RoundResult::Busy => {}
         }
     }
 }
 
-/// Se un giro va ripetuto presto: almeno una fonte ha fallito il controllo per intero, e non
-/// è CurseForge senza chiave (la chiave mancante non è un errore di rete e non si risolve
-/// riprovando).
+/// Whether a round should be repeated soon: at least one source failed the check entirely, and
+/// it is not CurseForge without a key (the missing key is not a network error and is not fixed
+/// by retrying).
 pub fn needs_retry(failed: &[SourceKind], curseforge_has_key: bool) -> bool {
     failed
         .iter()
         .any(|kind| *kind != SourceKind::Curseforge || curseforge_has_key)
 }
 
-/// Quello che il controllo dice al giro di un'installazione.
+/// What the check tells the round for one installation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Plan {
-    /// I progetti da installare in `install`, nell'ordine delle cartelle e senza ripetizioni.
+    /// The projects to install in `install`, in folder order and without repeats.
     pub projects: Vec<ProjectKey>,
     pub available: Vec<AvailableUpdate>,
-    /// I progetti con un aggiornamento esclusi dall'utente.
+    /// The projects with an update excluded by the user.
     pub excluded: Vec<UpdateOutcome>,
-    /// I progetti riconosciuti il cui controllo è fallito (per esempio la release GitHub di un
-    /// progetto registrato che non si legge) e le cartelle che nessuna fonte ha potuto
-    /// controllare.
+    /// The recognised projects whose check failed (for example the GitHub release of a
+    /// recorded project that cannot be read) and the folders that no source could
+    /// check.
     pub errors: Vec<AutoUpdateError>,
 }
 
-/// Filtra il controllo: un progetto con `updateAvailable` (non `betaOnly`: la Beta conta solo
-/// con l'opzione, e allora il controllo dice già `updateAvailable`) partecipa se non è tra gli
-/// esclusi di `auto`. Più cartelle dello stesso progetto danno una voce sola. Un'installazione
-/// esclusa per intero non ha niente da fare (e il giro non la controlla nemmeno).
+/// Filters the check: a project with `updateAvailable` (not `betaOnly`: the Beta counts only
+/// with the option, and then the check already says `updateAvailable`) participates if it is
+/// not among the exclusions of `auto`. Several folders of the same project give a single
+/// entry. An installation excluded entirely has nothing to do (and the round does not even
+/// check it).
 pub fn plan(updates: &[AddonUpdate], auto: &InstallationAutoUpdate) -> Plan {
     let mut plan = Plan::default();
     if auto.disabled {
@@ -317,10 +321,10 @@ pub fn plan(updates: &[AddonUpdate], auto: &InstallationAutoUpdate) -> Plan {
     plan
 }
 
-// ── Giro di un'installazione ────────────────────────────────────────────────
+// ── Round on one installation ───────────────────────────────────────────────
 
-/// Una fonte che ricorda se il suo controllo è fallito per intero; per il resto passa tutto
-/// alla fonte vera, senza cambiarne il risultato.
+/// A source that remembers whether its check failed entirely; otherwise it passes everything
+/// to the real source, without changing its result.
 struct Watched<'a> {
     inner: &'a dyn Source,
     failed: &'a RefCell<Vec<SourceKind>>,
@@ -345,8 +349,8 @@ impl Source for Watched<'_> {
     }
 
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome {
-        // Confine tra progetti (issue #201): quello che un progetto precedente ha tenuto senza
-        // arrivare al suo record non finisce nello slot di questo.
+        // Boundary between projects (issue #201): what a previous project kept without reaching
+        // its record does not end up in this one's slot.
         crate::install::take_kept();
         self.inner.update(target, record)
     }
@@ -356,11 +360,11 @@ impl Source for Watched<'_> {
     }
 }
 
-/// Il giro su un'installazione che partecipa: controlla e, in `install`, aggiorna i soli
-/// progetti di [`plan`] senza reinstallare, con `record` per il registro. Con `previous`
-/// l'aggiornamento tiene le cartelle sostituite in quella generazione (issue #201); il chiamante
-/// la conferma con [`NextGeneration::commit`]. Restituisce l'esito e le fonti il cui controllo è
-/// fallito per intero (per [`needs_retry`]). Bloccante.
+/// The round on a participating installation: it checks and, in `install`, updates only the
+/// projects of [`plan`] without reinstalling, with `record` for the records. With `previous`
+/// the update keeps the replaced folders in that generation (issue #201); the caller
+/// confirms it with [`NextGeneration::commit`]. Returns the outcome and the sources whose check
+/// failed entirely (for [`needs_retry`]). Blocking.
 #[allow(clippy::too_many_arguments)]
 pub fn run_installation(
     installation: &Installation,
@@ -401,7 +405,7 @@ pub fn run_installation(
             report.excluded = plan.excluded;
             report.errors = plan.errors;
             if mode == AutoUpdateMode::Install && !plan.projects.is_empty() {
-                // `update_addons_with` rifà il controllo: un fallimento lì non tocca niente.
+                // `update_addons_with` redoes the check: a failure there touches nothing.
                 let update = |record: &mut RecordWriter<'_>| {
                     updates::update_addons_with(
                         installation,
@@ -438,7 +442,7 @@ pub fn run_installation(
 
 // ── Thread ──────────────────────────────────────────────────────────────────
 
-/// Lo stato condiviso tra il thread del giro e i comandi (stato gestito da Tauri).
+/// The state shared between the round's thread and the commands (Tauri-managed state).
 #[derive(Default)]
 pub struct AutoUpdate {
     shared: Mutex<Shared>,
@@ -448,25 +452,25 @@ pub struct AutoUpdate {
 #[derive(Default)]
 struct Shared {
     status: AutoUpdateStatus,
-    /// Le impostazioni sono cambiate: il thread ripianifica.
+    /// The settings changed: the thread reschedules.
     woken: bool,
 }
 
 impl AutoUpdate {
-    /// Lo stato attuale (`get_auto_update_status`).
+    /// The current status (`get_auto_update_status`).
     pub fn status(&self) -> AutoUpdateStatus {
         self.lock().status.clone()
     }
 
-    /// Fa rileggere modalità e intervallo al thread (`set_auto_update`): con la modalità che
-    /// passa da `off` a un'altra il giro riparte senza aspettare il riavvio.
+    /// Makes the thread re-read mode and interval (`set_auto_update`): when the mode goes from
+    /// `off` to another one the round restarts without waiting for a restart of the app.
     pub fn wake(&self) {
         self.lock().woken = true;
         self.wake.notify_all();
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
-        // Lo stato è solo un esito da mostrare: un panic non lo lascia incoerente.
+        // The status is only an outcome to show: a panic does not leave it inconsistent.
         self.shared.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -476,8 +480,8 @@ impl AutoUpdate {
         shared.status.clone()
     }
 
-    /// Aspetta fino a `due` (per sempre con `None`). `true` se è arrivata l'ora, `false` se un
-    /// comando l'ha svegliato prima.
+    /// Waits until `due` (forever with `None`). `true` if the time has come, `false` if a
+    /// command woke it up earlier.
     fn sleep_until(&self, due: Option<Instant>) -> bool {
         let mut shared = self.lock();
         loop {
@@ -505,8 +509,8 @@ impl AutoUpdate {
     }
 }
 
-/// Lo stato del giro con `undoable` letto dal manifesto, per le installazioni ancora presenti:
-/// la risposta di `get_auto_update_status` e il payload di ogni evento [`EVENT`].
+/// The round's status with `undoable` read from the manifest, for the installations still
+/// present: the response of `get_auto_update_status` and the payload of every [`EVENT`] event.
 pub fn current_status(app: &AppHandle) -> AutoUpdateStatus {
     with_undoable(app, app.state::<AutoUpdate>().status())
 }
@@ -525,7 +529,7 @@ fn with_undoable(app: &AppHandle, mut status: AutoUpdateStatus) -> AutoUpdateSta
     status
 }
 
-/// Avvia il thread del giro; va chiamata in `setup`, dopo aver registrato gli stati.
+/// Starts the round's thread; must be called in `setup`, after registering the states.
 pub fn start(app: AppHandle) {
     let spawned = std::thread::Builder::new()
         .name("auto-update".to_owned())
@@ -535,8 +539,8 @@ pub fn start(app: AppHandle) {
     }
 }
 
-/// La modalità e l'intervallo salvati. Un `settings.json` illeggibile vale `off`: senza sapere
-/// cosa ha scelto l'utente il giro non usa la rete e non tocca il disco.
+/// The saved mode and interval. An unreadable `settings.json` counts as `off`: without knowing
+/// what the user chose the round does not use the network and does not touch the disk.
 fn read_settings(app: &AppHandle) -> (AutoUpdateMode, u32) {
     app.state::<Mutex<AppSettingsStore>>()
         .lock()
@@ -563,8 +567,8 @@ fn run(app: &AppHandle) {
         if !state.sleep_until(due.map(|due| base + due)) {
             continue;
         }
-        // Le impostazioni possono essere cambiate durante l'attesa senza svegliare il thread
-        // (per esempio un file riscritto da fuori): si rileggono.
+        // The settings may have changed during the wait without waking the thread (for
+        // example a file rewritten from outside): they are re-read.
         let (mode, _) = read_settings(app);
         if mode == AutoUpdateMode::Off {
             continue;
@@ -574,7 +578,7 @@ fn run(app: &AppHandle) {
     }
 }
 
-/// Un giro su tutte le installazioni che partecipano, sotto [`InstallLock`].
+/// A round on all participating installations, under [`InstallLock`].
 fn round(app: &AppHandle, state: &AutoUpdate, mode: AutoUpdateMode) -> RoundResult {
     let lock = app.state::<InstallLock>();
     let Some(held) = lock.try_hold() else {
@@ -597,12 +601,13 @@ fn round(app: &AppHandle, state: &AutoUpdate, mode: AutoUpdateMode) -> RoundResu
         });
     });
     let last_round = status.last_round.clone();
-    // Un evento che non parte non ferma il giro: l'esito resta leggibile con il comando.
+    // An event that fails to send does not stop the round: the outcome stays readable with the
+    // command.
     let _ = app.emit(EVENT, &with_undoable(app, status));
     drop(held);
-    // Il conteggio nella tray (issue #202); senza icona non fa niente. Menu e tooltip si
-    // cambiano sul thread principale e questo thread aspetta che lo faccia: si chiama senza
-    // tenere nessun lock, così un comando che aspetta `InstallLock` non può bloccare il giro.
+    // The count in the tray (issue #202); without an icon it does nothing. Menu and tooltip are
+    // changed on the main thread and this thread waits for it to happen: it is called without
+    // holding any lock, so a command waiting for `InstallLock` cannot block the round.
     crate::tray::show_round(app, last_round.as_ref());
     if retrying {
         RoundResult::Failed
@@ -630,7 +635,7 @@ fn round_installations(app: &AppHandle, mode: AutoUpdateMode) -> (Vec<Installati
     let sources = match LiveSources::new(key) {
         Ok(sources) => sources,
         Err(error) => {
-            // Senza fonti nessuna installazione si controlla: vale come un controllo fallito.
+            // Without sources no installation is checked: it counts as a failed check.
             let reports = installations
                 .iter()
                 .map(|installation| failed_report(installation, error.clone()))
@@ -648,7 +653,7 @@ fn round_installations(app: &AppHandle, mode: AutoUpdateMode) -> (Vec<Installati
         let auto = match auto {
             Ok(auto) if auto.disabled => continue,
             Ok(auto) => auto,
-            // Senza le esclusioni non si sa cosa l'utente vuole lasciare com'è: niente giro.
+            // Without the exclusions it is unknown what the user wants left as is: no round.
             Err(error) => {
                 reports.push(failed_report(installation, error));
                 continue;
@@ -747,7 +752,7 @@ mod tests {
             schedule.next_due(AutoUpdateMode::Install, 6),
             Some(HOUR * 7)
         );
-        // L'intervallo si rilegge a ogni giro.
+        // The interval is re-read on every round.
         assert_eq!(
             schedule.next_due(AutoUpdateMode::Install, 1),
             Some(HOUR * 2)
@@ -762,7 +767,7 @@ mod tests {
             schedule.next_due(AutoUpdateMode::Notify, u32::MAX),
             Some(HOUR * 25)
         );
-        // Anche il backoff resta sopra zero con un intervallo nullo.
+        // The backoff also stays above zero with a zero interval.
         let schedule = finished(&[RoundResult::Failed]);
         assert_eq!(
             schedule.next_due(AutoUpdateMode::Notify, 0),
@@ -790,7 +795,7 @@ mod tests {
         assert_eq!(due(&[Failed, Failed, Failed, Failed], 6), MIN * 60);
         assert_eq!(due(&[Failed, Failed, Done], 6), HOUR * 6);
         assert_eq!(due(&[Failed, Done, Failed], 6), MIN * 5);
-        // Mai oltre l'intervallo.
+        // Never beyond the interval.
         assert_eq!(due(&[Failed, Failed, Failed], 1), HOUR);
     }
 
@@ -802,7 +807,7 @@ mod tests {
             schedule.next_due(AutoUpdateMode::Install, 6),
             Some(HOUR + BUSY_RETRY)
         );
-        // Dopo il giro saltato, un nuovo fallimento è il secondo di fila.
+        // After the skipped round, a new failure is the second in a row.
         let schedule = finished(&[Failed, Busy, Failed]);
         assert_eq!(
             schedule.next_due(AutoUpdateMode::Install, 6),
@@ -912,7 +917,7 @@ mod tests {
         assert_eq!(plan.excluded[0].key, "100");
         assert_eq!(plan.excluded[0].status, OutcomeStatus::Skipped);
         assert_eq!(plan.excluded[0].message.as_deref(), Some(EXCLUDED));
-        // Gli errori delle cartelle senza fonte e quelli dei progetti riconosciuti.
+        // The errors of folders without a source and those of recognised projects.
         assert_eq!(
             plan.errors,
             [
@@ -931,11 +936,11 @@ mod tests {
             ]
         );
 
-        // Senza aggiornamenti non c'è niente da fare.
+        // Without updates there is nothing to do.
         let nothing = plan_of(&[row("Details", Some((CF, "61284")), UpdateStatus::UpToDate)]);
         assert_eq!(nothing, Plan::default());
 
-        // Un'installazione esclusa per intero non pianifica niente.
+        // An installation excluded entirely plans nothing.
         let disabled = InstallationAutoUpdate {
             disabled: true,
             excluded: Default::default(),
@@ -1005,16 +1010,16 @@ mod tests {
         assert_eq!(installation["skipped"], serde_json::json!([]));
     }
 
-    /// Una fonte finta: reclama le cartelle di `claims` con un aggiornamento (progetto =
-    /// cartella), fallisce il controllo con `fails`, e all'aggiornamento dà un errore per i
-    /// progetti di `broken` e salta quelli di `skips`. Ricorda i progetti che le chiedono di
-    /// aggiornare.
+    /// A fake source: it claims the folders of `claims` with an update (project =
+    /// folder), fails the check with `fails`, and on update gives an error for the
+    /// projects of `broken` and skips those of `skips`. It remembers the projects it is asked to
+    /// update.
     struct FakeSource {
         kind: SourceKind,
         claims: Vec<&'static str>,
         broken: Vec<&'static str>,
         skips: Vec<&'static str>,
-        /// Progetti che sostituiscono le cartelle e poi falliscono senza scrivere il record.
+        /// Projects that replace the folders and then fail without writing the record.
         unrecorded: Vec<&'static str>,
         fails: bool,
         asked: RefCell<Vec<String>>,
@@ -1062,7 +1067,7 @@ mod tests {
         ) -> UpdateOutcome {
             self.asked.borrow_mut().push(target.key.to_owned());
             if self.broken.contains(&target.key) {
-                // Il messaggio di oggi per un file aperto dal gioco su Windows.
+                // Today's message for a file opened by the game on Windows.
                 return UpdateOutcome::error(
                     self.kind,
                     target.key,
@@ -1078,7 +1083,7 @@ mod tests {
                     "Not distributable.",
                 );
             }
-            // Come una fonte vera: la cartella del progetto si sostituisce con `replace`.
+            // Like a real source: the project's folder is replaced with `replace`.
             let staging = crate::install::WorkDir::staging(target.addons_dir).unwrap();
             let dir = staging.path().join(target.key);
             fs::create_dir_all(&dir).unwrap();
@@ -1192,7 +1197,7 @@ mod tests {
         };
         let (report, failed, written) =
             run(&installation, AutoUpdateMode::Install, &auto, &[&source]);
-        // Solo i progetti con un aggiornamento e non esclusi; "Delta" nessuno lo riconosce.
+        // Only the projects with an update and not excluded; nobody recognises "Delta".
         assert_eq!(*source.asked.borrow(), ["Alpha", "Beta"]);
         assert_eq!(written, ["Beta"]);
         assert_eq!(report.updated.len(), 1);
@@ -1250,7 +1255,7 @@ mod tests {
         let source = FakeSource::new(SourceKind::Tukui, &["Alpha"]);
         let auto = InstallationAutoUpdate::default();
 
-        // Senza generazione (come un aggiornamento manuale) la versione vecchia si cancella.
+        // Without a generation (like a manual update) the old version is deleted.
         let (report, _, _) = run(&installation, AutoUpdateMode::Install, &auto, &[&source]);
         assert_eq!(report.updated.len(), 1);
         assert_eq!(
@@ -1337,14 +1342,14 @@ mod tests {
             &InstallationAutoUpdate::default(),
             &[&offline, &tukui],
         );
-        // Una fonte che fallisce non ferma le altre; il fallimento si conta una volta per
-        // controllo (qui due: quello del giro e quello di `update_addons_with`).
+        // A failing source does not stop the others; the failure is counted once per
+        // check (here two: the round's and the one of `update_addons_with`).
         assert_eq!(report.updated.len(), 1);
         assert_eq!(failed, [SourceKind::Curseforge, SourceKind::Curseforge]);
         assert!(needs_retry(&failed, true));
         assert!(!needs_retry(&failed, false));
 
-        // Se falliscono tutte, il controllo fallisce per intero e niente si installa.
+        // If they all fail, the check fails entirely and nothing is installed.
         let (report, failed, written) = run(
             &installation,
             AutoUpdateMode::Install,

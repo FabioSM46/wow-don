@@ -1,10 +1,11 @@
-//! Controllo degli aggiornamenti: abbina gli addon installati ai progetti delle fonti (D12,
-//! D33) e sceglie, per ognuno, la versione più recente per il gioco dell'installazione.
+//! Update check: matches the installed addons to the sources' projects (D12,
+//! D33) and picks, for each one, the most recent version for the installation's game.
 //!
-//! [`check_updates_with`] scansiona l'installazione e offre le cartelle alle fonti nell'ordine di D33;
-//! [`update_addons_with`] rifà il controllo e chiede a ogni fonte di aggiornare i suoi progetti.
-//! CurseForge è [`CurseForgeSource`]: [`evaluate`] è pura, riceve la scansione, la risposta dei
-//! fingerprint e i mod, e non usa né rete né disco.
+//! [`check_updates_with`] scans the installation and offers the folders to the sources in D33
+//! order;
+//! [`update_addons_with`] redoes the check and asks each source to update its projects.
+//! CurseForge is [`CurseForgeSource`]: [`evaluate`] is pure, it receives the scan, the fingerprint
+//! response and the mods, and uses neither network nor disk.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -24,25 +25,25 @@ use crate::sources::github_mirror::{self, MirrorSource, MirrorStatus, Outcome, R
 use crate::sources::{ProjectKey, RecordWriter, Source, SourceKind, UpdateTarget};
 use crate::store::{InstalledRecords, ProjectRecords, SourceRecord, SourceRecords};
 
-/// Tipi di versione del gioco di CurseForge (`gameVersionTypeId`), verificati il 2026-10-22 con
-/// il test `live_version_types` di `sources::curseforge` sull'API reale.
+/// CurseForge game version types (`gameVersionTypeId`), verified on 2026-10-22 with the
+/// `live_version_types` test of `sources::curseforge` against the real API.
 pub const RETAIL: u32 = 517;
 pub const CLASSIC_ERA: u32 = 67408;
-/// "WoW Mists of Pandaria Classic". **Cambia con l'espansione**: quando la Classic progressiva
-/// passa all'espansione successiva, questo id va aggiornato con il tipo nuovo (il test
-/// `the_progressive_classic_is_mists` lo rende visibile nel diff).
+/// "WoW Mists of Pandaria Classic". **Changes with the expansion**: when the progressive Classic
+/// moves to the next expansion, this id must be updated to the new type (the
+/// `the_progressive_classic_is_mists` test makes it visible in the diff).
 pub const CLASSIC_PROGRESSIVE: u32 = 79434;
-/// "WoW Burning Crusade Classic". L'elenco dei tipi di CurseForge non ha un tipo per la Classic
-/// Anniversary, e i `.toc` dell'Anniversary usano il suffisso `_TBC` (warcraft.wiki.gg, "TOC
-/// format": "Burning Crusade Classic and Classic Anniversary Edition"): gli addon Anniversary
-/// sono pubblicati sotto questo tipo. Se CurseForge aggiungerà un tipo dedicato, va cambiato.
+/// "WoW Burning Crusade Classic". CurseForge's list of types has no type for Classic
+/// Anniversary, and Anniversary `.toc` files use the `_TBC` suffix (warcraft.wiki.gg, "TOC
+/// format": "Burning Crusade Classic and Classic Anniversary Edition"): Anniversary addons
+/// are published under this type. If CurseForge adds a dedicated type, this must change.
 pub const ANNIVERSARY: u32 = 73246;
 /// "WoW Forever".
 pub const FOREVER: u32 = 88568;
 
-/// I tipi di versione che l'app conosce, con il nome mostrato nel menu del frontend (in
-/// inglese, come tutta l'interfaccia). Sono anche gli unici ammessi come versione forzata di
-/// un addon (D6).
+/// The version types the app knows, with the name shown in the frontend's menu (in
+/// English, like the whole interface). They are also the only ones allowed as an addon's
+/// forced version (D6).
 pub const VERSION_TYPES: [(u32, &str); 5] = [
     (RETAIL, "Retail"),
     (CLASSIC_ERA, "Classic Era"),
@@ -51,14 +52,14 @@ pub const VERSION_TYPES: [(u32, &str); 5] = [
     (FOREVER, "WoW Forever"),
 ];
 
-/// Un tipo di versione del gioco per il frontend.
+/// A game version type for the frontend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct VersionType {
     pub id: u32,
     pub name: &'static str,
 }
 
-/// I tipi noti, nell'ordine di [`VERSION_TYPES`]. Nessuna chiamata di rete.
+/// The known types, in the order of [`VERSION_TYPES`]. No network call.
 pub fn version_types() -> Vec<VersionType> {
     VERSION_TYPES
         .iter()
@@ -70,23 +71,23 @@ pub fn is_known_version_type(id: u32) -> bool {
     VERSION_TYPES.iter().any(|&(known, _)| known == id)
 }
 
-/// Versioni del gioco forzate: id del progetto CurseForge → `gameVersionTypeId`.
+/// Forced game versions: CurseForge project id → `gameVersionTypeId`.
 pub type VersionOverrides = HashMap<u32, u32>;
 
-/// Tipo di versione del gioco per il flavor di un'installazione.
+/// Game version type for an installation's flavor.
 ///
 /// - `_retail_` → Retail; `_classic_era_` → Classic Era;
-/// - `_classic_` → la Classic progressiva attuale (Mists of Pandaria);
-/// - `_anniversary_` → Burning Crusade Classic (vedi [`ANNIVERSARY`]);
-/// - `_forever_` → WoW Forever: la cartella del client ufficiale (prodotto `wowf` in
-///   `.build.info`, verificata su un'installazione reale);
-/// - `_classic_beta_` → WoW Forever: la cartella della beta (prodotto `wow_classic_beta`). Se
-///   un'altra beta di Classic tornasse a usarla, questa riga andrebbe rivista.
+/// - `_classic_` → the current progressive Classic (Mists of Pandaria);
+/// - `_anniversary_` → Burning Crusade Classic (see [`ANNIVERSARY`]);
+/// - `_forever_` → WoW Forever: the official client's folder (product `wowf` in
+///   `.build.info`, verified on a real installation);
+/// - `_classic_beta_` → WoW Forever: the beta's folder (product `wow_classic_beta`). If
+///   another Classic beta went back to using it, this line would need revisiting.
 ///
-/// PTR, beta di Retail e Titan Reforged (81212) restano senza tipo finché non si sa con
-/// certezza quale cartella usano: meglio un errore chiaro che un aggiornamento per la versione
-/// sbagliata. Un seguito possibile è leggere il prodotto installato da `.build.info` invece di
-/// dedurlo dal nome della cartella.
+/// PTR, Retail beta and Titan Reforged (81212) stay without a type until it is known for
+/// certain which folder they use: a clear error is better than an update for the wrong
+/// version. A possible follow-up is reading the installed product from `.build.info` instead of
+/// deducing it from the folder name.
 pub fn version_type_for(flavor: &str) -> Option<u32> {
     match flavor.trim_matches('_').to_ascii_lowercase().as_str() {
         "retail" => Some(RETAIL),
@@ -98,9 +99,9 @@ pub fn version_type_for(flavor: &str) -> Option<u32> {
     }
 }
 
-/// Il file installato o disponibile di un progetto. `id` è l'id del file CurseForge, che serve a
-/// scaricarlo; le fonti senza id numerico (GitHub, WoWInterface, Tukui) mettono `0` e la
-/// versione o il tag in `name`, la stessa stringa che scrivono in `SourceRecord::file`.
+/// A project's installed or available file. `id` is the CurseForge file id, needed to
+/// download it; sources without a numeric id (GitHub, WoWInterface, Tukui) put `0` and the
+/// version or tag in `name`, the same string they write in `SourceRecord::file`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSummary {
@@ -126,16 +127,16 @@ impl From<&File> for FileSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
-    /// L'id CurseForge; `0` per le altre fonti, dove il progetto si identifica con `source` e
-    /// `key`.
+    /// The CurseForge id; `0` for the other sources, where the project is identified by `source`
+    /// and `key`.
     pub id: u32,
     pub source: SourceKind,
-    /// L'id del progetto nella fonte, come stringa (`61284`, `owner/repo`, `-2`).
+    /// The project's id in the source, as a string (`61284`, `owner/repo`, `-2`).
     pub key: String,
     pub name: String,
     pub url: Option<String>,
-    /// Se la fonte permette di scaricare i file da un'app di terzi (per CurseForge
-    /// `allowModDistribution`; sconosciuto vale `false`).
+    /// Whether the source allows downloading the files from a third-party app (for CurseForge
+    /// `allowModDistribution`; unknown counts as `false`).
     pub allow_mod_distribution: bool,
 }
 
@@ -147,9 +148,9 @@ pub enum UpdateStatus {
     UpdateAvailable {
         latest: FileSummary,
     },
-    /// Per la versione non c'è nessuna Release, ma una Beta più recente del file installato sì, e
-    /// l'opzione "Beta quando non c'è una Release" è spenta (issue #141). Se una Release esiste,
-    /// la Beta non conta nemmeno con l'opzione accesa, quindi lo stato resta `UpToDate`.
+    /// For the version there is no Release, but there is a Beta newer than the installed file,
+    /// and the "Beta when there is no Release" option is off (issue #141). If a Release exists,
+    /// the Beta does not count even with the option on, so the status stays `UpToDate`.
     BetaOnly {
         latest: FileSummary,
     },
@@ -162,65 +163,65 @@ pub enum UpdateStatus {
 #[serde(rename_all = "camelCase")]
 pub struct AddonUpdate {
     pub folder: String,
-    /// La fonte che ha reclamato la cartella, se c'è.
+    /// The source that claimed the folder, if any.
     pub source: Option<SourceKind>,
-    /// Il progetto; più cartelle possono avere lo stesso progetto (per esempio DBM).
+    /// The project; several folders can share the same project (for example DBM).
     pub project: Option<Project>,
     pub installed_file: Option<FileSummary>,
     #[serde(flatten)]
     pub status: UpdateStatus,
-    /// La versione del gioco forzata per il progetto, se c'è: è quella usata per cercare il
-    /// file più recente al posto di quella dell'installazione.
+    /// The game version forced for the project, if any: it is the one used to look up the
+    /// most recent file instead of the installation's.
     pub version_override: Option<u32>,
-    /// I nomi delle cartelle del file riconosciuto per questa cartella (vuoto se non
-    /// riconosciuta): il frontend li usa per raggruppare le cartelle dello stesso file, anche
-    /// quelle che CurseForge non riconosce una per una.
+    /// The folder names of the file recognized for this folder (empty if not
+    /// recognized): the frontend uses them to group the folders of the same file, including
+    /// those CurseForge does not recognize one by one.
     pub project_folders: Vec<String>,
-    /// Le cartelle (`modules`) del file installato, con il loro fingerprint: servono
-    /// all'aggiornamento per togliere quelle che la versione nuova non ha più. Restano nel
+    /// The folders (`modules`) of the installed file, with their fingerprint: the update needs
+    /// them to remove the ones the new version no longer has. They stay in the
     /// backend.
     #[serde(skip)]
     pub installed_modules: Vec<FileModule>,
-    /// Il file che la regola unica [`pick_file`] sceglie per il progetto, anche quando è quello
-    /// installato: la reinstallazione (issue #148) scarica questo. `None` se la regola non
-    /// sceglie niente o la fonte non lo usa. Resta nel backend: il JSON non cambia.
+    /// The file the single rule [`pick_file`] picks for the project, even when it is the
+    /// installed one: the reinstall (issue #148) downloads this. `None` if the rule picks
+    /// nothing or the source does not use it. Stays in the backend: the JSON does not change.
     #[serde(skip)]
     pub reinstall_file: Option<FileSummary>,
-    /// Il mirror GitHub di un progetto CurseForge bloccato con un aggiornamento (D34, issue
-    /// #163): `githubMirror` e `githubMirrorReason`, `null` quando non è stato calcolato.
+    /// The GitHub mirror of a blocked CurseForge project with an update (D34, issue
+    /// #163): `githubMirror` and `githubMirrorReason`, `null` when it has not been computed.
     #[serde(flatten)]
     pub mirror: MirrorStatus,
 }
 
-/// Dove [`MatchIndex::locate`] trova una cartella.
+/// Where [`MatchIndex::locate`] finds a folder.
 enum Located<'a> {
-    /// Il match del progetto che contiene la cartella.
+    /// The match of the project that contains the folder.
     Found(&'a FingerprintMatch),
-    /// Nessun file abbinato la contiene: CurseForge non la conosce.
+    /// No matched file contains it: CurseForge does not know it.
     NotMatched,
-    /// La cartella non si è potuta elencare (vedi [`InstalledAddon::is_unreadable`]).
+    /// The folder could not be listed (see [`InstalledAddon::is_unreadable`]).
     Unreadable,
 }
 
-/// Un progetto CurseForge che un record dell'app (`installed-addons.json`) nomina per cartelle
-/// che il fingerprint non abbina (issue #216): il match è costruito con il file installato del
-/// record (`get_files`) e gli ultimi file del mod (`get_mods`), e vale per le `folders` del
-/// record.
+/// A CurseForge project that an app record (`installed-addons.json`) names for folders
+/// the fingerprint does not match (issue #216): the match is built from the record's installed
+/// file (`get_files`) and the mod's latest files (`get_mods`), and applies to the record's
+/// `folders`.
 pub struct RecordedMatch {
     pub folders: Vec<String>,
     pub found: FingerprintMatch,
 }
 
-/// I match della risposta dei fingerprint, cercabili per cartella. Prima i match parziali (il
-/// primo file che contiene la cartella), poi gli esatti, che li sostituiscono: un match esatto
-/// vince sempre su uno parziale. I match dei record sono solo il ripiego.
+/// The matches of the fingerprint response, searchable by folder. First the partial matches (the
+/// first file that contains the folder), then the exact ones, which replace them: an exact match
+/// always wins over a partial one. The record matches are only the fallback.
 struct MatchIndex<'a> {
-    /// Fingerprint di una cartella → il match del file che la contiene.
+    /// Fingerprint of a folder → the match of the file that contains it.
     by_fingerprint: HashMap<u64, &'a FingerprintMatch>,
-    /// Nome di una cartella (`modules[].name`, in minuscolo) → il match del file che la elenca.
+    /// Name of a folder (`modules[].name`, lowercase) → the match of the file that lists it.
     by_folder: HashMap<String, &'a FingerprintMatch>,
-    /// Nome di una cartella (in minuscolo) → il match del record che la nomina; `None` se la
-    /// nominano i record di più progetti, che allora non decidono.
+    /// Name of a folder (lowercase) → the match of the record that names it; `None` if the
+    /// records of several projects name it, which then do not decide.
     by_record: HashMap<String, Option<&'a FingerprintMatch>>,
 }
 
@@ -265,16 +266,16 @@ impl<'a> MatchIndex<'a> {
         index
     }
 
-    /// Il progetto di una cartella. Con un fingerprint decide solo quello. Senza, la cartella può
-    /// essere leggibile ma senza nessun file che il calcolo di CurseForge conta (un `.toc` con
-    /// un suffisso che il calcolo non conosce, come `_Camelot`, issue #212): allora appartiene al
-    /// file abbinato che la elenca tra i suoi `modules`, con il nome confrontato senza
-    /// distinguere maiuscole e minuscole come fa il gioco, e se nessun file la elenca non è
-    /// riconosciuta. Solo una cartella che non si è potuta elencare è un errore.
+    /// A folder's project. With a fingerprint, only that decides. Without one, the folder can
+    /// be readable but have no file that CurseForge's computation counts (a `.toc` with
+    /// a suffix the computation does not know, like `_Camelot`, issue #212): then it belongs to
+    /// the matched file that lists it among its `modules`, with the name compared
+    /// case-insensitively as the game does, and if no file lists it, it is not
+    /// recognized. Only a folder that could not be listed is an error.
     ///
-    /// Una cartella leggibile che la risposta dei fingerprint non abbina in nessuno dei due modi
-    /// appartiene al progetto del record che la nomina, se c'è (issue #216): il record non
-    /// cambia mai una cartella già abbinata.
+    /// A readable folder that the fingerprint response matches in neither way
+    /// belongs to the project of the record that names it, if any (issue #216): the record never
+    /// changes an already matched folder.
     fn locate(&self, addon: &InstalledAddon) -> Located<'a> {
         let folder = addon.folder.to_lowercase();
         let found = match addon.fingerprint {
@@ -288,8 +289,8 @@ impl<'a> MatchIndex<'a> {
     }
 }
 
-/// Abbina e valuta. `version_type` è il `gameVersionTypeId` dell'installazione; `overrides`
-/// lo sostituisce per i progetti che hanno una versione forzata. Senza Beta (vedi
+/// Matches and evaluates. `version_type` is the installation's `gameVersionTypeId`; `overrides`
+/// replaces it for the projects that have a forced version. Without Beta (see
 /// [`evaluate_with`]).
 #[cfg(test)]
 pub fn evaluate(
@@ -302,9 +303,9 @@ pub fn evaluate(
     evaluate_with(addons, matches, &[], mods, version_type, overrides, false)
 }
 
-/// Come `evaluate`; con `allow_beta` il file più recente può essere una Beta quando la versione
-/// non ha una Release (issue #141). `recorded` sono i progetti dei record per le cartelle che
-/// `matches` non abbina (issue #216), valutati con le stesse regole.
+/// Like `evaluate`; with `allow_beta` the most recent file can be a Beta when the version
+/// has no Release (issue #141). `recorded` are the record projects for the folders that
+/// `matches` does not match (issue #216), evaluated with the same rules.
 pub fn evaluate_with(
     addons: &[InstalledAddon],
     matches: &FingerprintMatches,
@@ -366,10 +367,10 @@ pub fn evaluate_with(
                 Some(latest) if is_newer(latest, &found.file) => UpdateStatus::UpdateAvailable {
                     latest: FileSummary::from(latest),
                 },
-                // Con una Release per la versione la Beta non si usa mai (`pick_file`), con
-                // l'opzione o senza: niente da suggerire.
+                // With a Release for the version the Beta is never used (`pick_file`), with
+                // the option or without: nothing to suggest.
                 Some(_) => UpdateStatus::UpToDate,
-                // Senza Release: se una Beta più recente c'è, lo si dice invece di "aggiornato".
+                // No Release: if a newer Beta exists, say so instead of "up to date".
                 None => match newest_file(found, target, true) {
                     Some(beta) if !allow_beta && is_newer(beta, &found.file) => {
                         UpdateStatus::BetaOnly {
@@ -390,8 +391,8 @@ fn for_version_type(file: &File, version_type: u32) -> bool {
         .any(|v| v.game_version_type_id == Some(version_type))
 }
 
-/// Il file più recente per il tipo di versione, tra quelli che CurseForge indica come ultimi per
-/// il progetto, con la regola di [`pick_file`] (una Beta solo con `allow_beta`).
+/// The most recent file for the version type, among those CurseForge reports as latest for
+/// the project, with the rule of [`pick_file`] (a Beta only with `allow_beta`).
 fn newest_file(found: &FingerprintMatch, version_type: u32, allow_beta: bool) -> Option<&File> {
     let candidates = found
         .latest_files
@@ -406,23 +407,23 @@ fn newest_file(found: &FingerprintMatch, version_type: u32, allow_beta: bool) ->
     )
 }
 
-/// Le date sono ISO 8601 in UTC, quindi il confronto come testo segue il tempo; a parità di
-/// data decide l'id, che CurseForge assegna in ordine crescente.
+/// Dates are ISO 8601 in UTC, so comparing them as text follows time; with equal
+/// dates the id decides, which CurseForge assigns in increasing order.
 fn is_newer(candidate: &File, installed: &File) -> bool {
     candidate.id != installed.id
         && (candidate.file_date.as_str(), candidate.id)
             > (installed.file_date.as_str(), installed.id)
 }
 
-/// Scansiona l'installazione e offre le cartelle alle fonti di `sources`, nell'ordine (D33):
-/// una cartella registrata in `records` va solo alla fonte del record; le altre a ogni fonte
-/// che non le ha ancora reclamate. Una voce per cartella, nell'ordine della scansione; le
-/// cartelle che nessuna fonte riconosce restano `notMatched` senza fonte. Reclama una cartella
-/// solo la fonte che le dà un progetto: un errore su una cartella (per esempio CurseForge che non
-/// la legge) non la toglie alle fonti successive e si mostra solo se nessuna la riconosce. Una
-/// fonte che fallisce non ferma le altre: le cartelle che le erano state offerte e che nessuno
-/// ha reclamato riportano il suo errore. Se falliscono tutte, l'errore è quello della prima.
-/// Bloccante: va chiamata fuori dal thread principale.
+/// Scans the installation and offers the folders to the sources in `sources`, in order (D33):
+/// a folder registered in `records` goes only to the record's source; the others to every source
+/// that has not claimed them yet. One entry per folder, in scan order; folders
+/// no source recognizes stay `notMatched` without a source. A folder is claimed only by
+/// the source that gives it a project: an error on a folder (for example CurseForge failing to
+/// read it) does not take it away from the following sources and shows only if none recognizes
+/// it. A failing source does not stop the others: the folders that had been offered to it and that
+/// nobody claimed report its error. If all fail, the error is the first one's.
+/// Blocking: must be called off the main thread.
 #[cfg(test)]
 pub fn check_updates(
     installation: &Installation,
@@ -432,7 +433,7 @@ pub fn check_updates(
     check_updates_with(installation, None, sources, records)
 }
 
-/// Come `check_updates`, con i fingerprint della scansione presi da `cache` (issue #125).
+/// Like `check_updates`, with the scan's fingerprints taken from `cache` (issue #125).
 pub fn check_updates_with(
     installation: &Installation,
     cache: Option<&FingerprintCache>,
@@ -442,7 +443,7 @@ pub fn check_updates_with(
     scan_and_check(installation, cache, sources, records).map(|(_, updates)| updates)
 }
 
-/// Come `check_updates`, ma restituisce anche la scansione.
+/// Like `check_updates`, but also returns the scan.
 fn scan_and_check(
     installation: &Installation,
     cache: Option<&FingerprintCache>,
@@ -454,22 +455,22 @@ fn scan_and_check(
     Ok((addons, updates))
 }
 
-/// La lista degli addon e i loro stati da una sola scansione (`refresh_addons`, issue #126).
+/// The addon list and their statuses from a single scan (`refresh_addons`, issue #126).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Refresh {
-    /// Come `list_addons`.
+    /// Like `list_addons`.
     pub addons: Vec<ListedAddon>,
-    /// Come `check_updates`; vuoto se il controllo è fallito.
+    /// Like `check_updates`; empty if the check failed.
     pub updates: Vec<AddonUpdate>,
-    /// Perché il controllo è fallito per intero: la lista arriva comunque.
+    /// Why the check failed entirely: the list arrives anyway.
     pub check_error: Option<String>,
 }
 
-/// Scansiona una volta l'installazione e ne ricava sia la lista per la tab Installed (con i
-/// progetti di `installed`) sia gli stati di aggiornamento (D33, con `records`). Un controllo
-/// fallito non toglie la lista: finisce in `check_error`. Solo una scansione fallita è `Err`.
-/// Bloccante.
+/// Scans the installation once and derives from it both the list for the Installed tab (with the
+/// projects of `installed`) and the update statuses (D33, with `records`). A failed check
+/// does not take away the list: it ends up in `check_error`. Only a failed scan is `Err`.
+/// Blocking.
 pub fn refresh_addons(
     installation: &Installation,
     cache: Option<&FingerprintCache>,
@@ -489,7 +490,7 @@ pub fn refresh_addons(
     })
 }
 
-/// Il controllo di `check_updates` su una scansione già fatta.
+/// The `check_updates` check on a scan already done.
 fn check_scanned(
     installation: &Installation,
     addons: &[InstalledAddon],
@@ -497,8 +498,8 @@ fn check_scanned(
     records: &SourceRecords,
 ) -> Result<Vec<AddonUpdate>, String> {
     let no_records = ProjectRecords::new();
-    // Cartella (in minuscolo) → la fonte del record che la nomina. Una cartella nei record di
-    // più fonti non appartiene a nessuna.
+    // Folder (lowercase) → the source of the record that names it. A folder in the records of
+    // several sources belongs to none.
     let mut owners: HashMap<String, Option<SourceKind>> = HashMap::new();
     for (source, projects) in records {
         for folder in projects.values().flat_map(|record| &record.folders) {
@@ -516,8 +517,8 @@ fn check_scanned(
         |addon: &InstalledAddon| owners.get(&addon.folder.to_lowercase()).copied().flatten();
 
     let mut results: Vec<Option<AddonUpdate>> = vec![None; addons.len()];
-    // Per cartella, il primo errore di una fonte a cui era stata offerta: della fonte intera o
-    // della sola cartella. Vale solo se nessuna fonte la reclama.
+    // Per folder, the first error of a source it had been offered to: of the whole source or
+    // of that folder alone. It applies only if no source claims it.
     let mut failures: Vec<Option<AddonUpdate>> = vec![None; addons.len()];
     let mut first_error: Option<String> = None;
     let mut succeeded = false;
@@ -558,8 +559,8 @@ fn check_scanned(
             else {
                 continue;
             };
-            // Solo un progetto reclama la cartella; un errore resta in serbo per il caso in cui
-            // nessuna fonte la riconosca.
+            // Only a project claims the folder; an error is kept in reserve for the case where
+            // no source recognizes it.
             if update.project.is_some() {
                 results[i].get_or_insert(update);
             } else if matches!(update.status, UpdateStatus::Error { .. }) {
@@ -581,15 +582,15 @@ fn check_scanned(
                 .unwrap_or_else(|| unclaimed(addon, UpdateStatus::NotMatched))
         })
         .collect();
-    // Il lavoro che una fonte rimanda a dopo il controllo di tutte (il mirror GitHub di
-    // CurseForge, D34): nell'ordine delle fonti.
+    // The work a source postpones until after every source's check (the CurseForge GitHub
+    // mirror, D34): in source order.
     for source in sources {
         source.finish(installation, &mut updates);
     }
     Ok(updates)
 }
 
-/// La voce di una cartella che nessuna fonte ha reclamato.
+/// The entry for a folder no source claimed.
 fn unclaimed(addon: &InstalledAddon, status: UpdateStatus) -> AddonUpdate {
     AddonUpdate {
         folder: addon.folder.clone(),
@@ -605,15 +606,15 @@ fn unclaimed(addon: &InstalledAddon, status: UpdateStatus) -> AddonUpdate {
     }
 }
 
-/// CurseForge come fonte: fingerprint delle cartelle, versioni del gioco forzate per progetto
-/// (D6) e `allowModDistribution` (D13).
+/// CurseForge as a source: folder fingerprints, forced game versions per project
+/// (D6) and `allowModDistribution` (D13).
 pub struct CurseForgeSource<'a, T: Transport> {
     pub client: &'a CurseForgeClient<T>,
     pub overrides: &'a VersionOverrides,
-    /// L'opzione "Beta quando non c'è una Release" (issue #141).
+    /// The "Beta when there is no Release" option (issue #141).
     pub allow_beta: bool,
-    /// GitHub per i progetti che CurseForge non lascia scaricare (D34, issue #163). Senza, quei
-    /// progetti si aggiornano solo dal sito.
+    /// GitHub for the projects CurseForge does not allow downloading (D34, issue #163). Without
+    /// it, those projects update only from the website.
     pub github: Option<&'a dyn MirrorSource>,
 }
 
@@ -679,8 +680,8 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
     }
 
     fn update(&self, target: &UpdateTarget<'_>, record: &mut RecordWriter<'_>) -> UpdateOutcome {
-        // Senza chiave il controllo è fallito e il progetto non è tra quelli riconosciuti: il
-        // motivo vero è la chiave, non "non trovato".
+        // Without a key the check failed and the project is not among the recognized ones: the
+        // real reason is the key, not "not found".
         if !self.client.has_key() {
             return UpdateOutcome::error(
                 SourceKind::Curseforge,
@@ -703,17 +704,17 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
     }
 }
 
-/// Un record CurseForge da usare come ripiego (issue #216): progetto, file installato e cartelle.
+/// A CurseForge record to use as a fallback (issue #216): project, installed file and folders.
 struct RecordCandidate<'a> {
     mod_id: u32,
     file_id: u32,
     folders: &'a [String],
 }
 
-/// I record che nominano almeno una cartella offerta che la risposta dei fingerprint non abbina,
-/// né direttamente né tramite i `modules` di un file abbinato. Le cartelle illeggibili restano
-/// fuori: sono un errore della scansione, non un addon sconosciuto. Un record con un id del
-/// progetto o del file che non è un numero non vale.
+/// The records that name at least one offered folder that the fingerprint response does not
+/// match, neither directly nor through the `modules` of a matched file. Unreadable folders stay
+/// out: they are a scan error, not an unknown addon. A record with a project or file id
+/// that is not a number does not count.
 fn record_candidates<'a>(
     offered: &[InstalledAddon],
     matches: &FingerprintMatches,
@@ -747,12 +748,12 @@ fn record_candidates<'a>(
 }
 
 impl<T: Transport> CurseForgeSource<'_, T> {
-    /// I match dei record `candidates`: il file installato si legge con una sola `get_files`, gli
-    /// ultimi file dal mod già letto in `mods`. Un record il cui progetto non è in `mods` o il cui
-    /// file CurseForge non restituisce più (o restituisce per un altro progetto) non dà un match,
-    /// e le sue cartelle restano non riconosciute. Il ripiego non peggiora mai il controllo: se
-    /// la richiesta `get_files` fallisce, non c'è nessun match dei record (le loro cartelle
-    /// restano `notMatched`, senza messaggio) e i match del fingerprint valgono come prima.
+    /// The matches of the `candidates` records: the installed file is read with a single
+    /// `get_files`, the latest files from the mod already read in `mods`. A record whose project
+    /// is not in `mods` or whose file CurseForge no longer returns (or returns for another
+    /// project) gives no match, and its folders stay unrecognized. The fallback never worsens the
+    /// check: if the `get_files` request fails, there is no record match (their folders
+    /// stay `notMatched`, with no message) and the fingerprint matches apply as before.
     fn recorded_matches(
         &self,
         candidates: &[RecordCandidate<'_>],
@@ -792,11 +793,11 @@ impl<T: Transport> CurseForgeSource<'_, T> {
     }
 }
 
-/// Segna per il mirror GitHub (D34) i progetti bloccati con un aggiornamento disponibile, con
-/// il progetto e il file che servono a [`resolve_mirrors`]. Nessuna rete: il mirror si calcola
-/// dopo che tutte le fonti hanno fatto il controllo (`Source::finish`), così le richieste dei
-/// progetti GitHub registrati passano prima e non trovano il limite consumato dai mirror.
-/// Niente per i progetti aggiornati, con una sola Beta o che CurseForge lascia scaricare.
+/// Marks for the GitHub mirror (D34) the blocked projects with an available update, with
+/// the project and file that [`resolve_mirrors`] needs. No network: the mirror is computed
+/// after every source has done its check (`Source::finish`), so the requests of the
+/// registered GitHub projects go first and do not find the limit used up by the mirrors.
+/// Nothing for up-to-date projects, those with only a Beta, or those CurseForge allows downloading.
 fn mark_mirrors(updates: &mut [AddonUpdate], matches: &[&FingerprintMatch], mods: &[Mod]) {
     for update in updates {
         let (Some(project), UpdateStatus::UpdateAvailable { latest }) =
@@ -825,7 +826,7 @@ fn mark_mirrors(updates: &mut [AddonUpdate], matches: &[&FingerprintMatch], mods
     }
 }
 
-/// Calcola il mirror delle voci segnate da [`mark_mirrors`], una volta per progetto e file.
+/// Computes the mirror of the entries marked by [`mark_mirrors`], once per project and file.
 fn resolve_mirrors(updates: &mut [AddonUpdate], github: &dyn MirrorSource, flavor: &str) {
     let mut resolved: HashMap<(u32, u32), MirrorStatus> = HashMap::new();
     for update in updates {
@@ -841,10 +842,10 @@ fn resolve_mirrors(updates: &mut [AddonUpdate], github: &dyn MirrorSource, flavo
     }
 }
 
-/// Il motivo di oggi per un progetto bloccato senza GitHub.
+/// Today's reason for a blocked project without GitHub.
 const BLOCKED: &str = "The author does not allow downloads from third-party apps: update it from the CurseForge website.";
 
-// ── Aggiornamento ───────────────────────────────────────────────────────────
+// ── Update ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -854,22 +855,22 @@ pub enum OutcomeStatus {
     Error,
 }
 
-/// L'esito dell'aggiornamento di un progetto. I messaggi sono in inglese (D27).
+/// The outcome of updating a project. The messages are in English (D27).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateOutcome {
-    /// L'id CurseForge; `0` per le altre fonti (vedi `source` e `key`).
+    /// The CurseForge id; `0` for the other sources (see `source` and `key`).
     pub mod_id: u32,
     pub source: SourceKind,
-    /// L'id del progetto nella fonte, come stringa.
+    /// The project's id in the source, as a string.
     pub key: String,
-    /// Il nome del progetto; vuoto se il progetto non è tra quelli installati.
+    /// The project's name; empty if the project is not among the installed ones.
     pub name: String,
     pub status: OutcomeStatus,
-    /// Perché è stato saltato o cosa è andato storto.
+    /// Why it was skipped or what went wrong.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// Il file installato, solo per `updated`.
+    /// The installed file, only for `updated`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<FileSummary>,
 }
@@ -920,12 +921,12 @@ impl UpdateOutcome {
     }
 }
 
-/// Aggiorna i progetti `projects` di un'installazione. Rifà il controllo con le stesse fonti di
-/// `check_updates` invece di fidarsi del frontend, poi passa ogni progetto alla sua fonte. Un
-/// errore su un progetto non ferma gli altri; un progetto ripetuto si aggiorna una volta sola.
-/// Bloccante.
+/// Updates the projects `projects` of an installation. Redoes the check with the same sources as
+/// `check_updates` instead of trusting the frontend, then hands each project to its source. An
+/// error on one project does not stop the others; a repeated project is updated only once.
+/// Blocking.
 ///
-/// Restituisce `Err` solo se il controllo iniziale fallisce: in quel caso non si tocca niente.
+/// Returns `Err` only if the initial check fails: in that case nothing is touched.
 #[cfg(test)]
 pub fn update_addons(
     installation: &Installation,
@@ -947,9 +948,9 @@ pub fn update_addons(
     )
 }
 
-/// Come `update_addons`, con i fingerprint del controllo iniziale presi da `cache`. Con
-/// `reinstall` (issue #148) un progetto già aggiornato si riscarica comunque: ogni fonte installa
-/// il file che sceglierebbe per un aggiornamento, anche se è la versione installata.
+/// Like `update_addons`, with the initial check's fingerprints taken from `cache`. With
+/// `reinstall` (issue #148) an up-to-date project is downloaded again anyway: each source installs
+/// the file it would pick for an update, even if it is the installed version.
 #[allow(clippy::too_many_arguments)]
 pub fn update_addons_with(
     installation: &Installation,
@@ -961,9 +962,9 @@ pub fn update_addons_with(
     record: &mut RecordWriter<'_>,
     progress: &ProgressSink<'_>,
 ) -> Result<Vec<UpdateOutcome>, String> {
-    // Il controllo vale per tutti i progetti richiesti: ognuno è in `checking` finché non tocca
-    // a lui. Un progetto saltato o fallito prima del download non riceve altre fasi: l'esito
-    // restituito resta la risposta definitiva, e chi ascolta l'evento chiude lì l'avanzamento.
+    // The check applies to all requested projects: each one is in `checking` until its
+    // turn. A project skipped or failed before the download gets no further phases: the returned
+    // outcome stays the final answer, and whoever listens to the event closes the progress there.
     let mut announced = HashSet::new();
     for project in projects.iter().filter(|p| announced.insert(*p)) {
         Reporter::new(progress, Some(project.source), &project.key, "").phase(Phase::Checking);
@@ -1024,8 +1025,8 @@ fn update_project<T: Transport>(
         UpdateStatus::UpdateAvailable { latest } => Some((*u, latest)),
         _ => None,
     });
-    // Con `reinstall` un progetto aggiornato riscarica il file della regola unica, anche se è
-    // quello installato; con un aggiornamento disponibile resta quello.
+    // With `reinstall` an up-to-date project downloads again the single rule's file, even if it
+    // is the installed one; with an available update it stays that one.
     let chosen = available.or_else(|| {
         target
             .reinstall
@@ -1040,8 +1041,8 @@ fn update_project<T: Transport>(
         if !target.reinstall {
             return UpdateOutcome::skipped(CF, key, name, "Already up to date.");
         }
-        // La regola non sceglie niente: con l'opzione spenta il motivo può essere una Beta più
-        // recente (`betaOnly`), e lo si dice; altrimenti non c'è un file da reinstallare.
+        // The rule picks nothing: with the option off the reason can be a newer Beta
+        // (`betaOnly`), and it is said; otherwise there is no file to reinstall.
         let beta_only = folders
             .iter()
             .any(|u| matches!(u.status, UpdateStatus::BetaOnly { .. }));
@@ -1054,9 +1055,9 @@ fn update_project<T: Transport>(
         };
         return UpdateOutcome::skipped(CF, key, name, reason);
     };
-    // Senza un aggiornamento la scelta della regola non è più recente dell'installato: se è un
-    // altro file (per esempio un'Alpha installata a mano, o una Beta con l'opzione ora spenta)
-    // reinstallarla sarebbe un ritorno a una versione precedente, e non si fa in silenzio.
+    // Without an update the rule's pick is not newer than the installed one: if it is a
+    // different file (for example an Alpha installed by hand, or a Beta with the option now off)
+    // reinstalling it would be a return to an earlier version, and that is not done silently.
     if available.is_none()
         && installed
             .installed_file
@@ -1107,10 +1108,10 @@ fn update_project<T: Transport>(
     record_curseforge(record, key, name, &file, folders, None)
 }
 
-/// Un progetto CurseForge bloccato (D13) aggiornato o reinstallato dal suo mirror GitHub (D34,
-/// issue #163): il file CurseForge `latest` si rilegge con il progetto, il mirror si ricalcola
-/// (la release è già nella cache di GitHub se il controllo l'ha letta) e lo zip di GitHub
-/// sostituisce le cartelle. Il record resta CurseForge, con l'id del file che combacia.
+/// A blocked CurseForge project (D13) updated or reinstalled from its GitHub mirror (D34,
+/// issue #163): the CurseForge `latest` file is read again with the project, the mirror is
+/// recomputed (the release is already in GitHub's cache if the check read it) and the GitHub
+/// zip replaces the folders. The record stays CurseForge, with the matching file id.
 #[allow(clippy::too_many_arguments)]
 fn update_from_mirror<T: Transport>(
     target: &UpdateTarget<'_>,
@@ -1162,10 +1163,10 @@ fn update_from_mirror<T: Transport>(
     record_curseforge(record, key, name, &file, folders, Some(note))
 }
 
-/// Registra il file CurseForge `file` installato nelle cartelle `folders` e restituisce l'esito
-/// `updated`, con `note` nel messaggio. Le cartelle sono già sostituite: se il registro non si
-/// salva l'installazione resta riuscita, e il messaggio lo dice. Lo usano il download da
-/// CurseForge e quello dal mirror GitHub (issue #163, poi l'installazione dalla Search).
+/// Records the CurseForge file `file` installed in the folders `folders` and returns the
+/// `updated` outcome, with `note` in the message. The folders are already replaced: if the record
+/// cannot be saved the installation stays successful, and the message says so. Used by the
+/// CurseForge download and the GitHub mirror one (issue #163, then installing from Search).
 pub(crate) fn record_curseforge(
     record: &mut RecordWriter<'_>,
     key: &str,
@@ -1192,15 +1193,15 @@ pub(crate) fn record_curseforge(
     UpdateOutcome::updated(CF, key, name, FileSummary::from(file), message)
 }
 
-/// Le cartelle del file installato che l'aggiornamento può togliere se il nuovo zip non le ha
-/// più. I nomi restituiti sono quelli letti dal disco, mai quelli della risposta di CurseForge.
-/// Una cartella resta se:
-/// - non è più sul disco, o il suo fingerprint non è quello del modulo installato (è stata
-///   modificata o sostituita da un'altra cosa);
-/// - è un modulo del file installato di un altro progetto riconosciuto (una libreria
-///   distribuita da più addon);
-/// - un addon che non fa parte di questo progetto la dichiara tra le dipendenze del `.toc`,
-///   obbligatorie o facoltative (protegge anche gli addon non riconosciuti da CurseForge).
+/// The installed file's folders that the update can remove if the new zip no longer
+/// has them. The returned names are the ones read from disk, never those of CurseForge's response.
+/// A folder stays if:
+/// - it is no longer on disk, or its fingerprint is not that of the installed module (it was
+///   modified or replaced by something else);
+/// - it is a module of another recognized project's installed file (a library
+///   shipped by several addons);
+/// - an addon that is not part of this project declares it among its `.toc` dependencies,
+///   required or optional (this also protects addons CurseForge does not recognize).
 fn removable_modules(
     addons: &[InstalledAddon],
     updates: &[AddonUpdate],
@@ -1239,13 +1240,13 @@ fn removable_modules(
         .collect()
 }
 
-/// Scarica `file`, lo estrae in staging e sostituisce le cartelle. Le cartelle di `old_modules`
-/// che il nuovo zip non contiene vengono tolte nello stesso `replace`. Restituisce le cartelle
-/// dello zip, ora installate.
+/// Downloads `file`, extracts it into staging and replaces the folders. The folders of
+/// `old_modules` the new zip does not contain are removed in the same `replace`. Returns the
+/// zip's folders, now installed.
 ///
-/// `check` riceve le cartelle dello zip dopo l'estrazione e prima di `replace`: se rifiuta,
-/// `AddOns` resta com'era e lo staging si cancella. L'aggiornamento non rifiuta niente;
-/// l'installazione di un addon nuovo (`install_new`) lo usa per le cartelle di altri progetti.
+/// `check` receives the zip's folders after extraction and before `replace`: if it rejects,
+/// `AddOns` stays as it was and the staging is deleted. The update rejects nothing;
+/// installing a new addon (`install_new`) uses it for other projects' folders.
 pub(crate) fn install_file<T: Transport>(
     client: &CurseForgeClient<T>,
     file: &File,
@@ -1258,7 +1259,7 @@ pub(crate) fn install_file<T: Transport>(
     install_bytes(&bytes, addons_dir, old_modules, check, reporter)
 }
 
-/// Scarica lo zip di `file` riportando l'avanzamento: la parte di rete di [`install_file`].
+/// Downloads the zip of `file` reporting progress: the network part of [`install_file`].
 pub(crate) fn download_file<T: Transport>(
     client: &CurseForgeClient<T>,
     file: &File,
@@ -1274,8 +1275,8 @@ pub(crate) fn download_file<T: Transport>(
     Ok(bytes)
 }
 
-/// Estrae lo zip `bytes` in staging e sostituisce le cartelle, come [`install_file`] dopo il
-/// download: lo usano anche le fonti che scaricano con un proprio trasporto.
+/// Extracts the zip `bytes` into staging and replaces the folders, like [`install_file`] after the
+/// download: also used by the sources that download with their own transport.
 pub(crate) fn install_bytes(
     bytes: &[u8],
     addons_dir: &Path,
@@ -1304,7 +1305,7 @@ mod tests {
     use crate::progress;
     use crate::store::InstalledRecord;
 
-    /// `check_updates` con la sola fonte CurseForge e senza record, come prima di D12.
+    /// `check_updates` with only the CurseForge source and no records, as before D12.
     fn cf_check_updates<T: Transport>(
         installation: &Installation,
         client: &CurseForgeClient<T>,
@@ -1319,8 +1320,8 @@ mod tests {
         check_updates(installation, &[&source], &SourceRecords::new())
     }
 
-    /// `update_addons` con la sola fonte CurseForge, i progetti per `mod_id` e il registro nella
-    /// forma CurseForge.
+    /// `update_addons` with only the CurseForge source, the projects by `mod_id` and the record in
+    /// CurseForge form.
     fn cf_update_addons<T: Transport>(
         installation: &Installation,
         client: &CurseForgeClient<T>,
@@ -1343,14 +1344,14 @@ mod tests {
         )
     }
 
-    /// L'opzione Beta e la reinstallazione (issue #148) per [`cf_update_addons_with`].
+    /// The Beta option and the reinstall (issue #148) for [`cf_update_addons_with`].
     #[derive(Clone, Copy)]
     struct Mode {
         allow_beta: bool,
         reinstall: bool,
     }
 
-    /// Come [`cf_update_addons`], con `mode` e l'avanzamento in `progress`.
+    /// Like [`cf_update_addons`], with `mode` and the progress in `progress`.
     fn cf_update_addons_with<T: Transport>(
         installation: &Installation,
         client: &CurseForgeClient<T>,
@@ -1458,7 +1459,7 @@ mod tests {
         }
     }
 
-    /// Una cartella che la scansione non ha potuto elencare, con l'errore vero della scansione.
+    /// A folder the scan could not list, with the scan's real error.
     fn unreadable(folder: &str) -> InstalledAddon {
         let mut addon = addon(folder, None);
         addon.error = Some(scan::unreadable_folder(&std::io::Error::from(
@@ -1481,13 +1482,13 @@ mod tests {
         assert!(matches!(result[1].status, UpdateStatus::Error { .. }));
     }
 
-    /// Il file di EllesmereUI con la cartella `_Camelot` che il calcolo non conta (issue #212):
-    /// l'installato è il 20, il 21 è più recente.
+    /// The EllesmereUI file with the `_Camelot` folder the computation does not count (issue #212):
+    /// the installed one is 20, 21 is newer.
     fn ellesmere(found_partially: bool) -> (FingerprintMatches, Vec<Mod>) {
         let mut published = file(20, "2026-09-01T00:00:00Z", 1, FOREVER, &[1, 2]);
         published.modules[0].name = "EllesmereUI".to_owned();
-        // Il nome nel file e quello della cartella differiscono solo per le maiuscole: il gioco
-        // non le distingue.
+        // The name in the file and the folder's differ only in case: the game
+        // does not distinguish it.
         published.modules[1].name = "ELLESMEREUIFOREVERESSENTIALS".to_owned();
         let found = FingerprintMatch {
             id: 1477613,
@@ -1521,7 +1522,7 @@ mod tests {
             );
             let (main, essentials) = (&result[0], &result[1]);
             assert!(matches!(main.status, UpdateStatus::UpdateAvailable { .. }));
-            // Lo stesso stato, progetto e file delle altre cartelle del progetto.
+            // The same status, project and file as the project's other folders.
             assert_eq!(essentials.status, main.status, "partial: {found_partially}");
             assert_eq!(essentials.source, Some(SourceKind::Curseforge));
             assert_eq!(essentials.project, main.project);
@@ -1547,7 +1548,7 @@ mod tests {
         assert_eq!(result[0].status, UpdateStatus::NotMatched);
         assert_eq!(result[0].source, None);
         assert!(result[0].project.is_none());
-        // Illeggibile davvero: resta un errore anche se un file abbinato elenca la cartella.
+        // Truly unreadable: it stays an error even if a matched file lists the folder.
         assert!(matches!(result[1].status, UpdateStatus::Error { .. }));
         assert!(result[1].project.is_none());
     }
@@ -1557,8 +1558,8 @@ mod tests {
         use crate::addons::toc;
         use crate::test_support::TempDir;
 
-        // Ogni flavor che l'app abbina a un tipo di versione; ogni tipo noto ne ha almeno uno,
-        // così un tipo nuovo senza flavor qui fa fallire il test invece di restare scoperto.
+        // Every flavor the app maps to a version type; every known type has at least one,
+        // so a new type without a flavor here makes the test fail instead of staying uncovered.
         const FLAVORS: [&str; 6] = [
             "_retail_",
             "_classic_era_",
@@ -1625,7 +1626,7 @@ mod tests {
                 }
             }
         }
-        // Il caso della issue #212 c'è davvero: `_Camelot` non entra nel fingerprint.
+        // The case of issue #212 really happens: `_Camelot` does not go into the fingerprint.
         assert!(uncounted > 0);
     }
 
@@ -1675,7 +1676,7 @@ mod tests {
                 }
             }
         );
-        // allowModDistribution assente vale false.
+        // A missing allowModDistribution counts as false.
         assert!(!result[0].project.as_ref().unwrap().allow_mod_distribution);
     }
 
@@ -1696,7 +1697,7 @@ mod tests {
             RETAIL,
             &VersionOverrides::new(),
         );
-        // Senza l'opzione la Beta non è un aggiornamento, ma lo stato la nomina (issue #141).
+        // Without the option the Beta is not an update, but the status names it (issue #141).
         assert!(
             matches!(&result[0].status, UpdateStatus::BetaOnly { latest } if latest.id == 13),
             "{:?}",
@@ -1707,7 +1708,7 @@ mod tests {
     fn beta_match(latest_files: Vec<File>) -> FingerprintMatch {
         FingerprintMatch {
             id: 7,
-            // Il file installato è una Beta.
+            // The installed file is a Beta.
             file: file(10, "2026-09-01T00:00:00Z", 2, FOREVER, &[100]),
             latest_files,
         }
@@ -1734,7 +1735,7 @@ mod tests {
             evaluate_beta(only_beta(), true),
             UpdateStatus::UpdateAvailable { latest } if latest.id == 13
         ));
-        // Appena esiste una Release, anche più vecchia della Beta, l'aggiornamento è quella.
+        // As soon as a Release exists, even one older than the Beta, the update is that one.
         let with_release = beta_match(vec![
             file(13, "2026-10-02T00:00:00Z", 2, FOREVER, &[]),
             file(12, "2026-09-20T00:00:00Z", 1, FOREVER, &[]),
@@ -1743,11 +1744,11 @@ mod tests {
             evaluate_beta(with_release, true),
             UpdateStatus::UpdateAvailable { latest } if latest.id == 12
         ));
-        // L'Alpha non conta mai.
+        // The Alpha never counts.
         let alpha = beta_match(vec![file(15, "2026-10-05T00:00:00Z", 3, FOREVER, &[])]);
         assert_eq!(evaluate_beta(alpha, true), UpdateStatus::UpToDate);
-        // Con una Release per la versione la Beta non conta, nemmeno senza l'opzione: nessun
-        // suggerimento, perché accenderla non cambierebbe niente.
+        // With a Release for the version the Beta does not count, not even without the option: no
+        // suggestion, because turning it on would change nothing.
         let release_installed = FingerprintMatch {
             id: 7,
             file: file(10, "2026-09-01T00:00:00Z", 1, FOREVER, &[100]),
@@ -1760,7 +1761,7 @@ mod tests {
             evaluate_beta(release_installed, false),
             UpdateStatus::UpToDate
         );
-        // La Beta installata è già la più recente.
+        // The installed Beta is already the most recent.
         let same = beta_match(vec![file(10, "2026-09-01T00:00:00Z", 2, FOREVER, &[])]);
         assert_eq!(evaluate_beta(same, true), UpdateStatus::UpToDate);
     }
@@ -1805,7 +1806,7 @@ mod tests {
             &VersionOverrides::new(),
         );
         assert_eq!(result[0].project_folders, ["Details", "Details_Compare2"]);
-        // Non riconosciuta o non leggibile: nessuna cartella del progetto.
+        // Not recognized or not readable: no project folder.
         assert!(result[1].project_folders.is_empty());
         assert!(result[2].project_folders.is_empty());
     }
@@ -1824,7 +1825,7 @@ mod tests {
             partial_matches: vec![found],
             ..FingerprintMatches::default()
         };
-        // DBM-GUI modificata: solo DBM-Core combacia con il file pubblicato.
+        // DBM-GUI modified: only DBM-Core matches the published file.
         let result = evaluate(
             &[addon("DBM-Core", Some(1)), addon("DBM-GUI", Some(99))],
             &partial,
@@ -1839,7 +1840,7 @@ mod tests {
         assert!(
             matches!(&result[0].status, UpdateStatus::UpdateAvailable { latest } if latest.id == 21)
         );
-        // Il fingerprint della cartella modificata non è tra i `modules`: resta sconosciuta.
+        // The modified folder's fingerprint is not among the `modules`: it stays unknown.
         assert_eq!(result[1].status, UpdateStatus::NotMatched);
     }
 
@@ -1855,7 +1856,7 @@ mod tests {
             file: file(30, "2026-10-01T00:00:00Z", 1, RETAIL, &[100, 200]),
             latest_files: Vec::new(),
         };
-        // L'ordine nella risposta non conta: l'esatto vince in entrambi i casi.
+        // The order in the response does not matter: the exact one wins in both cases.
         let both = FingerprintMatches {
             exact_matches: vec![exact],
             partial_matches: vec![partial],
@@ -1870,13 +1871,13 @@ mod tests {
         );
         assert_eq!(result[0].project.as_ref().unwrap().id, 7);
         assert_eq!(result[0].installed_file.as_ref().unwrap().id, 10);
-        // Una cartella presente solo nel match parziale usa quello.
+        // A folder present only in the partial match uses that one.
         assert_eq!(result[1].project.as_ref().unwrap().id, 8);
     }
 
     #[test]
     fn an_override_picks_the_classic_era_file_on_a_forever_installation() {
-        // Un addon che pubblica per Classic Era ma non per Forever.
+        // An addon that publishes for Classic Era but not for Forever.
         let found = || FingerprintMatch {
             id: 7,
             file: file(10, "2026-09-01T00:00:00Z", 1, ERA, &[100]),
@@ -1903,7 +1904,7 @@ mod tests {
             forced[0].status
         );
         assert_eq!(forced[0].version_override, Some(ERA));
-        // Una cartella non riconosciuta non ha una versione forzata.
+        // An unrecognized folder has no forced version.
         assert_eq!(forced[1].status, UpdateStatus::NotMatched);
         assert_eq!(forced[1].version_override, None);
     }
@@ -1940,8 +1941,8 @@ mod tests {
         );
     }
 
-    /// Fissa l'espansione attuale della Classic progressiva: quando cambia, questo test va
-    /// aggiornato insieme a `CLASSIC_PROGRESSIVE`, e il cambio si vede nel diff.
+    /// Pins the current expansion of the progressive Classic: when it changes, this test must be
+    /// updated together with `CLASSIC_PROGRESSIVE`, and the change shows in the diff.
     #[test]
     fn the_progressive_classic_is_mists() {
         assert_eq!(CLASSIC_PROGRESSIVE, 79434);
@@ -1988,7 +1989,7 @@ mod tests {
             }),
             mirror: MirrorStatus::default(),
         };
-        // Senza mirror calcolato i due campi nuovi ci sono, entrambi `null`.
+        // Without a computed mirror the two new fields are there, both `null`.
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(json["githubMirror"], serde_json::Value::Null);
         assert_eq!(json["githubMirrorReason"], serde_json::Value::Null);
@@ -2053,16 +2054,16 @@ mod tests {
 
         const API: &str = "https://api.curseforge.com";
 
-        /// Trasporto finto che risponde per URL e registra le richieste.
+        /// Fake transport that answers by URL and records the requests.
         #[derive(Default)]
         struct Routes {
             fingerprints: String,
             mods: String,
             files: HashMap<String, String>,
-            /// La risposta di `POST /v1/mods/files`; senza, 404.
+            /// The response of `POST /v1/mods/files`; without it, 404.
             file_list: Option<String>,
             zips: HashMap<String, Vec<u8>>,
-            /// Condiviso con il test, che non può rileggere il trasporto dal client.
+            /// Shared with the test, which cannot read the transport back from the client.
             log: Arc<Log>,
         }
 
@@ -2136,7 +2137,7 @@ mod tests {
             writer.finish().unwrap().into_inner()
         }
 
-        /// Un addon con `.toc` e un `.lua`: il contenuto lo rende riconoscibile.
+        /// An addon with a `.toc` and a `.lua`: the content makes it recognizable.
         fn write_addon(addons: &Path, folder: &str, content: &str) {
             let dir = addons.join(folder);
             fs::create_dir_all(&dir).unwrap();
@@ -2196,7 +2197,7 @@ mod tests {
             }
         }
 
-        /// Un progetto installato (file 10·id) con un file più recente (11·id), se `newer`.
+        /// An installed project (file 10·id) with a newer file (11·id), if `newer`.
         fn installed(fx: &Fixture, mod_id: u32, folders: &[&str], newer: bool) -> Value {
             let modules: Vec<(&str, u32)> =
                 folders.iter().map(|f| (*f, fx.fingerprints[*f])).collect();
@@ -2222,7 +2223,7 @@ mod tests {
             VersionOverrides::new()
         }
 
-        /// `update_addons` senza registro, per i test che non lo guardano.
+        /// `update_addons` without a record, for the tests that do not look at it.
         fn update_without_record<T: Transport>(
             installation: &Installation,
             client: &CurseForgeClient<T>,
@@ -2304,12 +2305,12 @@ mod tests {
                 fs::read_to_string(fx.addons.join("Other").join("Other.lua")).unwrap(),
                 "other"
             );
-            // Nessuna cartella di lavoro rimasta accanto ad AddOns.
+            // No working folder left next to AddOns.
             assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
         }
 
-        /// Un addon installato in parte (manca una cartella del file pubblicato) arriva solo in
-        /// `partialMatches`: si riconosce e si aggiorna come uno esatto.
+        /// A partially installed addon (a folder of the published file is missing) arrives only in
+        /// `partialMatches`: it is recognized and updated like an exact one.
         #[test]
         fn a_partially_installed_addon_is_updated() {
             let fx = fixture(&[("Beta", "beta v1"), ("Other", "other")]);
@@ -2364,8 +2365,8 @@ mod tests {
                 ("Unknown", "unknown"),
             ]);
             let fp = |folder: &str| fx.fingerprints[folder];
-            // Dopo l'installazione: una cartella tolta a mano, una modificata, e un addon non
-            // riconosciuto che dipende da una libreria del progetto.
+            // After the installation: a folder removed by hand, a modified one, and an
+            // unrecognized addon that depends on a library of the project.
             fs::remove_dir_all(fx.addons.join("Alpha_Gone")).unwrap();
             fs::write(
                 fx.addons.join("Alpha_Edited").join("Alpha_Edited.lua"),
@@ -2383,7 +2384,7 @@ mod tests {
                 ("Alpha_Edited", fp("Alpha_Edited")),
                 ("Alpha_Lib", fp("Alpha_Lib")),
                 ("Alpha_Plain", fp("Alpha_Plain")),
-                // Un nome che esce da AddOns non diventa mai un percorso da togliere.
+                // A name that leaves AddOns never becomes a path to remove.
                 ("../Unknown", fp("Unknown")),
             ];
             let current = file_json(1, 10, "2026-09-01T00:00:00Z", &modules);
@@ -2493,7 +2494,7 @@ mod tests {
                         json!({ "data": no_link }).to_string(),
                     ),
                 ]),
-                // Gamma (31) non ha uno zip: la CDN risponde 404.
+                // Gamma (31) has no zip: the CDN answers 404.
                 zips: HashMap::from([(
                     download_url(11),
                     zip_of(&[("Alpha/Alpha.lua", "alpha v2")]),
@@ -2516,7 +2517,7 @@ mod tests {
             )
             .unwrap();
 
-            // Solo l'installazione riuscita è registrata, con le cartelle dello zip.
+            // Only the successful installation is recorded, with the zip's folders.
             assert_eq!(
                 records,
                 [(
@@ -2581,14 +2582,14 @@ mod tests {
                     .contains("download link")
             );
 
-            // Beta (non distribuibile) non è mai stato chiesto né scaricato; Eps (senza
-            // link) non è stato scaricato.
+            // Beta (not distributable) was never requested or downloaded; Eps (no
+            // link) was not downloaded.
             let gets = log.gets.lock().unwrap().clone();
             assert!(!gets.iter().any(|u| u.contains("/mods/2/")), "{gets:?}");
             let downloads = log.downloads.lock().unwrap().clone();
             assert_eq!(downloads, [download_url(31), download_url(11)]);
 
-            // L'errore su Gamma non ha toccato niente; Alpha è aggiornato.
+            // The error on Gamma touched nothing; Alpha is up to date.
             assert_eq!(
                 fs::read_to_string(fx.addons.join("Gamma").join("Gamma.lua")).unwrap(),
                 "gamma"
@@ -2600,14 +2601,14 @@ mod tests {
             assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
         }
 
-        // ── Reinstallazione (issue #148) ────────────────────────────────────
+        // ── Reinstall (issue #148) ──────────────────────────────────────────
 
         const REINSTALL: Mode = Mode {
             allow_beta: false,
             reinstall: true,
         };
 
-        /// Un progetto aggiornato con il file `id` installato, la sua risposta e il suo zip.
+        /// An up-to-date project with file `id` installed, its response and its zip.
         fn up_to_date(fx: &Fixture, mod_id: u32, folder: &str, release_type: u8) -> (Value, Value) {
             let mut current = file_json(
                 mod_id,
@@ -2650,11 +2651,11 @@ mod tests {
             );
             let log = Arc::clone(&routes.log);
             let client = client(routes);
-            // Un file estraneo, fuori dal fingerprint: la reinstallazione rimette la cartella com'è
-            // nello zip.
+            // A stray file, outside the fingerprint: the reinstall puts the folder back as it is
+            // in the zip.
             fs::write(fx.addons.join("Alpha").join("Junk.txt"), "junk").unwrap();
 
-            // Senza reinstall: già aggiornato, niente scaricato.
+            // Without reinstall: already up to date, nothing downloaded.
             let outcomes =
                 update_without_record(&fx.installation, &client, &no_overrides(), &[1]).unwrap();
             assert_eq!(outcomes[0].status, OutcomeStatus::Skipped);
@@ -2692,10 +2693,10 @@ mod tests {
                     }
                 )]
             );
-            // La cartella è quella dello zip: il file estraneo non c'è più.
+            // The folder is the zip's: the stray file is gone.
             assert_eq!(names(&fx.addons.join("Alpha")), ["Alpha.lua", "Alpha.toc"]);
             assert_eq!(names(&fx.addons), ["Alpha", "Other"]);
-            // L'avanzamento è quello di un aggiornamento.
+            // The progress is that of an update.
             let phases: Vec<Phase> = phases
                 .into_inner()
                 .unwrap()
@@ -2823,7 +2824,7 @@ mod tests {
                 .remove(0)
             };
 
-            // Senza l'opzione la regola unica non sceglie la Beta: niente da reinstallare.
+            // Without the option the single rule does not pick the Beta: nothing to reinstall.
             let off = reinstall(false);
             assert_eq!(off.status, OutcomeStatus::Skipped);
             assert_eq!(
@@ -2838,8 +2839,8 @@ mod tests {
             assert_eq!(*log.downloads.lock().unwrap(), [download_url(10)]);
         }
 
-        /// Una Beta installata con l'opzione accesa, poi spenta, e una Release più vecchia: la
-        /// regola sceglie la Release, ma reinstallarla tornerebbe indietro.
+        /// A Beta installed with the option on, then turned off, and an older Release: the
+        /// rule picks the Release, but reinstalling it would go backwards.
         #[test]
         fn reinstall_never_downgrades() {
             let fx = fixture(&[("Alpha", "alpha")]);
@@ -2877,7 +2878,7 @@ mod tests {
             assert!(log.downloads.lock().unwrap().is_empty());
         }
 
-        /// Con l'opzione spenta e una Beta più recente dell'installato il motivo la nomina.
+        /// With the option off and a Beta newer than the installed one the reason names it.
         #[test]
         fn reinstall_names_a_newer_beta_when_the_option_is_off() {
             let fx = fixture(&[("Alpha", "alpha")]);
@@ -2936,7 +2937,7 @@ mod tests {
         #[test]
         fn update_follows_the_stored_override() {
             let fx = fixture(&[("Alpha", "alpha v1")]);
-            // Installato un file Retail; il più recente è solo Classic Era.
+            // A Retail file installed; the most recent is Classic Era only.
             let mut current = installed(&fx, 1, &["Alpha"], false);
             let mut era = file_json(1, 11, "2026-10-01T00:00:00Z", &[]);
             era["sortableGameVersions"] =
@@ -2972,10 +2973,10 @@ mod tests {
             );
         }
 
-        // ── Ripiego sui record (issue #216) ─────────────────────────────────
+        // ── Fallback to the records (issue #216) ────────────────────────────
 
-        /// Un'installazione WoW Forever con `Ess`, che ha solo un `.toc` `_Camelot` e quindi
-        /// nessun fingerprint, e `Plain`, con un fingerprint che CurseForge non conosce.
+        /// A WoW Forever installation with `Ess`, which has only a `_Camelot` `.toc` and so
+        /// no fingerprint, and `Plain`, with a fingerprint CurseForge does not know.
         fn forever_fixture() -> Fixture {
             let tmp = TempDir::new();
             let path = tmp.path().join("World of Warcraft").join("_forever_");
@@ -3016,7 +3017,7 @@ mod tests {
             file
         }
 
-        /// Il progetto 77 con il file installato 770 e, se `newer`, il 771 più recente.
+        /// Project 77 with installed file 770 and, if `newer`, the newer 771.
         fn recorded_routes(newer: bool) -> Routes {
             let installed = forever_file(77, 770, "2026-09-01T00:00:00Z", &[("Ess", 5)]);
             let latest = if newer {
@@ -3095,7 +3096,7 @@ mod tests {
                 } else {
                     assert_eq!(ess.status, UpdateStatus::UpToDate);
                 }
-                // Il record non riguarda `Plain`: resta non riconosciuta.
+                // The record does not concern `Plain`: it stays unrecognized.
                 assert_eq!(
                     status_of(&updates, "Plain").status,
                     UpdateStatus::NotMatched
@@ -3146,7 +3147,7 @@ mod tests {
                     {"id": 77, "name": "Ess", "allowModDistribution": true},
                 ]})
                 .to_string(),
-                // `POST /v1/mods/files` risponde 404.
+                // `POST /v1/mods/files` answers 404.
                 file_list: None,
                 ..Routes::default()
             };
@@ -3160,7 +3161,7 @@ mod tests {
                     .unwrap()
                     .contains(&format!("{API}/v1/mods/files"))
             );
-            // Il controllo non fallisce e il fingerprint vale come prima del ripiego.
+            // The check does not fail and the fingerprint applies as before the fallback.
             let plain = status_of(&updates, "Plain");
             assert_eq!(plain.project.as_ref().map(|p| p.id), Some(1));
             assert!(matches!(plain.status, UpdateStatus::UpdateAvailable { .. }));
@@ -3221,7 +3222,7 @@ mod tests {
             };
             let log = Arc::clone(&routes.log);
             let client = client(routes);
-            // Un record di un altro progetto nomina `Plain`: il fingerprint decide.
+            // A record of another project names `Plain`: the fingerprint decides.
             let records = SourceRecords::from([(
                 SourceKind::Curseforge,
                 ProjectRecords::from([(
@@ -3236,7 +3237,7 @@ mod tests {
             let plain = status_of(&updates, "Plain");
             assert_eq!(plain.project.as_ref().map(|p| p.id), Some(1));
             assert_eq!(plain.status, UpdateStatus::UpToDate);
-            // Nessuna cartella da ripescare: i file dei record non si leggono.
+            // No folder to recover: the records' files cannot be read.
             assert!(
                 !log.posts
                     .lock()
@@ -3367,16 +3368,16 @@ mod tests {
             );
         }
 
-        /// Aggiorna davvero gli addon di un'installazione reale: **modifica `Interface/AddOns`**,
-        /// quindi conviene fare prima un backup. Lo lancia l'utente, a mano, con la chiave
-        /// dell'ambiente (o di `.env` in debug), il percorso della cartella `_<flavor>_` e i
-        /// progetti da aggiornare separati da virgole:
+        /// Really updates the addons of a real installation: **modifies `Interface/AddOns`**,
+        /// so it is worth making a backup first. The user runs it, by hand, with the key
+        /// from the environment (or from `.env` in debug), the path of the `_<flavor>_` folder and
+        /// the projects to update separated by commas:
         ///
-        /// `WOW_DON_LIVE_INSTALL=<cartella-_flavor_> WOW_DON_LIVE_MOD_IDS=61284 cargo test --manifest-path src-tauri/Cargo.toml live_update_addons -- --ignored --nocapture`
+        /// `WOW_DON_LIVE_INSTALL=<_flavor_-folder> WOW_DON_LIVE_MOD_IDS=61284 cargo test --manifest-path src-tauri/Cargo.toml live_update_addons -- --ignored --nocapture`
         ///
-        /// Senza `WOW_DON_LIVE_MOD_IDS` stampa solo i progetti con un aggiornamento.
+        /// Without `WOW_DON_LIVE_MOD_IDS` it prints only the projects with an update.
         #[test]
-        #[ignore = "usa la rete, la chiave CurseForge reale e modifica un'installazione reale"]
+        #[ignore = "uses the network, the real CurseForge key and modifies a real installation"]
         fn live_update_addons() {
             use crate::sources::curseforge::ReqwestTransport;
 
@@ -3426,7 +3427,7 @@ mod tests {
                 json,
                 json!({"modId": 7, "source": "curseforge", "key": "7", "name": "Foo", "status": "skipped", "message": "why"})
             );
-            // Le altre fonti non hanno un id CurseForge.
+            // The other sources have no CurseForge id.
             let json = serde_json::to_value(UpdateOutcome::skipped(
                 SourceKind::Github,
                 "owner/repo",
@@ -3457,8 +3458,8 @@ mod tests {
             assert_eq!(serde_json::to_value(OutcomeStatus::Error).unwrap(), "error");
         }
 
-        /// Una fonte finta: reclama le cartelle di `claims` con un progetto proprio, oppure
-        /// fallisce; ricorda le cartelle che le sono state offerte.
+        /// A fake source: claims the folders in `claims` with a project of its own, or
+        /// fails; remembers the folders that were offered to it.
         struct FakeSource {
             kind: SourceKind,
             claims: Vec<&'static str>,
@@ -3585,7 +3586,7 @@ mod tests {
                 ]
             );
             assert_eq!(updates[2].status, UpdateStatus::NotMatched);
-            // Una cartella reclamata non si offre alla fonte successiva.
+            // A claimed folder is not offered to the next source.
             assert_eq!(first.offered(), ["Alpha", "Beta", "Gamma"]);
             assert_eq!(second.offered(), ["Beta", "Gamma"]);
         }
@@ -3624,7 +3625,7 @@ mod tests {
                 [("Alpha", Some(SourceKind::Curseforge)), ("Beta", None)]
             );
             assert_eq!(refresh.check_error, None);
-            // Le cartelle sono state offerte una volta sola: una scansione, un controllo.
+            // The folders were offered only once: one scan, one check.
             assert_eq!(first.offered(), ["Alpha", "Beta"]);
         }
 
@@ -3668,7 +3669,7 @@ mod tests {
             let fx = fixture(&[("Alpha", "a"), ("Beta", "b")]);
             let first = FakeSource::new(SourceKind::Curseforge, &["Alpha", "Beta"]);
             let second = FakeSource::new(SourceKind::Github, &["Alpha"]);
-            // Il record nomina la cartella con maiuscole diverse da quelle del disco.
+            // The record names the folder with a different case from the one on disk.
             let records = record_of(SourceKind::Github, "owner/alpha", &["ALPHA"]);
             let updates = check_updates(&fx.installation, &[&first, &second], &records).unwrap();
             assert_eq!(
@@ -3715,8 +3716,8 @@ mod tests {
             );
         }
 
-        /// Una fonte che segna ogni cartella offerta come illeggibile, come fa CurseForge con una
-        /// cartella senza fingerprint.
+        /// A source that marks every offered folder as unreadable, as CurseForge does with a
+        /// folder without a fingerprint.
         struct ErrorPerFolder;
 
         impl Source for ErrorPerFolder {
@@ -3760,7 +3761,7 @@ mod tests {
             .unwrap();
             assert_eq!(tukui.offered(), ["ElvUI", "Other"]);
             assert_eq!(updates[0].source, Some(SourceKind::Tukui));
-            // Nessuno riconosce `Other`: resta l'errore della prima fonte.
+            // Nobody recognizes `Other`: the first source's error stays.
             assert_eq!(updates[1].source, None);
             assert_eq!(
                 updates[1].status,
@@ -3781,7 +3782,7 @@ mod tests {
             );
         }
 
-        /// CurseForge senza chiave, come nell'app senza `CURSEFORGE_API_KEY` (#123).
+        /// CurseForge without a key, as in the app without `CURSEFORGE_API_KEY` (#123).
         fn keyless() -> CurseForgeClient<Routes> {
             CurseForgeClient::new(Routes::default(), None)
         }
@@ -3810,7 +3811,7 @@ mod tests {
             .unwrap();
             assert_eq!(updates[1].source, Some(SourceKind::Tukui));
             assert_eq!(updates[1].status, UpdateStatus::UpToDate);
-            // La cartella che nessuna fonte libera riconosce dice perché.
+            // The folder no free source recognizes says why.
             assert_eq!(updates[0].source, None);
             assert_eq!(
                 updates[0].status,
@@ -3862,9 +3863,9 @@ mod tests {
 
         #[test]
         fn without_a_key_a_folder_recorded_for_curseforge_stays_with_curseforge() {
-            // D33: il record dice da dove l'app ha installato la cartella, e vince anche
-            // quando quella fonte non può controllare. Darla a Tukui farebbe aggiornare da
-            // un'altra fonte un progetto installato da CurseForge.
+            // D33: the record says where the app installed the folder from, and it wins even
+            // when that source cannot check. Giving it to Tukui would have a project installed
+            // from CurseForge updated from another source.
             let fx = fixture(&[("ElvUI", "e")]);
             let client = keyless();
             let overrides = no_overrides();
@@ -3940,7 +3941,7 @@ mod tests {
                 &crate::progress::ignore,
             )
             .unwrap();
-            // Il progetto ripetuto si aggiorna una volta; la fonte assente salta.
+            // The repeated project is updated once; the absent source is skipped.
             assert_eq!(written, [(SourceKind::Tukui, "-2".to_owned())]);
             let summary: Vec<(SourceKind, &str, Option<&str>)> = outcomes
                 .iter()
@@ -3959,7 +3960,7 @@ mod tests {
             );
         }
 
-        // ── Mirror GitHub dei progetti bloccati (D34, issue #163) ───────────
+        // ── GitHub mirror of blocked projects (D34, issue #163) ─────────────
 
         mod mirror {
             use super::*;
@@ -3969,13 +3970,13 @@ mod tests {
             const REPO: &str = "owner/Alpha";
             const SOURCE_URL: &str = "https://github.com/owner/Alpha";
 
-            /// GitHub finto: le release per URL dell'API, gli zip per URL, e le richieste fatte.
-            /// Nessun `release.json`: il sito dà solo il tag, gli asset vengono dall'API.
+            /// Fake GitHub: the releases by API URL, the zips by URL, and the requests made.
+            /// No `release.json`: the site gives only the tag, the assets come from the API.
             #[derive(Default)]
             struct Hub {
-                /// `releases/latest` sul sito → `Location`, quando l'API non basta a dirlo.
+                /// `releases/latest` on the site → `Location`, when the API is not enough to tell.
                 redirects: HashMap<String, String>,
-                /// URL dell'API → (stato, corpo, richieste rimaste).
+                /// API URL → (status, body, remaining requests).
                 api: HashMap<String, (u16, String, u64)>,
                 zips: HashMap<String, Vec<u8>>,
                 calls: Arc<Mutex<Vec<String>>>,
@@ -3987,7 +3988,7 @@ mod tests {
                     reply(None)
                 }
 
-                /// Il tag della release che l'API elenca per lo stesso repository; senza, 404.
+                /// The tag of the release the API lists for the same repository; without it, 404.
                 fn get_redirect(&self, url: &str) -> Result<RedirectResponse, TransportError> {
                     self.calls.lock().unwrap().push(url.to_owned());
                     let repo = url.trim_end_matches("/releases/latest");
@@ -4042,8 +4043,8 @@ mod tests {
                 format!("https://api.github.com/repos/{REPO}/releases/latest")
             }
 
-            /// Le letture di una release senza `release.json`: il tag dal sito, il `release.json`
-            /// che manca, gli asset dall'API.
+            /// The reads of a release without `release.json`: the tag from the site, the missing
+            /// `release.json`, the assets from the API.
             fn release_reads(tag: &str) -> [String; 3] {
                 [
                     format!("https://github.com/{REPO}/releases/latest"),
@@ -4056,7 +4057,7 @@ mod tests {
                 format!("https://github.com/{REPO}/releases/download/{tag}/Alpha-{tag}.zip")
             }
 
-            /// Un GitHub con l'ultima release `tag` e il suo unico zip `zip`.
+            /// A GitHub with latest release `tag` and its only zip `zip`.
             fn hub(tag: &str, zip: Vec<u8>) -> Hub {
                 let body = json!({"tag_name": tag, "assets": [
                     {"name": format!("Alpha-{tag}.zip"), "browser_download_url": asset_url(tag)}
@@ -4068,20 +4069,20 @@ mod tests {
                 }
             }
 
-            /// Un progetto bloccato che dichiara il repository GitHub.
+            /// A blocked project that declares the GitHub repository.
             fn blocked(mod_id: u32, name: &str) -> Value {
                 json!({"id": mod_id, "name": name, "allowModDistribution": false,
                        "links": {"sourceUrl": SOURCE_URL}})
             }
 
-            /// Il file CurseForge `id` senza link di download, come per i progetti bloccati.
+            /// The CurseForge file `id` without a download link, as for blocked projects.
             fn blocked_file(mod_id: u32, id: u32, date: &str, modules: &[(&str, u32)]) -> Value {
                 let mut file = file_json(mod_id, id, date, modules);
                 file["downloadUrl"] = Value::Null;
                 file
             }
 
-            /// Le risposte CurseForge di un progetto installato (file 10) con l'aggiornamento 11.
+            /// The CurseForge responses of an installed project (file 10) with update 11.
             fn routes(fx: &Fixture, project: Value) -> Routes {
                 Routes {
                     fingerprints: json!({"data": {"exactMatches": [
@@ -4195,7 +4196,7 @@ mod tests {
                         "Installed from GitHub (owner/Alpha 11): CurseForge blocks third-party downloads."
                     )
                 );
-                // Il record resta CurseForge, con l'id del file che combacia.
+                // The record stays CurseForge, with the matching file id.
                 assert_eq!(
                     written,
                     [(
@@ -4211,8 +4212,8 @@ mod tests {
                     fs::read_to_string(fx.addons.join("Alpha").join("Alpha.lua")).unwrap(),
                     "alpha v2"
                 );
-                // Niente dalla CDN di CurseForge; da GitHub una lettura della release (riusata
-                // tra controllo e aggiornamento) e lo zip.
+                // Nothing from CurseForge's CDN; from GitHub one read of the release (reused
+                // between check and update) and the zip.
                 assert!(cf_log.downloads.lock().unwrap().is_empty());
                 let calls = calls.lock().unwrap().clone();
                 let mut expected = release_reads("11").to_vec();
@@ -4222,9 +4223,9 @@ mod tests {
 
             #[test]
             fn mirrors_are_resolved_after_the_github_source_checks() {
-                // Un progetto GitHub registrato e un progetto CurseForge bloccato: la release del
-                // primo si legge prima di quella del mirror, così il limite di 60 richieste l'ora
-                // non lo consumano i mirror (finding della review su PR #173).
+                // A registered GitHub project and a blocked CurseForge project: the first one's
+                // release is read before the mirror's, so the limit of 60 requests an hour
+                // is not used up by the mirrors (review finding on PR #173).
                 let fx = fixture(&[("Alpha", "alpha v1"), ("Gamma", "gamma")]);
                 let client = client(routes(&fx, blocked(1, "Alpha")));
                 let mut hub = hub("11", alpha_zip("x"));
@@ -4365,7 +4366,7 @@ mod tests {
                 let calls = Arc::clone(&hub.calls);
                 let github = GithubSource::new(hub);
 
-                // Aggiornato: il controllo non chiede niente a GitHub.
+                // Up to date: the check asks GitHub for nothing.
                 let updates = check(&fx, &client, &github);
                 assert_eq!(updates[0].status, UpdateStatus::UpToDate);
                 assert_eq!(updates[0].mirror, MirrorStatus::default());
@@ -4396,8 +4397,8 @@ mod tests {
             fn the_rate_limit_is_a_reason_not_an_error() {
                 let fx = fixture(&[("Alpha", "alpha v1")]);
                 let client = client(routes(&fx, blocked(1, "Alpha")));
-                // Il tag combacia; senza `release.json` lo zip si sceglie dall'API, che risponde
-                // con il limite.
+                // The tag matches; without `release.json` the zip is picked from the API, which
+                // answers with the limit.
                 let hub = Hub {
                     redirects: HashMap::from([(
                         format!("https://github.com/{REPO}/releases/latest"),

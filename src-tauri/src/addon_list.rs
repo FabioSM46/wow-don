@@ -1,11 +1,11 @@
-//! La stringa di import/export degli addon di un'installazione (issue #133).
+//! The import/export string for an installation's addons (issue #133).
 //!
-//! Formato: `WOWDON1:` seguito da base64url senza padding di un JSON
+//! Format: `WOWDON1:` followed by unpadded base64url of a JSON
 //! `{ "v": 1, "flavor": "...", "addons": [{ "source": "curseforge", "key": "1234", "name": "...",
-//! "versionType": 517 }] }`. La stringa è un dato che altri incollano, quindi non fidato: porta
-//! solo fonte, chiave, nome e tipo di versione del gioco, mai percorsi o URL, e si legge con
-//! limiti di dimensione e di voci. Una voce non valida si salta e si riporta; tutto il resto
-//! vale.
+//! "versionType": 517 }] }`. The string is data that others paste, hence untrusted: it carries
+//! only source, key, name and game version type, never paths or URLs, and it is read with
+//! limits on size and on entries. An invalid entry is skipped and reported; everything else
+//! stands.
 
 use std::collections::HashSet;
 
@@ -16,40 +16,40 @@ use crate::addons::scan::ListedAddon;
 use crate::store::{SourceKind, SourceRecords};
 use crate::updates::{Refresh, VersionOverrides, is_known_version_type};
 
-/// Il prefisso della versione 1 del formato.
+/// The prefix of version 1 of the format.
 pub const PREFIX: &str = "WOWDON1:";
-/// La versione del JSON dentro la stringa.
+/// The version of the JSON inside the string.
 const FORMAT_VERSION: u64 = 1;
-/// La stringa più lunga accettata, in byte, dopo aver tolto gli spazi intorno.
+/// The longest accepted string, in bytes, after trimming surrounding whitespace.
 pub const MAX_TEXT_BYTES: usize = 64 * 1024;
-/// Il numero massimo di voci di una stringa.
+/// The maximum number of entries in a string.
 pub const MAX_ENTRIES: usize = 1000;
 const MAX_KEY_CHARS: usize = 64;
 const MAX_NAME_CHARS: usize = 200;
 const MAX_FLAVOR_CHARS: usize = 64;
 
-/// Un progetto della stringa.
+/// A project in the string.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListEntry {
     pub source: SourceKind,
     pub key: String,
     pub name: String,
-    /// La versione del gioco forzata per il progetto, se c'è (`gameVersionTypeId`).
+    /// The game version forced for the project, if any (`gameVersionTypeId`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version_type: Option<u32>,
 }
 
-/// Gli addon di un'installazione, come viaggiano nella stringa.
+/// An installation's addons, as they travel in the string.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AddonList {
     pub v: u64,
-    /// Il flavor dell'installazione da cui viene (`retail`, `classic_era`, ...).
+    /// The flavor of the installation it comes from (`retail`, `classic_era`, ...).
     pub flavor: String,
     pub addons: Vec<ListEntry>,
 }
 
-/// Una voce della stringa che non si è potuta leggere: la posizione (da 1) e il motivo.
+/// An entry of the string that could not be read: the position (from 1) and the reason.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InvalidEntry {
@@ -57,24 +57,24 @@ pub struct InvalidEntry {
     pub reason: String,
 }
 
-/// Il risultato di [`decode`]: le voci valide e quelle saltate.
+/// The result of [`decode`]: the valid entries and the skipped ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decoded {
     pub list: AddonList,
     pub invalid: Vec<InvalidEntry>,
 }
 
-/// La stringa di `list`.
+/// The string for `list`.
 pub fn encode(list: &AddonList) -> String {
-    // Un `AddonList` ha solo stringhe, numeri e fonti note: la serializzazione non può fallire.
+    // An `AddonList` has only strings, numbers and known sources: serialization cannot fail.
     let json = serde_json::to_vec(list).unwrap_or_default();
     format!("{PREFIX}{}", base64url_encode(&json))
 }
 
-/// Legge una stringa incollata. Rifiuta tutta la stringa se il prefisso, la versione, la base64
-/// o il JSON non vanno, o se supera i limiti; una voce non valida invece si salta e finisce in
-/// `invalid`. Una voce ripetuta (stessa fonte e chiave) vale una volta sola. Un `versionType`
-/// che l'app non conosce si ignora: il progetto si installa con la versione dell'installazione.
+/// Reads a pasted string. Rejects the whole string if the prefix, the version, the base64
+/// or the JSON are wrong, or if it exceeds the limits; an invalid entry instead is skipped and
+/// ends up in `invalid`. A repeated entry (same source and key) counts only once. A `versionType`
+/// the app does not know is ignored: the project installs with the installation's version.
 pub fn decode(text: &str) -> Result<Decoded, String> {
     let text = text.trim();
     if text.is_empty() {
@@ -150,7 +150,7 @@ pub fn decode(text: &str) -> Result<Decoded, String> {
     })
 }
 
-/// `WOWDON<n>:` con `n` diverso da 1: una stringa di un formato futuro.
+/// `WOWDON<n>:` with `n` other than 1: a string in a future format.
 fn is_newer_prefix(text: &str) -> bool {
     text.strip_prefix("WOWDON")
         .and_then(|rest| rest.split_once(':'))
@@ -199,33 +199,33 @@ fn read_entry(entry: &Value) -> Result<ListEntry, String> {
     Ok(ListEntry {
         source,
         key: key.to_owned(),
-        // I caratteri di controllo non servono in un nome e confonderebbero l'interfaccia.
+        // Control characters have no use in a name and would confuse the interface.
         name: name.chars().filter(|c| !c.is_control()).collect(),
         version_type,
     })
 }
 
-/// Un addon esportato, per il riepilogo nel frontend.
+/// An exported addon, for the summary in the frontend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Export {
     pub text: String,
     pub exported: Vec<ListEntry>,
-    /// Le cartelle che nessun progetto riconosce (per esempio addon installati da zip): non si
-    /// possono riscaricare, quindi non entrano nella stringa.
+    /// The folders no project recognizes (for example addons installed from a zip): they cannot
+    /// be downloaded again, so they do not go into the string.
     pub skipped: Vec<String>,
-    /// Perché il controllo non è riuscito, se è fallito: senza controllo un progetto si riconosce
-    /// solo dai record dell'app, quindi `skipped` può contenere cartelle che hanno un progetto.
+    /// Why the check did not succeed, if it failed: without a check a project is recognized only
+    /// from the app's records, so `skipped` may contain folders that do have a project.
     pub check_error: Option<String>,
 }
 
-/// La lista di un'installazione dai risultati di una scansione (`refresh`) e dai record
-/// dell'app (`records`). Un progetto riconosciuto dal controllo entra con il suo nome e la sua
-/// versione forzata; un progetto registrato che il controllo non ha riconosciuto (per esempio
-/// CurseForge senza chiave) entra se almeno una sua cartella è ancora sul disco. Le cartelle
-/// che nessun progetto copre restano in `skipped`, per nome. Una voce esce con gli stessi limiti
-/// che [`decode`] controlla: un nome troppo lungo si accorcia, una chiave non valida resta fuori
-/// e le sue cartelle finiscono in `skipped`, così ogni stringa esportata si rilegge per intero.
+/// An installation's list from the results of a scan (`refresh`) and from the app's records
+/// (`records`). A project recognized by the check goes in with its name and its forced
+/// version; a recorded project the check did not recognize (for example CurseForge without a
+/// key) goes in if at least one of its folders is still on disk. Folders no project covers
+/// stay in `skipped`, by name. An entry goes out within the same limits [`decode`] checks: a
+/// name that is too long is shortened, an invalid key stays out and its folders end up in
+/// `skipped`, so every exported string reads back in full.
 pub fn export_list(
     flavor: &str,
     refresh: &Refresh,
@@ -285,8 +285,8 @@ pub fn export_list(
                         .filter(|title| !title.is_empty())
                         .unwrap_or(&first.addon.folder),
                 ),
-                // Il controllo non ha riconosciuto il progetto, quindi la sua versione forzata
-                // si legge dalle impostazioni (solo CurseForge ne ha).
+                // The check did not recognize the project, so its forced version is read from
+                // the settings (only CurseForge has one).
                 version_type: (*source == SourceKind::Curseforge)
                     .then(|| key.parse::<u32>().ok())
                     .flatten()
@@ -315,7 +315,7 @@ pub fn export_list(
     }
 }
 
-/// Una chiave che [`decode`] accetta per la fonte.
+/// A key that [`decode`] accepts for the source.
 fn exportable_key(source: SourceKind, key: &str) -> bool {
     !key.trim().is_empty()
         && key == key.trim()
@@ -324,8 +324,8 @@ fn exportable_key(source: SourceKind, key: &str) -> bool {
         && (source != SourceKind::Curseforge || key.parse::<u32>().is_ok())
 }
 
-/// Il nome come [`decode`] lo rilegge: senza caratteri di controllo né spazi ai lati, entro
-/// [`MAX_NAME_CHARS`].
+/// The name as [`decode`] reads it back: without control characters or surrounding spaces,
+/// within [`MAX_NAME_CHARS`].
 fn exportable_name(name: &str) -> String {
     let clean: String = name.chars().filter(|c| !c.is_control()).collect();
     clean
@@ -345,7 +345,7 @@ fn folder_named<'a>(addons: &'a [ListedAddon], folder: &str) -> Option<&'a Liste
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-/// Base64url (RFC 4648, sezione 5) senza padding.
+/// Base64url (RFC 4648, section 5) without padding.
 fn base64url_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
@@ -363,9 +363,8 @@ fn base64url_encode(data: &[u8]) -> String {
     out
 }
 
-/// L'inverso di [`base64url_encode`]. Accetta il padding `=` finale (alcuni strumenti lo
-/// aggiungono) e niente altro: un carattere fuori dall'alfabeto o una lunghezza impossibile
-/// danno `None`.
+/// The inverse of [`base64url_encode`]. Accepts trailing `=` padding (some tools add it) and
+/// nothing else: a character outside the alphabet or an impossible length gives `None`.
 fn base64url_decode(text: &str) -> Option<Vec<u8>> {
     let text = text.trim_end_matches('=');
     if text.len() % 4 == 1 {
@@ -391,7 +390,7 @@ fn base64url_decode(text: &str) -> Option<Vec<u8>> {
             buffer &= (1 << bits) - 1;
         }
     }
-    // I bit avanzati devono essere zero, come li scrive un codificatore corretto.
+    // The leftover bits must be zero, as a correct encoder writes them.
     if buffer != 0 {
         return None;
     }
@@ -421,7 +420,7 @@ mod tests {
 
     #[test]
     fn base64url_matches_the_rfc_vectors() {
-        // RFC 4648, sezione 10, senza padding.
+        // RFC 4648, section 10, without padding.
         for (plain, encoded) in [
             ("", ""),
             ("f", "Zg"),
@@ -434,13 +433,13 @@ mod tests {
             assert_eq!(base64url_encode(plain.as_bytes()), encoded);
             assert_eq!(base64url_decode(encoded).unwrap(), plain.as_bytes());
         }
-        // L'alfabeto url: `-` e `_` al posto di `+` e `/`.
+        // The url alphabet: `-` and `_` instead of `+` and `/`.
         assert_eq!(base64url_encode(&[0xfb, 0xff]), "-_8");
         assert_eq!(base64url_decode("-_8").unwrap(), [0xfb, 0xff]);
         assert_eq!(base64url_decode("Zm8=").unwrap(), b"fo");
         assert_eq!(base64url_decode("Zm+v"), None);
         assert_eq!(base64url_decode("Z"), None);
-        // Bit avanzati non nulli: non è una codifica corretta.
+        // Non-zero leftover bits: not a correct encoding.
         assert_eq!(base64url_decode("Zh"), None);
     }
 
@@ -531,7 +530,7 @@ mod tests {
             decoded.list.addons,
             [
                 entry(SourceKind::Curseforge, "61284", "Details!", Some(517)),
-                // Un tipo di versione sconosciuto si ignora, la voce resta.
+                // An unknown version type is ignored, the entry stays.
                 entry(SourceKind::Tukui, "-1", "Tukui", None),
             ]
         );
@@ -620,7 +619,7 @@ mod tests {
             ],
             updates: vec![
                 dbm,
-                // Riconosciuta solo come parte del file di DBM.
+                // Recognized only as part of DBM's file.
                 unmatched("DBM-StatusBarTimers"),
                 matched("ElvUI", SourceKind::Tukui, "-2", "ElvUI", &[]),
                 unmatched("MyZipAddon"),
@@ -628,8 +627,8 @@ mod tests {
             ],
             check_error: None,
         };
-        // Un progetto registrato che il controllo non ha riconosciuto (senza chiave), uno già
-        // esportato e uno senza cartelle sul disco.
+        // A recorded project the check did not recognize (no key), one already exported and
+        // one with no folders on disk.
         let records = SourceRecords::from([(
             SourceKind::Curseforge,
             ProjectRecords::from([

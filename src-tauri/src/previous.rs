@@ -1,19 +1,19 @@
-//! La versione precedente dell'ultimo giro automatico e il suo Undo (D41, issue #201).
+//! The previous version from the last automatic round and its Undo (D41, issue #201).
 //!
-//! Solo nei giri automatici in modalità `install` le cartelle che un aggiornamento sostituisce
-//! non si cancellano: [`NextGeneration`] le raccoglie (con `install::keeping_replaced`) in una
-//! cartella di lavoro accanto ad `AddOns` e, se il giro ha installato almeno un progetto, la
-//! rinomina in `Interface/.wow-don-previous/` al posto della generazione precedente. C'è una
-//! sola generazione per installazione: dentro, una sottocartella numerata (lo "slot") per
-//! progetto. Gli aggiornamenti manuali non passano di qui e cancellano come prima.
+//! Only in automatic rounds in `install` mode are the folders an update replaces not deleted:
+//! [`NextGeneration`] collects them (with `install::keeping_replaced`) in a work folder next to
+//! `AddOns` and, if the round installed at least one project, renames it to
+//! `Interface/.wow-don-previous/` in place of the previous generation. There is a single
+//! generation per installation: inside, one numbered subfolder (the "slot") per project.
+//! Manual updates do not go through here and delete as before.
 //!
-//! Il manifesto [`PREVIOUS_FILE`] nella cartella di config dell'app (D22, scrittura atomica)
-//! registra per installazione l'ora del giro e, per progetto, fonte, chiave, record precedente,
-//! record scritto dal giro, slot e cartelle salvate. [`undo`] lo usa per rimettere le cartelle e
-//! i record; un progetto il cui record non è più quello scritto dal giro si salta.
+//! The manifest [`PREVIOUS_FILE`] in the app's config folder (D22, atomic write) records, per
+//! installation, the time of the round and, per project, source, key, previous record, record
+//! written by the round, slot and saved folders. [`undo`] uses it to put back the folders and
+//! the records; a project whose record is no longer the one written by the round is skipped.
 //!
-//! Disco e manifesto si scrivono solo sotto `InstallLock` (il giro e `undo_last_auto_update`):
-//! il manifesto si rilegge a ogni uso e non ha uno stato in memoria.
+//! Disk and manifest are written only under `InstallLock` (the round and
+//! `undo_last_auto_update`): the manifest is re-read on every use and has no in-memory state.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -30,39 +30,39 @@ use crate::sources::RecordWriter;
 use crate::store::{self, InstalledAddonsStore, SourceKind, SourceRecord, SourceRecords};
 use crate::updates::UpdateOutcome;
 
-/// Il manifesto delle generazioni, nella cartella di config dell'app.
+/// The generations manifest, in the app's config folder.
 pub const PREVIOUS_FILE: &str = "auto-update-previous.json";
 
-/// La cartella della generazione, in `Interface` (stesso disco di `AddOns`).
+/// The generation folder, in `Interface` (same disk as `AddOns`).
 pub const GENERATION_DIR: &str = ".wow-don-previous";
 
 const VERSION: u32 = 1;
 
-/// Un progetto aggiornato da un giro automatico, con quello che serve a rimetterlo com'era.
+/// A project updated by an automatic round, with what is needed to put it back as it was.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviousProject {
     pub source: SourceKind,
     pub key: String,
     pub name: String,
-    /// Il record prima del giro; `null` se il progetto non ne aveva (riconosciuto solo dal
-    /// fingerprint): l'Undo allora toglie il record.
+    /// The record before the round; `null` if the project had none (recognised only by
+    /// fingerprint): Undo then removes the record.
     pub previous: Option<SourceRecord>,
-    /// Il record scritto dal giro: l'Undo procede solo se è ancora quello attuale.
+    /// The record written by the round: Undo proceeds only if it is still the current one.
     pub current: SourceRecord,
-    /// La sottocartella della generazione con le cartelle salvate.
+    /// The generation subfolder holding the saved folders.
     pub slot: String,
-    /// Le cartelle salvate, con il nome che avevano in `AddOns`.
+    /// The saved folders, with the name they had in `AddOns`.
     pub saved: Vec<String>,
 }
 
-/// L'ultimo giro automatico annullabile di un'installazione.
+/// The last undoable automatic round of an installation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviousRound {
-    /// L'ora del giro, ISO 8601 UTC.
+    /// The time of the round, ISO 8601 UTC.
     pub round_at: String,
-    /// I progetti, nell'ordine in cui il giro li ha aggiornati.
+    /// The projects, in the order the round updated them.
     pub projects: Vec<PreviousProject>,
 }
 
@@ -72,8 +72,8 @@ struct StoredPrevious {
     installations: BTreeMap<String, PreviousRound>,
 }
 
-/// Il manifesto [`PREVIOUS_FILE`]. Si rilegge a ogni uso; un file illeggibile blocca l'Undo
-/// invece di essere sovrascritto, e vale "niente da annullare" per lo stato.
+/// The [`PREVIOUS_FILE`] manifest. It is re-read on every use; an unreadable file blocks Undo
+/// instead of being overwritten, and counts as "nothing to undo" for the status.
 #[derive(Debug)]
 pub struct PreviousManifest {
     file: PathBuf,
@@ -84,7 +84,7 @@ impl PreviousManifest {
         Self { file }
     }
 
-    /// Le generazioni per installazione; vuoto senza file.
+    /// The generations per installation; empty without a file.
     pub fn read(&self) -> Result<BTreeMap<String, PreviousRound>, String> {
         let damaged = || {
             format!(
@@ -111,7 +111,7 @@ impl PreviousManifest {
         Ok(stored.installations)
     }
 
-    /// Sostituisce (`Some`) o toglie (`None`) la generazione di un'installazione.
+    /// Replaces (`Some`) or removes (`None`) the generation of an installation.
     pub fn set(&self, installation_id: &str, round: Option<PreviousRound>) -> Result<(), String> {
         let mut installations = self.read()?;
         match round {
@@ -137,19 +137,19 @@ impl PreviousManifest {
     }
 }
 
-/// Un giro annullabile, per `get_auto_update_status` (`undoable`).
+/// An undoable round, for `get_auto_update_status` (`undoable`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UndoableRound {
     pub installation_id: String,
-    /// L'ora del giro, ISO 8601 UTC.
+    /// The time of the round, ISO 8601 UTC.
     pub round_at: String,
-    /// Quanti progetti (addon) l'Undo rimetterebbe.
+    /// How many projects (addons) Undo would put back.
     pub addons: usize,
 }
 
-/// I giri annullabili delle installazioni `installation_ids`, nel loro ordine. Un manifesto
-/// illeggibile vale "niente da annullare": l'errore lo dà l'Undo.
+/// The undoable rounds of the installations `installation_ids`, in their order. An unreadable
+/// manifest counts as "nothing to undo": Undo reports the error.
 pub fn undoable(manifest: &PreviousManifest, installation_ids: &[String]) -> Vec<UndoableRound> {
     let Ok(rounds) = manifest.read() else {
         return Vec::new();
@@ -175,18 +175,18 @@ fn addons_dir(installation: &Installation) -> PathBuf {
     interface_dir(installation).join("AddOns")
 }
 
-// ── Giro: la generazione nuova ──────────────────────────────────────────────
+// ── Round: the new generation ───────────────────────────────────────────────
 
-/// La generazione che un giro automatico prepara per un'installazione.
+/// The generation an automatic round prepares for an installation.
 pub struct NextGeneration {
     addons_dir: PathBuf,
     generation: PathBuf,
-    /// Creata al primo [`run`](Self::run); si cancella da sola se il giro non installa niente.
+    /// Created on the first [`run`](Self::run); deletes itself if the round installs nothing.
     dir: Option<WorkDir>,
     error: Option<String>,
     projects: Vec<PreviousProject>,
-    /// I progetti aggiornati la cui versione precedente non è stata tenuta per intero (o non è
-    /// arrivata a questo thread): non si possono annullare, e [`commit`](Self::commit) lo dice.
+    /// The updated projects whose previous version was not kept in full (or did not reach this
+    /// thread): they cannot be undone, and [`commit`](Self::commit) says so.
     not_kept: Vec<(SourceKind, String)>,
 }
 
@@ -202,11 +202,11 @@ impl NextGeneration {
         }
     }
 
-    /// Esegue `run` (l'aggiornamento del giro) tenendo le cartelle sostituite. `record` è il
-    /// registro vero; `before` sono i record dell'installazione prima del giro. Un progetto entra
-    /// nella generazione solo se il suo record si è salvato e tutte le sue cartelle sostituite
-    /// sono state tenute. Se la cartella di lavoro non si crea l'aggiornamento procede come un
-    /// aggiornamento manuale, e [`commit`](Self::commit) restituisce l'errore.
+    /// Runs `run` (the round's update) keeping the replaced folders. `record` is the real
+    /// recorder; `before` are the installation's records before the round. A project enters
+    /// the generation only if its record was saved and all its replaced folders were kept.
+    /// If the work folder cannot be created the update proceeds like a manual update, and
+    /// [`commit`](Self::commit) returns the error.
     pub fn run<R>(
         &mut self,
         before: &SourceRecords,
@@ -250,9 +250,9 @@ impl NextGeneration {
         })
     }
 
-    /// Alla fine del giro: se almeno un progetto è entrato nella generazione, questa sostituisce
-    /// quella precedente sul disco e nel manifesto, con l'ora `round_at` e i nomi presi da
-    /// `updated`. Altrimenti la generazione precedente resta com'è.
+    /// At the end of the round: if at least one project entered the generation, it replaces the
+    /// previous one on disk and in the manifest, with the time `round_at` and the names taken
+    /// from `updated`. Otherwise the previous generation stays as it is.
     pub fn commit(
         self,
         manifest: &PreviousManifest,
@@ -266,7 +266,7 @@ impl NextGeneration {
                 .find(|o| o.source == source && o.key == key)
                 .map_or_else(|| key.to_owned(), |o| o.name.clone())
         };
-        // Un progetto aggiornato senza la versione precedente non si perde in silenzio.
+        // A project updated without its previous version is not lost silently.
         let not_kept = (!self.not_kept.is_empty()).then(|| {
             let names: Vec<String> = self
                 .not_kept
@@ -304,16 +304,16 @@ impl NextGeneration {
             )
         };
         if fs::symlink_metadata(&self.generation).is_ok() {
-            // La generazione vecchia passa in un appoggio che si cancella da solo: il nome resta
-            // libero per la nuova anche se la cancellazione non finisce.
+            // The old generation moves into a scratch folder that deletes itself: the name stays
+            // free for the new one even if the deletion does not finish.
             let trash = WorkDir::create(&self.addons_dir, "old").map_err(|error| {
                 format!("Could not keep the previous versions for Undo: {error}")
             })?;
             fs::rename(&self.generation, trash.path().join("generation")).map_err(failed)?;
-            // Le cartelle non ci sono più: la voce del manifesto non vale più.
+            // The folders are gone: the manifest entry is no longer valid.
             manifest.set(installation_id, None)?;
         }
-        // Dopo il `rename` la cartella di lavoro non c'è più e il suo `Drop` non tocca niente.
+        // After the `rename` the work folder is gone and its `Drop` touches nothing.
         fs::rename(dir.path(), &self.generation).map_err(failed)?;
         let round = PreviousRound {
             round_at: round_at.to_owned(),
@@ -332,17 +332,17 @@ impl NextGeneration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UndoStatus {
-    /// Cartelle e record sono tornati alla versione di prima del giro.
+    /// Folders and record are back to the version from before the round.
     Restored,
-    /// Il progetto è cambiato dopo il giro: niente è stato toccato.
+    /// The project changed after the round: nothing was touched.
     Skipped,
-    /// Le cartelle non si sono potute rimettere (se la versione precedente è ancora sul disco
-    /// l'Undo si può riprovare), oppure sono tornate ma il record no: allora cartelle e record
-    /// non combaciano e il messaggio lo dice.
+    /// The folders could not be put back (if the previous version is still on disk Undo can be
+    /// retried), or they came back but the record did not: then folders and record do not
+    /// match and the message says so.
     Error,
 }
 
-/// L'esito dell'Undo di un progetto. I messaggi sono in inglese (D27).
+/// The outcome of a project's Undo. Messages are in English (D27).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UndoOutcome {
@@ -358,12 +358,12 @@ const CHANGED: &str = "Changed after the automatic update: left as it is.";
 const MISSING: &str = "The previous version is no longer on disk.";
 const NOTHING: &str = "There is no automatic update to undo for this installation.";
 
-/// Annulla l'ultimo giro automatico di `installation`: per ogni progetto toglie le cartelle
-/// nuove, rimette quelle salvate e ripristina il record precedente, poi cancella generazione e
-/// voce del manifesto. Va chiamata sotto `InstallLock`. Un progetto che non si rimette per un
-/// `rename` fallito resta nella generazione e nel manifesto, e l'Undo si può riprovare; gli
-/// altri ne escono comunque. `Err` solo se il manifesto o i record non si leggono, o se non c'è
-/// niente da annullare.
+/// Undoes the last automatic round of `installation`: for each project it removes the new
+/// folders, puts back the saved ones and restores the previous record, then deletes the
+/// generation and the manifest entry. Must be called under `InstallLock`. A project that cannot
+/// be put back because of a failed `rename` stays in the generation and in the manifest, and
+/// Undo can be retried; the others leave it anyway. `Err` only if the manifest or the records
+/// cannot be read, or if there is nothing to undo.
 pub fn undo(
     installation: &Installation,
     manifest: &PreviousManifest,
@@ -401,8 +401,8 @@ pub(crate) fn undo_with(
 
     let mut outcomes = Vec::new();
     let mut left = Vec::new();
-    // Dall'ultimo al primo: se due progetti del giro hanno toccato la stessa cartella, ognuno
-    // rimette quella che c'era prima di lui.
+    // From last to first: if two projects in the round touched the same folder, each one puts
+    // back what was there before it.
     for project in round.projects.iter().rev() {
         let outcome = |status, message: Option<String>| UndoOutcome {
             source: project.source,
@@ -451,8 +451,8 @@ pub(crate) fn undo_with(
             ),
             None => store.forget_project(&installation.id, project.source, &project.key),
         });
-        // Le cartelle sono tornate ma il record no: non è un Undo riuscito, e non si può
-        // ripetere (lo slot è vuoto). Lo dice lo stato, non solo il messaggio.
+        // The folders came back but the record did not: it is not a successful Undo, and it
+        // cannot be repeated (the slot is empty). The status says so, not just the message.
         outcomes.push(match restored {
             Ok(()) => outcome(UndoStatus::Restored, None),
             Err(error) => outcome(
@@ -487,10 +487,10 @@ pub(crate) fn undo_with(
     Ok(outcomes)
 }
 
-/// Rimette in `addons` le cartelle salvate in `slot` al posto di quelle del record del giro.
-/// Con `replace_with`: le cartelle nuove (senza distinguere maiuscole e minuscole) si spostano da
-/// parte e si cancellano solo dopo che tutte le salvate sono tornate; se un `rename` fallisce
-/// tutto torna com'era, e la versione precedente resta nello slot.
+/// Puts the folders saved in `slot` back into `addons` in place of those in the round's record.
+/// With `replace_with`: the new folders (matched case-insensitively) are moved aside and
+/// deleted only after all the saved ones are back; if a `rename` fails everything goes back to
+/// how it was, and the previous version stays in the slot.
 fn put_back(
     addons: &Path,
     slot: &Path,
@@ -500,7 +500,7 @@ fn put_back(
     if !project.saved.is_empty() {
         return install::replace_with(addons, slot, &project.current.folders, rename);
     }
-    // Il giro non ha sostituito niente (le cartelle nuove non c'erano): basta toglierle.
+    // The round replaced nothing (the new folders were not there): removing them is enough.
     let wanted: HashSet<String> = project
         .current
         .folders
@@ -575,7 +575,7 @@ mod tests {
                 .join(GENERATION_DIR)
         }
 
-        /// Le cartelle di `Interface`, senza `AddOns`.
+        /// The folders of `Interface`, without `AddOns`.
         fn interface_extras(&self) -> Vec<String> {
             install::folder_names(&self.installation.path.join("Interface"))
                 .unwrap()
@@ -607,9 +607,9 @@ mod tests {
                 .unwrap();
         }
 
-        /// Un giro automatico: per ogni `(fonte, chiave, file, cartelle)` sostituisce le cartelle
-        /// con un contenuto `new <file>` (come fa una fonte) e scrive il record. Restituisce gli
-        /// esiti `updated` e quello di `commit`.
+        /// An automatic round: for each `(source, key, file, folders)` it replaces the folders
+        /// with a `new <file>` content (as a source does) and writes the record. Returns the
+        /// `updated` outcomes and the one from `commit`.
         fn round(
             &self,
             updates: &[(SourceKind, &str, &str, &[&str])],
@@ -678,7 +678,7 @@ mod tests {
             .collect()
     }
 
-    /// Due progetti: DBM (CurseForge, con un record) e BigWigs (GitHub, riconosciuto senza).
+    /// Two projects: DBM (CurseForge, with a record) and BigWigs (GitHub, recognised without one).
     fn two_addons() -> Fixture {
         let fx = fixture();
         fx.write("DBM-Core", "old dbm core");
@@ -699,8 +699,8 @@ mod tests {
         committed.unwrap();
         assert_eq!(fx.read("DBM-Core"), "new 2");
         assert_eq!(fx.read("BigWigs"), "new v2");
-        // Solo la generazione accanto ad AddOns: staging, appoggi e cartella di lavoro sono
-        // spariti.
+        // Only the generation next to AddOns: staging, scratch folders and work folder are
+        // gone.
         assert_eq!(fx.interface_extras(), [GENERATION_DIR]);
         let rounds = fx.manifest.read().unwrap();
         let round = &rounds["test"];
@@ -735,7 +735,7 @@ mod tests {
         assert_eq!(fx.read("BigWigs"), "old bigwigs");
         assert_eq!(fx.read("Other"), "other");
         assert_eq!(fx.listing(), ["BigWigs", "DBM-Core", "DBM-GUI", "Other"]);
-        // Il record precedente torna; quello che prima non c'era sparisce.
+        // The previous record comes back; the one that was not there before disappears.
         assert_eq!(
             fx.record(CF, "3358"),
             Some(record("1", &["DBM-Core", "DBM-GUI"]))
@@ -790,7 +790,7 @@ mod tests {
         ])
         .1
         .unwrap();
-        // DBM aggiornato a mano dopo il giro.
+        // DBM updated by hand after the round.
         fx.write("DBM-Core", "manual 3");
         fx.set_record(CF, "3358", record("3", &["DBM-Core", "DBM-GUI"]));
 
@@ -810,7 +810,7 @@ mod tests {
             Some(record("3", &["DBM-Core", "DBM-GUI"]))
         );
         assert_eq!(fx.read("BigWigs"), "old bigwigs");
-        // Il progetto saltato non si potrà mai annullare: la generazione sparisce comunque.
+        // The skipped project can never be undone: the generation disappears anyway.
         assert!(fx.interface_extras().is_empty());
         assert!(fx.manifest.read().unwrap().is_empty());
     }
@@ -853,13 +853,13 @@ mod tests {
             [rounds["test"].projects[0].slot.clone()]
         );
 
-        // Un giro che non installa niente lascia la generazione e il manifesto.
+        // A round that installs nothing leaves the generation and the manifest.
         let (_, committed) = fx.round(&[]);
         committed.unwrap();
         assert_eq!(fx.manifest.read().unwrap(), rounds);
         assert_eq!(fx.interface_extras(), [GENERATION_DIR]);
 
-        // L'Undo rimette solo l'ultimo giro: DBM resta alla versione del primo.
+        // Undo puts back only the last round: DBM stays at the first round's version.
         fx.undo().unwrap();
         assert_eq!(fx.read("BigWigs"), "old bigwigs");
         assert_eq!(fx.read("DBM-Core"), "new 2");
@@ -878,8 +878,8 @@ mod tests {
         ])
         .1
         .unwrap();
-        // L'Undo va dall'ultimo al primo: BigWigs (2 spostamenti) riesce, poi il terzo
-        // spostamento di DBM (la prima cartella salvata che torna) fallisce.
+        // Undo goes from last to first: BigWigs (2 moves) succeeds, then DBM's third move (the
+        // first saved folder coming back) fails.
         let mut calls = 0;
         let outcomes = undo_with(
             &fx.installation,
@@ -910,8 +910,8 @@ mod tests {
                 .unwrap()
                 .contains("Could not move")
         );
-        // BigWigs è tornato con il suo record; DBM è ancora quello del giro, coerente con il
-        // suo record.
+        // BigWigs is back with its record; DBM is still the round's version, consistent with
+        // its record.
         assert_eq!(fx.read("BigWigs"), "old bigwigs");
         assert_eq!(fx.record(GH, "owner/bigwigs"), None);
         assert_eq!(fx.read("DBM-Core"), "new 2");
@@ -929,7 +929,7 @@ mod tests {
             [dbm.slot.as_str()]
         );
 
-        // Il secondo tentativo finisce il lavoro.
+        // The second attempt finishes the job.
         let outcomes = fx.undo().unwrap();
         assert_eq!(statuses(&outcomes), [("3358", UndoStatus::Restored)]);
         assert_eq!(fx.read("DBM-Core"), "old dbm core");
@@ -938,15 +938,15 @@ mod tests {
 
     #[test]
     fn folder_names_are_matched_without_case() {
-        // Il record e la generazione scrivono "dbm-core", il disco ha "DBM-Core": nessun nome
-        // diverso solo per le maiuscole esiste mai insieme sul disco.
+        // The record and the generation write "dbm-core", the disk has "DBM-Core": no two names
+        // differing only in case ever exist together on disk.
         let fx = fixture();
         fx.write("DBM-Core", "old");
         fx.round(&[(CF, "3358", "2", &["dbm-core"])]).1.unwrap();
         assert_eq!(fx.listing(), ["dbm-core"]);
         let rounds = fx.manifest.read().unwrap();
         assert_eq!(rounds["test"].projects[0].saved, ["DBM-Core"]);
-        // Il record attuale usa ancora il nome del giro, il disco un'altra grafia.
+        // The current record still uses the round's name, the disk another spelling.
         fs::rename(fx.addons.join("dbm-core"), fx.addons.join("tmp")).unwrap();
         fs::rename(fx.addons.join("tmp"), fx.addons.join("Dbm-Core")).unwrap();
 
@@ -978,7 +978,7 @@ mod tests {
         let before = fx.records();
         let mut next = NextGeneration::new(&fx.installation);
         let mut writer = |_, _: &str, _| Ok(());
-        // Un record senza un `replace` tenuto prima (per esempio su un altro thread).
+        // A record without a kept `replace` before it (for example on another thread).
         next.run(&before, &mut writer, |record| {
             record(GH, "owner/bigwigs", record_of("v2", &["BigWigs"])).unwrap();
         });
