@@ -66,10 +66,59 @@ You only need to do it once: from the following launches the app opens normally.
 
 ## Status
 
-WoW-don is young: expect bugs, and please
-[open an issue](https://github.com/FabioSM46/wow-don/issues) when you find one. The plan is in
+WoW-don is young: expect bugs. The plan is in
 [docs/roadmap.md](docs/roadmap.md), and the project's background in
 [docs/context.md](docs/context.md).
+
+## Reporting a bug
+
+Found a bug? [Open an issue](https://github.com/FabioSM46/wow-don/issues/new/choose) and choose
+**Report a bug**. Before you do, check that it is not
+[already reported](https://github.com/FabioSM46/wow-don/issues) and that you are on the
+[latest release](https://github.com/FabioSM46/wow-don/releases/latest).
+
+Write in English and open one issue per problem. The title says what goes wrong, and where: for
+example, `[Bug]: Installing Questie from Search fails with a download error`. The form then asks
+for these fields:
+
+| Field | Required | What to write |
+| --- | --- | --- |
+| WoW-don version | Yes | The number in the bottom-left corner of the app |
+| Operating system and version | Yes | For example, Ubuntu 24.04 or Windows 11 |
+| How you run the game | Yes | Natively, Lutris, Bottles, Steam / Proton or plain Wine |
+| Game version | No | The one selected in the app: Retail, Classic Era, Forever and so on |
+| What happened? | Yes | What you saw, with the exact text of any error message |
+| What should have happened? | Yes | What you expected instead |
+| Steps to reproduce | Yes | The shortest list of steps that makes the problem appear |
+| Addon involved | No | Its name and source, if the problem concerns one addon |
+| Screenshots or anything else | No | Images or other details that help |
+
+A good report looks like this:
+
+```text
+WoW-don version: 0.1.1
+Operating system: Linux, Ubuntu 24.04
+How you run the game: Lutris
+Game version: Classic Era
+
+What happened?
+Pressing Install shows "Download failed", and the addon is not installed.
+
+What should have happened?
+The addon is installed and appears in the Installed tab.
+
+Steps to reproduce:
+1. Open the Search tab
+2. Search for "Questie"
+3. Press Install
+
+Addon involved: Questie, from CurseForge
+```
+
+**Issues are public.** Replace your username in file paths with `<user>`, and remove emails,
+account names and other personal data from logs and screenshots.
+
+To propose an idea, choose **Suggest a feature** and describe the problem it would solve.
 
 ## Addon sources and the CurseForge API
 

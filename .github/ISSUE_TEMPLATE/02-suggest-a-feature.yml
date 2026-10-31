@@ -1,0 +1,33 @@
+name: Suggest a feature
+description: An idea or an improvement for WoW-don
+title: "[Feature]: "
+labels: ["feature", "needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please write in English and keep to one idea per issue. Everything here is public.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: What you are trying to do, and what gets in the way today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: How do you deal with it today?
+      description: A workaround, or how another addon manager handles it.
+    validations:
+      required: false
