@@ -74,7 +74,8 @@ replaces it, and the old one is marked as superseded.
 | --- | --- | --- | --- |
 | D18 | Repository private on GitHub, checked out at `<repo-root>` | Explicit request | Confirmed |
 | D19 | ~~Documentation in Italian, code and commits in English~~ Superseded by D43 | As in the other projects | Superseded |
-| D43 | Everything in the repository is in English: code, comments, documentation, skills and templates, and also commit messages, branch names, PR and issue text, review comments and replies, milestones, labels and release notes, whatever language the conversation is in. Commit history and issues already published stay as they are | Explicit request (2026-10-29), before the CurseForge key work starts | Confirmed |
+| D43 | ~~Everything in the repository is in English: code, comments, documentation, skills and templates, and also commit messages, branch names, PR and issue text and review replies. Commit history and issues already published stay as they are~~ Superseded by D45 | Explicit request (2026-10-29), before the CurseForge key work starts | Superseded |
+| D45 | Everything in the repository is in English: code, comments, documentation, skills and templates, and also commit messages, branch names, PR and issue text, review comments and replies, milestones, labels and release notes, whatever language the conversation is in. Automated reviewers are told to write in English too. Commit history and issues already published stay as they are | Explicit request (2026-10-31), extending D43 to everything GitHub shows | Confirmed |
 
 ## Open
 
