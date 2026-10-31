@@ -176,7 +176,9 @@ after the visibility change.
   local files, never in git, logs, issues or PRs.
 - **English everywhere**: everything in the repository is written in English — code, comments,
   documentation, skills, templates — and so are commit messages, branch names, PR and issue
-  titles and bodies, and review replies (D43).
+  titles and bodies, review comments and replies, milestones, labels and release notes (D45).
+  This holds whatever language the conversation with the user is in, and it covers automated
+  reviewers as well.
 - **Commits**: never commit without an explicit request; conventional commit style (`feat:`,
   `fix:`, `refactor:`, `docs:`, `ci:`).
 - **Read first, then write**: look for existing patterns before implementing.

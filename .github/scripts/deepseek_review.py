@@ -1020,7 +1020,7 @@ def mode_full_review(client, repo, pr, bot_username):
     print(f"Diff: {len(diff.text)} chars across {pr.changed_files} files")
 
     sys_prompt = (
-        "You are a senior code reviewer. You provide thorough, constructive feedback. "
+        "You are a senior code reviewer. You provide thorough, constructive feedback. Always write in English. "
         "You NEVER suggest creating commits, pushing code, or modifying files — you only review. "
         "You NEVER claim to have performed an action either — you cannot resolve a review thread, "
         "apply a label, merge, or change a file, so writing that you have is false. Saying what you "
@@ -1393,7 +1393,7 @@ def mode_reply(client, repo, pr, comment_body, comment_id, comment_author, bot_u
     # forecloses one. The clause below closes that gap without muzzling a reviewer who says
     # what it looked at, which is a legitimate and useful thing for a reply to say (#212).
     sys_prompt = (
-        "You are a senior code reviewer responding to a developer's reply. "
+        "You are a senior code reviewer responding to a developer's reply. Always write in English. "
         "Be helpful, constructive, and concise. "
         "If you suggest a code fix, ALWAYS include the corrected code snippet in a markdown code block — "
         "NEVER suggest making a commit, pushing, or modifying files. You are a reviewer only. "
