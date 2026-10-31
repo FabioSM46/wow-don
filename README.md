@@ -34,7 +34,6 @@ WoW-don is free software under the GPL. It has no ads and no account.
 | System | Package | |
 | --- | --- | --- |
 | Debian, Ubuntu and derivatives | `.deb` | `sudo apt install ./wow-don_<version>_amd64.deb` |
-| Arch and derivatives | [`PKGBUILD`](packaging/aur/PKGBUILD) | `makepkg -si` in `packaging/aur` |
 | Windows 10 and 11 | `*-setup.exe` | See [the Windows warning](#windows-warning) |
 | macOS (Apple Silicon and Intel) | `.dmg` | See [the macOS warning](#macos-warning) |
 
