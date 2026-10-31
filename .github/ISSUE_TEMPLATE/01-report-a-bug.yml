@@ -1,0 +1,110 @@
+name: Report a bug
+description: Something in WoW-don does not work as it should
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. Please write in English and keep to one problem per issue.
+
+        **Everything here is public.** Replace your username in file paths, for example
+        `/home/<user>/Games` or `C:\Users\<user>`, and remove emails or account names from logs
+        and screenshots.
+
+  - type: input
+    id: version
+    attributes:
+      label: WoW-don version
+      description: It is in the bottom-left corner of the app.
+      placeholder: "0.1.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: system
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - Windows
+        - macOS
+    validations:
+      required: true
+
+  - type: input
+    id: system_detail
+    attributes:
+      label: System version
+      placeholder: Ubuntu 24.04, Windows 11, macOS 15
+    validations:
+      required: true
+
+  - type: dropdown
+    id: launcher
+    attributes:
+      label: How you run the game
+      options:
+        - Natively (Windows or macOS)
+        - Lutris
+        - Bottles
+        - Steam / Proton
+        - Plain Wine
+        - Other, or not relevant
+    validations:
+      required: true
+
+  - type: input
+    id: game_version
+    attributes:
+      label: Game version
+      description: The one selected in the app when the problem happened.
+      placeholder: Retail, Classic Era, Forever
+    validations:
+      required: false
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: What you saw, with the exact text of any error message.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The shortest list of steps that makes the problem appear.
+      placeholder: |
+        1. Open the Search tab
+        2. Search for "Questie"
+        3. Press Install
+        4. An error appears
+    validations:
+      required: true
+
+  - type: input
+    id: addon
+    attributes:
+      label: Addon involved
+      description: Its name and where it comes from, if the problem concerns one addon.
+      placeholder: Questie, from CurseForge
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots or anything else
+      description: Drag images here. Check that they show no personal data.
+    validations:
+      required: false

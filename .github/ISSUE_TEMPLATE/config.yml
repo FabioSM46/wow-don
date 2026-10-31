@@ -2,4 +2,4 @@ blank_issues_enabled: false
 contact_links:
   - name: WoW-don documentation
     url: https://github.com/FabioSM46/wow-don#readme
-    about: Read README and AGENTS.md before opening an issue
+    about: Read the README before opening an issue

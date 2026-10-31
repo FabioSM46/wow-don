@@ -66,10 +66,24 @@ You only need to do it once: from the following launches the app opens normally.
 
 ## Status
 
-WoW-don is young: expect bugs, and please
-[open an issue](https://github.com/FabioSM46/wow-don/issues) when you find one. The plan is in
+WoW-don is young: expect bugs. The plan is in
 [docs/roadmap.md](docs/roadmap.md), and the project's background in
 [docs/context.md](docs/context.md).
+
+## Reporting a bug
+
+[Open an issue](https://github.com/FabioSM46/wow-don/issues/new/choose) and choose **Report a
+bug**. The form asks for what we need to reproduce the problem:
+
+- the WoW-don version, shown in the bottom-left corner of the app;
+- your system, how you run the game and the game version;
+- what happened, with the exact error message;
+- what should have happened;
+- the shortest list of steps that makes it happen again.
+
+Please write in English and open one issue per problem. Issues are public, so remove your
+username from file paths and any personal data from logs and screenshots. For an idea, choose
+**Suggest a feature**.
 
 ## Addon sources and the CurseForge API
 
