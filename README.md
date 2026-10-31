@@ -14,6 +14,10 @@ and macOS, with the normal installation of the native client.
 
 WoW-don is free software under the GPL. It has no ads and no account.
 
+![Searching the CurseForge catalogue in WoW-don](docs/media/search.png)
+
+![The list of installed addons in WoW-don](docs/media/installed.png)
+
 ## Features
 
 - Automatic discovery of WoW installations, which you confirm in Options, or adding them by hand.
