@@ -1,7 +1,7 @@
 name: Bug (for maintainers)
 description: A triaged bug, structured for the development pipeline. To report a problem, use "Report a bug"
 title: "[Bug]: "
-labels: ["bug", "needs-triage"]
+labels: ["bug"]
 assignees: []
 body:
   - type: dropdown

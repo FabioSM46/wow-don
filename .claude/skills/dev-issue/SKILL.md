@@ -51,8 +51,9 @@ instead of Type/Priority/User story/Acceptance criteria: the steps to reproduce 
 acceptance criteria.
 
 Reports opened by players (`01-report-a-bug.yml`, `02-suggest-a-feature.yml`, with the
-`needs-triage` label) have no Area, Technical context or Out of scope: those fields are added at
-triage, from a reproduction of the report.
+`needs-triage` label) lack the fields above: a bug report has no Area, Technical context or Out of
+scope, and a suggestion has none of the required fields. They are added at triage, from a
+reproduction of the report or a refined specification.
 
 If a required field is missing, do not guess: say which one is missing and ask the user whether
 to proceed.
