@@ -6,7 +6,7 @@ import { APP_UPDATES_HINT, APP_UPDATES_LABEL, autostartHint, closeToTrayHint } f
 type Props = {
   /** The Options tab is open: the settings are read again when it becomes so. */
   active: boolean;
-  /** The saved `checkAppUpdates`: the footer's notice depends on it. */
+  /** The `checkAppUpdates` read or saved here: the footer's notice depends on it. */
   onCheckAppUpdatesChange: (enabled: boolean) => void;
 };
 
@@ -55,6 +55,7 @@ export function SystemOptions({ active, onCheckAppUpdatesChange }: Props) {
           trayAvailable: settings.value.trayAvailable,
         });
         setAppUpdates(settings.value.checkAppUpdates);
+        onCheckAppUpdatesChange(settings.value.checkAppUpdates);
       }
       if (enabled.status === "fulfilled") setAutostart(enabled.value);
       const failures = [settings, enabled].flatMap((result) =>
@@ -67,7 +68,7 @@ export function SystemOptions({ active, onCheckAppUpdatesChange }: Props) {
     const onFocus = () => void refresh();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [active]);
+  }, [active, onCheckAppUpdatesChange]);
 
   async function save(which: Exclude<Saving, null>, next: boolean) {
     savingRef.current = true;

@@ -496,7 +496,7 @@ function App() {
       {status && (
         <footer className="app-footer">
           <span>v{status.version}</span>
-          {notice && <AppUpdateNotice notice={notice} />}
+          {notice && <AppUpdateNotice key={notice.url} notice={notice} />}
         </footer>
       )}
     </div>
