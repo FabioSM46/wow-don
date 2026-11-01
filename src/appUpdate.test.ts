@@ -16,7 +16,13 @@ const update: AppUpdateStatus = {
 
 describe("appUpdateNotice", () => {
   it("names the app and the new version, and links the release", () => {
-    assert.deepEqual(appUpdateNotice(update, true), { text: "WoW-don v0.1.2 available", url: RELEASE });
+    assert.deepEqual(appUpdateNotice(update, true), { text: "WoW-don 0.1.2 available", url: RELEASE });
+  });
+
+  it("never says a bare update, which in this app means addons", () => {
+    const text = appUpdateNotice(update, true)?.text ?? "";
+    assert.equal(text.startsWith("WoW-don "), true);
+    assert.equal(/update/i.test(text), false);
   });
 
   it("shows nothing before a check has succeeded", () => {

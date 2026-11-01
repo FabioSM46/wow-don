@@ -3,9 +3,13 @@
 /** The explanation of a disabled "Close to tray": without an icon the X closes the app. */
 export const TRAY_UNAVAILABLE = "The system tray isn't available on this desktop.";
 
-/** The hint under "App updates": about the app, not the addons (D41). */
+/**
+ * The switch and its hint: the name of the app is in the label because "update" alone, in this
+ * app, means addons (D41).
+ */
+export const APP_UPDATES_LABEL = "Check for new WoW-don versions";
 export const APP_UPDATES_HINT =
-  "Shows in the footer when a newer version of WoW-don is out. Nothing is downloaded.";
+  "About WoW-don itself, not addons: shows new versions in the footer, downloads nothing.";
 
 /**
  * The hint under "Close to tray". `trayAvailable` is `null` until the settings have been

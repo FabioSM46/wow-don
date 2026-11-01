@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../api";
 import { SettingsSection, SwitchRow } from "./Setting";
-import { APP_UPDATES_HINT, autostartHint, closeToTrayHint } from "./system";
+import { APP_UPDATES_HINT, APP_UPDATES_LABEL, autostartHint, closeToTrayHint } from "./system";
 
 type Props = {
   /** The Options tab is open: the settings are read again when it becomes so. */
   active: boolean;
-  /** The saved "App updates": the footer's notice depends on it. */
+  /** The saved `checkAppUpdates`: the footer's notice depends on it. */
   onCheckAppUpdatesChange: (enabled: boolean) => void;
 };
 
@@ -16,7 +16,7 @@ type Saving = "tray" | "autostart" | "appUpdates" | null;
 /**
  * The "System" section of Options (issue #160): "Close to tray" (`closeToTray` from
  * `get_settings`, saved with `set_close_to_tray`), "Start with the system" (`get_autostart`
- * and `set_autostart`, the real state of the operating system) and "App updates" (issue #260,
+ * and `set_autostart`, the real state of the operating system) and the check for new WoW-don versions (issue #260,
  * `checkAppUpdates`, saved with `set_check_app_updates`). Tray, autostart and the check stay in
  * the backend: here there are only the app's commands.
  *
@@ -115,7 +115,7 @@ export function SystemOptions({ active, onCheckAppUpdatesChange }: Props) {
           onChange={(next) => void save("autostart", next)}
         />
         <SwitchRow
-          label="App updates"
+          label={APP_UPDATES_LABEL}
           description={APP_UPDATES_HINT}
           checked={appUpdates ?? false}
           disabled={appUpdates === null || saving !== null}

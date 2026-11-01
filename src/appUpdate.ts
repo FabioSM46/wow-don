@@ -20,5 +20,5 @@ export function appUpdateNotice(
 ): AppUpdateNotice | null {
   if (enabled !== true || !status?.updateAvailable) return null;
   if (status.latest === null || status.url === null) return null;
-  return { text: `WoW-don v${status.latest} available`, url: status.url };
+  return { text: `WoW-don ${status.latest} available`, url: status.url };
 }
