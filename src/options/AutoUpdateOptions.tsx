@@ -22,7 +22,7 @@ type Props = {
 type Schedule = { mode: AutoUpdateMode; intervalHours: number };
 
 /**
- * The "Automatic updates" section of Options (D41, issue #204): mode and interval
+ * The "Automatic addon updates" section of Options (D41, issue #204): mode and interval
  * (`autoUpdate` and `autoUpdateIntervalHours` from `get_settings`, saved with `set_auto_update`)
  * and a switch per installation (`get_auto_update`, `set_installation_auto_update`). The rounds
  * and the updates stay in the backend: here there are only the choices.
@@ -133,7 +133,7 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
   const shownError = error ?? loadError;
 
   return (
-    <SettingsSection id="auto-update-title" title="Automatic updates" className="auto-update-option">
+    <SettingsSection id="auto-update-title" title="Automatic addon updates" className="auto-update-option">
       <div className="settings-card">
         <SettingRow
           label="Mode"

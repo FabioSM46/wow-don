@@ -10,7 +10,7 @@ type Props = {
 };
 
 /**
- * The "Updates" section of Options: the option to install and update to the Beta when the
+ * The "Addon updates" section of Options: the option to install and update to the Beta when the
  * game version has no Release (issue #141). The choice of the file stays in the backend.
  */
 export function BetaOption({ enabled, onChange }: Props) {
@@ -31,7 +31,7 @@ export function BetaOption({ enabled, onChange }: Props) {
   }
 
   return (
-    <SettingsSection id="updates-title" title="Updates" className="updates-option">
+    <SettingsSection id="updates-title" title="Addon updates" className="updates-option">
       <div className="settings-card">
         <SwitchRow
           label="Use beta files when there is no release"

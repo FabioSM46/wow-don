@@ -25,7 +25,7 @@ WoW-don is free software under the GPL. It has no ads and no account.
 - Search with filters by category and game version, addon details with description and gallery,
   and required dependencies installed for you.
 - Update one addon or all of them, reinstall, remove, or force the game version of an addon.
-- Automatic updates: off, notify or install, on an interval you choose, with exclusions and an
+- Automatic addon updates: off, notify or install, on an interval you choose, with exclusions and an
   "Undo last auto-update".
 - Other sources: Tukui, WoWInterface and GitHub Releases, plus zips dragged into the window.
 - Export and import of your addon list as a text string.

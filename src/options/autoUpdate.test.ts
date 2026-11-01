@@ -1,4 +1,4 @@
-// Tests for the Automatic updates section texts: `pnpm test` (node --test).
+// Tests for the Automatic addon updates section texts: `pnpm test` (node --test).
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -51,7 +51,7 @@ describe("hints", () => {
   });
 
   it("says that Off covers every installation", () => {
-    assert.equal(installationHint("off"), "Automatic updates are off for every installation.");
+    assert.equal(installationHint("off"), "Automatic addon updates are off for every installation.");
     assert.equal(installationHint("install").includes("Don't auto-update"), true);
   });
 });
