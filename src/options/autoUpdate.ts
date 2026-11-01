@@ -1,4 +1,4 @@
-// The texts and states of the Options "Automatic updates" section (D41, issue #204), kept
+// The texts and states of the Options "Automatic addon updates" section (D41, issue #204), kept
 // apart from the component for tests. Pure functions, no React or I/O.
 
 import type { AutoUpdateMode } from "../api";
@@ -31,11 +31,11 @@ export function intervalDisabled(mode: AutoUpdateMode | null): boolean {
 export function modeHint(mode: AutoUpdateMode | null): string {
   switch (mode) {
     case "off":
-      return "WoW-don checks for updates only when you ask.";
+      return "WoW-don checks for addon updates only when you ask.";
     case "install":
-      return "WoW-don checks for updates in the background and installs them.";
+      return "WoW-don checks for addon updates in the background and installs them.";
     default:
-      return "WoW-don checks for updates in the background and only tells you what it found.";
+      return "WoW-don checks for addon updates in the background and only tells you what it found.";
   }
 }
 
@@ -45,7 +45,7 @@ export function modeHint(mode: AutoUpdateMode | null): string {
  */
 export function installationHint(mode: AutoUpdateMode | null): string {
   return mode === "off"
-    ? "Automatic updates are off for every installation."
+    ? "Automatic addon updates are off for every installation."
     : "To skip a single addon, right-click it in Installed and choose Don't auto-update.";
 }
 

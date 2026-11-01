@@ -18,7 +18,7 @@ import {
 } from "./autoUpdateStatus.ts";
 
 const clock = (iso: string) => `@${iso}`;
-const EXCLUDED = "Excluded from automatic updates.";
+const EXCLUDED = "Excluded from automatic addon updates.";
 const file = { id: 1, name: "v2", date: "2026-10-27T10:00:00Z" };
 
 function outcome(name: string, status: UpdateOutcome["status"], message?: string): UpdateOutcome {

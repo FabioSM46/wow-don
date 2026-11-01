@@ -108,4 +108,4 @@ export function exclusionDisabledReason(
 
 /** The `title` of the mark in the row of an excluded addon. */
 export const EXCLUDED_TITLE =
-  "Excluded from automatic updates. Right-click the row and choose Allow auto-update to include it again.";
+  "Excluded from automatic addon updates. Right-click the row and choose Allow auto-update to include it again.";
