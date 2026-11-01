@@ -1,54 +1,124 @@
 # WoW-don
 
-Addon manager for World of Warcraft on **Linux, Windows and macOS**. On Linux it manages
-the game inside a Wine prefix (Lutris, Battle.net), on Windows and on macOS
-the normal installation of the native client. A native desktop app written in Rust with a
-Tauri interface, a lighter and more convenient alternative to WowUp-CF. It is distributed as a
-`.deb` package on Linux, as an installer on Windows and as a universal `.dmg` (Apple
-Silicon and Intel) on macOS.
+A fast, open-source addon manager for World of Warcraft on **Linux, Windows and macOS**.
+On Linux it works with the game inside a Wine prefix (Lutris, Bottles, Steam/Proton); on Windows
+and macOS, with the normal installation of the native client.
+
+**[Download the latest release](https://github.com/FabioSM46/wow-don/releases/latest)**
+
+- **Find addons quickly.** Search the CurseForge catalogue, filter and sort both the catalogue
+  and your installed addons.
+- **Made for Wine as well.** Installations inside Wine prefixes are discovered for you, including
+  several versions of the game in the same folder.
+- **Native and lightweight.** A single Rust binary that uses the system webview, not Electron.
+
+WoW-don is free software under the GPL. It has no ads and no account.
+
+![Searching the CurseForge catalogue in WoW-don](docs/media/search.png)
+
+![The list of installed addons in WoW-don](docs/media/installed.png)
+
+## Features
+
+- Automatic discovery of WoW installations, which you confirm in Options, or adding them by hand.
+- Your existing addons recognised through CurseForge fingerprints.
+- Search with filters by category and game version, addon details with description and gallery,
+  and required dependencies installed for you.
+- Update one addon or all of them, reinstall, remove, or force the game version of an addon.
+- Automatic addon updates: off, notify or install, on an interval you choose, with exclusions and an
+  "Undo last auto-update".
+- Other sources: Tukui, WoWInterface and GitHub Releases, plus zips dragged into the window.
+- Export and import of your addon list as a text string.
+- Backup of the `WTF` and `Interface` folders.
+- Tray icon, close to tray and start with the system.
+- Light and dark themes.
+
+## Install
+
+| System | Package | |
+| --- | --- | --- |
+| Debian, Ubuntu and derivatives | `.deb` | `sudo apt install ./wow-don_<version>_amd64.deb` |
+| Windows 10 and 11 | `*-setup.exe` | See [the Windows warning](#windows-warning) |
+| macOS (Apple Silicon and Intel) | `.dmg` | See [the macOS warning](#macos-warning) |
+
+All packages are on the [releases page](https://github.com/FabioSM46/wow-don/releases/latest).
+
+### Windows warning
+
+The installer is not signed yet, so SmartScreen may say "Windows protected your PC". Press
+**More info**, then **Run anyway**. You can read the [source](src-tauri/), and every package is
+built by the public [release workflow](.github/workflows/release.yml), whose run you can inspect
+from the Actions tab.
+
+### macOS warning
+
+Open the `.dmg` and drag WoW-don into Applications. The app is neither signed nor notarised,
+so on the first launch macOS blocks it, saying it cannot verify the developer. To
+open it the first time:
+
+- in the Finder, in Applications, right-click (or Control-click) WoW-don and
+  choose **Open**, then confirm with **Open** in the dialog;
+- or, after the first blocked attempt, go to **System Settings → Privacy &
+  Security** and, in the Security section, press **Open Anyway** next to the message about
+  WoW-don.
+
+You only need to do it once: from the following launches the app opens normally.
 
 ## Status
 
-**Phase M2: CurseForge.** WoW installations are added by hand (`_<flavor>_` folders, also
-inside Wine prefixes) and you see the list of installed addons, read from the `.toc` files,
-with search, filters and sorting. Addons are recognised on CurseForge through fingerprints and
-the app shows which ones have an update (for now Retail and Classic Era). Download and
-installation arrive with M3. The plan is in [docs/roadmap.md](docs/roadmap.md).
+WoW-don is young: expect bugs. The plan is in
+[docs/roadmap.md](docs/roadmap.md), and the project's background in
+[docs/context.md](docs/context.md).
 
-## Why
+## Reporting a bug
 
-WowUp-CF does its job, but on Linux it has several limits:
+Found a bug? [Open an issue](https://github.com/FabioSM46/wow-don/issues/new/choose) and choose
+**Report a bug**. Before you do, check that it is not
+[already reported](https://github.com/FabioSM46/wow-don/issues) and that you are on the
+[latest release](https://github.com/FabioSM46/wow-don/releases/latest).
 
-- **awkward interface and filters**: searching, filtering and sorting addons is slow and
-  unclear;
-- **Electron in an AppImage**: it needs `--no-sandbox` and auto-update breaks the symlink;
-- **Wine prefixes as a fallback**: the game path has to be set by hand;
-- **beta versions poorly covered**: for versions like WoW Forever the sources' metadata
-  often does not state compatibility.
+Write in English and open one issue per problem. The title says what goes wrong, and where: for
+example, `[Bug]: Installing Questie from Search fails with a download error`. The form then asks
+for these fields:
 
-WoW-don focuses on three things:
+| Field | Required | What to write |
+| --- | --- | --- |
+| WoW-don version | Yes | The number in the bottom-left corner of the app |
+| Operating system and version | Yes | For example, Ubuntu 24.04 or Windows 11 |
+| How you run the game | Yes | Natively, Lutris, Bottles, Steam / Proton or plain Wine |
+| Game version | No | The one selected in the app: Retail, Classic Era, Forever and so on |
+| What happened? | Yes | What you saw, with the exact text of any error message |
+| What should have happened? | Yes | What you expected instead |
+| Steps to reproduce | Yes | The shortest list of steps that makes the problem appear |
+| Addon involved | No | Its name and source, if the problem concerns one addon |
+| Screenshots or anything else | No | Images or other details that help |
 
-1. **Search, filters and sorting** as the main feature, both on installed addons and on the
-   catalogue.
-2. **WoW installations in Wine prefixes** handled from the start, including several
-   versions of the game (Retail, Classic, beta) in the same folder.
-3. **A native, lightweight app**: a single Rust binary with the system webview, no
-   Electron.
+A good report looks like this:
 
-The full context is in [docs/context.md](docs/context.md).
+```text
+WoW-don version: 0.2.0
+Operating system: Linux, Ubuntu 24.04
+How you run the game: Lutris
+Game version: Classic Era
 
-## Planned features
+What happened?
+Pressing Install shows "Download failed", and the addon is not installed.
 
-- Adding WoW installations (`_retail_`, `_classic_era_`, `_forever_`, `_classic_beta_`, ...
-  folders), also inside Wine prefixes.
-- Reading installed addons from the `.toc` files.
-- Recognising installed addons through CurseForge fingerprints.
-- Checking for updates and updating a single addon or all of them.
-- Searching the CurseForge catalogue with filters for category, game version,
-  popularity and update date.
-- Game version forced per addon, useful for betas.
-- Backup of `WTF` and `Interface`.
-- Later on: GitHub releases, WoWInterface and Wago as additional sources.
+What should have happened?
+The addon is installed and appears in the Installed tab.
+
+Steps to reproduce:
+1. Open the Search tab
+2. Search for "Questie"
+3. Press Install
+
+Addon involved: Questie, from CurseForge
+```
+
+**Issues are public.** Replace your username in file paths with `<user>`, and remove emails,
+account names and other personal data from logs and screenshots.
+
+To propose an idea, choose **Suggest a feature** and describe the problem it would solve.
 
 ## Addon sources and the CurseForge API
 
@@ -63,8 +133,7 @@ Rules the project follows:
 
 - the key is never in the app, the repository, a build or a log;
 - no scraping of the CurseForge site and no reuse of other apps' keys;
-- addons with `allowModDistribution = false` are not downloaded
-  automatically.
+- addons with `allowModDistribution = false` are not downloaded automatically from CurseForge.
 
 ## Stack
 
@@ -187,20 +256,6 @@ Every package contains `THIRD-PARTY-LICENSES`, with the licences of the crates a
 compiled into the app. `scripts/third-party-licenses.py` writes it before every build, and the
 `src-tauri/tauri.release*.conf.json` configuration puts it in the package: on Linux in
 `/usr/share/doc/wow-don/` next to `copyright`, on Windows and macOS among the app's resources, together with `LICENSE`.
-
-### Installing on macOS
-
-Open the `.dmg` and drag WoW-don into Applications. The app is neither signed nor notarised,
-so on the first launch macOS blocks it, saying it cannot verify the developer. To
-open it the first time:
-
-- in the Finder, in Applications, right-click (or Control-click) WoW-don and
-  choose **Open**, then confirm with **Open** in the dialog;
-- or, after the first blocked attempt, go to **System Settings → Privacy &
-  Security** and, in the Security section, press **Open Anyway** next to the message about
-  WoW-don.
-
-You only need to do it once: from the following launches the app opens normally.
 
 ## Documentation
 

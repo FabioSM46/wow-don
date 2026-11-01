@@ -1,5 +1,5 @@
-name: Feature
-description: Request a feature or an improvement (structured for AI agents)
+name: Feature (for maintainers)
+description: A refined feature, structured for the development pipeline. To propose an idea, use "Suggest a feature"
 title: "[Feature]: "
 labels: ["feature", "needs-refinement"]
 assignees: []

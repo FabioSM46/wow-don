@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { autostartHint, closeToTrayHint, TRAY_UNAVAILABLE } from "./system.ts";
+import { APP_UPDATES_HINT, APP_UPDATES_LABEL, autostartHint, closeToTrayHint, TRAY_UNAVAILABLE } from "./system.ts";
 
 describe("closeToTrayHint", () => {
   it("explains how to quit when the tray is available", () => {
@@ -41,5 +41,20 @@ describe("autostartHint", () => {
 
   it("does not promise a hidden start while the settings are loading", () => {
     assert.equal(autostartHint(null, null).includes("opens its window"), true);
+  });
+});
+
+describe("the new WoW-don versions switch", () => {
+  it("names the app in the label", () => {
+    assert.equal(APP_UPDATES_LABEL, "Check for new WoW-don versions");
+  });
+
+  it("says it concerns WoW-don and not addons, and promises no download", () => {
+    assert.equal(APP_UPDATES_HINT.includes("WoW-don itself, not addons"), true);
+    assert.equal(APP_UPDATES_HINT.includes("downloads nothing"), true);
+  });
+
+  it("never says a bare update, which in this app means addons", () => {
+    assert.equal(/update/i.test(`${APP_UPDATES_LABEL} ${APP_UPDATES_HINT}`), false);
   });
 });

@@ -4,6 +4,14 @@
 export const TRAY_UNAVAILABLE = "The system tray isn't available on this desktop.";
 
 /**
+ * The switch and its hint: the name of the app is in the label because "update" alone, in this
+ * app, means addons (D41).
+ */
+export const APP_UPDATES_LABEL = "Check for new WoW-don versions";
+export const APP_UPDATES_HINT =
+  "About WoW-don itself, not addons: shows new versions in the footer, downloads nothing.";
+
+/**
  * The hint under "Close to tray". `trayAvailable` is `null` until the settings have been
  * read: the normal text applies, the checkbox is disabled anyway.
  */

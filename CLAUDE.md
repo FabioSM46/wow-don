@@ -17,8 +17,10 @@ which may be left over with an old key. No tool signatures in
 commits and PRs: no agent `Co-Authored-By` trailer, no "Generated with", no
 `claude.ai/code/session_…` link and no `Claude-Session:` trailer.
 
-Everything is written in English: code, comments, docs, skills, templates, commit messages,
-branch names, PR and issue titles and bodies, and review replies.
+Everything is written in English, whoever writes it: code, comments, docs, skills, templates,
+commit messages, branch names, PR and issue titles and bodies, review comments and replies,
+milestones, labels and release notes. This holds even when the conversation with the user is in
+another language.
 
 Quick reference — the pipeline skills:
 

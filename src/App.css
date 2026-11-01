@@ -292,6 +292,7 @@ h2 {
 
 .app-footer {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-4);
   padding-top: var(--space-3);
   padding-bottom: var(--space-4);
