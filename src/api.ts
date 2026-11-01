@@ -28,6 +28,20 @@ export type AppSettings = {
   autoUpdate: AutoUpdateMode;
   /** The hours between two automatic update rounds: one of 1, 3, 6, 12 and 24. */
   autoUpdateIntervalHours: number;
+  /** Check for a newer WoW-don release (D46, issue #259). */
+  checkAppUpdates: boolean;
+};
+
+/**
+ * The installed version and the latest release known to the app: the response of
+ * `get_app_update` and the payload of the `app-update` event, fired only on a change. `latest`
+ * and `url` are `null` until a check succeeds and again once the option is turned off.
+ */
+export type AppUpdateStatus = {
+  current: string;
+  latest: string | null;
+  url: string | null;
+  updateAvailable: boolean;
 };
 
 /** What automatic updating does (the backend's `AutoUpdateMode`, in lowercase). */
@@ -555,6 +569,11 @@ export const api = {
   setBetaWhenNoRelease: (enabled: boolean) =>
     invoke<AppSettings>("set_beta_when_no_release", { enabled }),
   setCloseToTray: (enabled: boolean) => invoke<AppSettings>("set_close_to_tray", { enabled }),
+  /** Turned on it checks right away, turned off it forgets the release (`app-update` follows). */
+  setCheckAppUpdates: (enabled: boolean) =>
+    invoke<AppSettings>("set_check_app_updates", { enabled }),
+  /** Backend memory, no network. */
+  getAppUpdate: () => invoke<AppUpdateStatus>("get_app_update"),
   /** The real state, read back from the operating system: not in `settings.json` (issue #159). */
   getAutostart: () => invoke<boolean>("get_autostart"),
   /** Returns the state read back from the operating system after the change. */

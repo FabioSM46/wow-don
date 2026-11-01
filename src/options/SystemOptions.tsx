@@ -1,28 +1,32 @@
 import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../api";
 import { SettingsSection, SwitchRow } from "./Setting";
-import { autostartHint, closeToTrayHint } from "./system";
+import { APP_UPDATES_HINT, autostartHint, closeToTrayHint } from "./system";
 
 type Props = {
   /** The Options tab is open: the settings are read again when it becomes so. */
   active: boolean;
+  /** The saved "App updates": the footer's notice depends on it. */
+  onCheckAppUpdatesChange: (enabled: boolean) => void;
 };
 
 type Tray = { closeToTray: boolean; trayAvailable: boolean };
-type Saving = "tray" | "autostart" | null;
+type Saving = "tray" | "autostart" | "appUpdates" | null;
 
 /**
  * The "System" section of Options (issue #160): "Close to tray" (`closeToTray` from
- * `get_settings`, saved with `set_close_to_tray`) and "Start with the system" (`get_autostart`
- * and `set_autostart`, the real state of the operating system). Tray and autostart stay in the
- * backend: here there are only the app's commands.
+ * `get_settings`, saved with `set_close_to_tray`), "Start with the system" (`get_autostart`
+ * and `set_autostart`, the real state of the operating system) and "App updates" (issue #260,
+ * `checkAppUpdates`, saved with `set_check_app_updates`). Tray, autostart and the check stay in
+ * the backend: here there are only the app's commands.
  *
  * `trayAvailable` can change while the app runs, so the values are read again every time
  * Options opens and when the window comes back to the foreground with Options open.
  */
-export function SystemOptions({ active }: Props) {
+export function SystemOptions({ active, onCheckAppUpdatesChange }: Props) {
   const [tray, setTray] = useState<Tray | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [appUpdates, setAppUpdates] = useState<boolean | null>(null);
   const [saving, setSaving] = useState<Saving>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -50,6 +54,7 @@ export function SystemOptions({ active }: Props) {
           closeToTray: settings.value.closeToTray,
           trayAvailable: settings.value.trayAvailable,
         });
+        setAppUpdates(settings.value.checkAppUpdates);
       }
       if (enabled.status === "fulfilled") setAutostart(enabled.value);
       const failures = [settings, enabled].flatMap((result) =>
@@ -73,6 +78,10 @@ export function SystemOptions({ active }: Props) {
       if (which === "tray") {
         const saved = await api.setCloseToTray(next);
         setTray({ closeToTray: saved.closeToTray, trayAvailable: saved.trayAvailable });
+      } else if (which === "appUpdates") {
+        const saved = await api.setCheckAppUpdates(next);
+        setAppUpdates(saved.checkAppUpdates);
+        onCheckAppUpdatesChange(saved.checkAppUpdates);
       } else {
         setAutostart(await api.setAutostart(next));
       }
@@ -104,6 +113,13 @@ export function SystemOptions({ active }: Props) {
           checked={autostart ?? false}
           disabled={autostart === null || saving !== null}
           onChange={(next) => void save("autostart", next)}
+        />
+        <SwitchRow
+          label="App updates"
+          description={APP_UPDATES_HINT}
+          checked={appUpdates ?? false}
+          disabled={appUpdates === null || saving !== null}
+          onChange={(next) => void save("appUpdates", next)}
         />
       </div>
       {shownError && (

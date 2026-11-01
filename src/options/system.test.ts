@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { autostartHint, closeToTrayHint, TRAY_UNAVAILABLE } from "./system.ts";
+import { APP_UPDATES_HINT, autostartHint, closeToTrayHint, TRAY_UNAVAILABLE } from "./system.ts";
 
 describe("closeToTrayHint", () => {
   it("explains how to quit when the tray is available", () => {
@@ -41,5 +41,13 @@ describe("autostartHint", () => {
 
   it("does not promise a hidden start while the settings are loading", () => {
     assert.equal(autostartHint(null, null).includes("opens its window"), true);
+  });
+});
+
+describe("APP_UPDATES_HINT", () => {
+  it("speaks about the app and promises no download", () => {
+    assert.equal(APP_UPDATES_HINT.includes("WoW-don"), true);
+    assert.equal(APP_UPDATES_HINT.includes("Nothing is downloaded"), true);
+    assert.equal(APP_UPDATES_HINT.toLowerCase().includes("addon"), false);
   });
 });

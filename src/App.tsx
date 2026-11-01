@@ -5,12 +5,15 @@ import {
   api,
   errorMessage,
   type AppStatus,
+  type AppUpdateStatus,
   type AutoUpdateMode,
   type AutoUpdateStatus,
   type Installation,
   type Theme,
 } from "./api";
 import { AddonTable } from "./addons/AddonTable";
+import { APP_UPDATE_EVENT, appUpdateNotice } from "./appUpdate";
+import { AppUpdateNotice } from "./AppUpdateNotice";
 import { AutoUpdateLine } from "./addons/AutoUpdateLine";
 import { AUTO_UPDATE_EVENT, changedInstallations } from "./addons/autoUpdateStatus";
 import { ZipDrop } from "./addons/ZipDrop";
@@ -73,6 +76,10 @@ function App() {
   const [autoUpdateMode, setAutoUpdateMode] = useState<AutoUpdateMode | null>(null);
   const [autoUpdateStatus, setAutoUpdateStatus] = useState<AutoUpdateStatus | null>(null);
   const lastAutoUpdate = useRef<AutoUpdateStatus | null>(null);
+  // A newer WoW-don release (D46, issue #260): the state from `get_app_update` and the
+  // `app-update` event, and the `checkAppUpdates` option (`null` until it is read).
+  const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null);
+  const [checkAppUpdates, setCheckAppUpdates] = useState<boolean | null>(null);
   // Installation id → `finishedAt` of the round the user undid: its outcome no longer describes
   // the disk and the row does not show it.
   const [undoneRounds, setUndoneRounds] = useState<ReadonlyMap<string, string>>(() => new Map());
@@ -109,6 +116,8 @@ function App() {
         setTheme(settings.theme);
         setBetaWhenNoRelease(settings.betaWhenNoRelease);
         setAutoUpdateMode(settings.autoUpdate);
+        // A switch saved in the meantime is more recent than this read.
+        setCheckAppUpdates((saved) => saved ?? settings.checkAppUpdates);
       })
       .catch((err) => setSettingsError(errorMessage(err)));
     api
@@ -166,6 +175,34 @@ function App() {
     };
   }, [markSearchStale]);
 
+  // The latest release: subscribed before the read, so a change between the two is not lost.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    let eventSeen = false;
+    listen<AppUpdateStatus>(APP_UPDATE_EVENT, ({ payload }) => {
+      eventSeen = true;
+      if (!disposed) setAppUpdate(payload);
+    })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      // Outside Tauri nothing arrives: the footer stays as it is.
+      .catch(() => {});
+    api
+      .getAppUpdate()
+      .then((first) => {
+        // An event that arrived before the response is more recent: the read does not replace it.
+        if (!disposed && !eventSeen) setAppUpdate(first);
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   // An installation that finishes while the Installed tab is already open also makes it reread.
   useEffect(() => {
     if (tab !== "installed" || !installedStale) return;
@@ -174,6 +211,7 @@ function App() {
   }, [tab, installedStale]);
 
   const active = installations?.find((installation) => installation.id === activeId) ?? null;
+  const notice = appUpdateNotice(appUpdate, checkAppUpdates);
   // Only the events of a local zip (without a source), while one is being installed.
   useInstallProgress(active?.id ?? null, (event) => {
     if (zipRunning.current && event.source === null) setZipProgress(event);
@@ -440,7 +478,7 @@ function App() {
               onModeChange={setAutoUpdateMode}
             />
           )}
-          <SystemOptions active={tab === "options"} />
+          <SystemOptions active={tab === "options"} onCheckAppUpdatesChange={setCheckAppUpdates} />
           {installations !== null && (
             <ImportExport
               installation={active ?? null}
@@ -458,6 +496,7 @@ function App() {
       {status && (
         <footer className="app-footer">
           <span>v{status.version}</span>
+          {notice && <AppUpdateNotice notice={notice} />}
         </footer>
       )}
     </div>
