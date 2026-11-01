@@ -855,6 +855,14 @@ pub struct AppSettings {
     /// settings.
     #[serde(default = "default_auto_update_interval")]
     pub auto_update_interval_hours: u32,
+    /// Look for a newer WoW-don release on GitHub (D46, issue #259). An older `settings.json`
+    /// lacks the field: it counts as on, like a new installation.
+    #[serde(default = "default_check_app_updates")]
+    pub check_app_updates: bool,
+}
+
+fn default_check_app_updates() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -865,6 +873,7 @@ impl Default for AppSettings {
             close_to_tray: false,
             auto_update: AutoUpdateMode::default(),
             auto_update_interval_hours: DEFAULT_AUTO_UPDATE_INTERVAL_HOURS,
+            check_app_updates: default_check_app_updates(),
         }
     }
 }
@@ -947,6 +956,15 @@ impl AppSettingsStore {
         self.reload()?;
         let mut next = self.settings;
         next.close_to_tray = enabled;
+        self.save(next)?;
+        Ok(next)
+    }
+
+    /// Saves the "App updates" option and returns the updated settings.
+    pub fn set_check_app_updates(&mut self, enabled: bool) -> Result<AppSettings, String> {
+        self.reload()?;
+        let mut next = self.settings;
+        next.check_app_updates = enabled;
         self.save(next)?;
         Ok(next)
     }
@@ -1849,7 +1867,8 @@ mod tests {
                 "betaWhenNoRelease": false,
                 "closeToTray": false,
                 "autoUpdate": "notify",
-                "autoUpdateIntervalHours": 6
+                "autoUpdateIntervalHours": 6,
+                "checkAppUpdates": true
             })
         );
 
@@ -1874,6 +1893,26 @@ mod tests {
         let reloaded = AppSettingsStore::load(file).get().unwrap();
         assert!(reloaded.beta_when_no_release);
         assert_eq!(reloaded.theme, Theme::Dark);
+    }
+
+    #[test]
+    fn check_app_updates_defaults_to_on_and_keeps_the_other_settings() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        fs::write(&file, r#"{"version": 1, "theme": "dark"}"#).unwrap();
+
+        let mut store = AppSettingsStore::load(file.clone());
+        assert!(store.get().unwrap().check_app_updates);
+
+        let saved = store.set_check_app_updates(false).unwrap();
+        assert!(!saved.check_app_updates);
+        assert_eq!(saved.theme, Theme::Dark);
+        assert!(
+            !AppSettingsStore::load(file)
+                .get()
+                .unwrap()
+                .check_app_updates
+        );
     }
 
     #[test]

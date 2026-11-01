@@ -12,6 +12,7 @@ use crate::addon_list;
 use crate::addon_remove;
 use crate::addons::cache::FingerprintCache;
 use crate::addons::scan::{self, ListedAddon};
+use crate::app_update::{AppUpdate, AppUpdateStatus};
 use crate::auto_update::{AutoUpdate, AutoUpdateStatus};
 use crate::autostart;
 use crate::backup::{self, BackupInfo};
@@ -148,6 +149,29 @@ pub fn set_close_to_tray(
         locked_app_settings(&settings)?.set_close_to_tray(enabled),
         &tray,
     )
+}
+
+/// Saves the "App updates" option (D46, issue #259) and returns the updated settings. The check
+/// re-reads it: turned on it runs right away, turned off it forgets the release.
+#[tauri::command]
+pub fn set_check_app_updates(
+    enabled: bool,
+    settings: AppSettingsState<'_>,
+    tray: State<'_, TrayStatus>,
+    app_update: State<'_, AppUpdate>,
+) -> Result<SettingsView, String> {
+    let saved = locked_app_settings(&settings)?.set_check_app_updates(enabled);
+    if saved.is_ok() {
+        app_update.wake();
+    }
+    settings_view(saved, &tray)
+}
+
+/// The installed version and the latest release known to the app (D46, issue #259): the same
+/// payload as the `app-update` event, see [`AppUpdateStatus`]. Memory only, no network.
+#[tauri::command]
+pub fn get_app_update(app_update: State<'_, AppUpdate>) -> AppUpdateStatus {
+    app_update.status()
 }
 
 /// Saves the mode (`off`, `notify` or `install`) and the interval in hours of the automatic
@@ -1889,6 +1913,7 @@ mod tests {
             close_to_tray: true,
             auto_update: AutoUpdateMode::Install,
             auto_update_interval_hours: 12,
+            check_app_updates: false,
         })
         .unwrap();
         assert_eq!(
@@ -1898,7 +1923,8 @@ mod tests {
                 "betaWhenNoRelease": true,
                 "closeToTray": true,
                 "autoUpdate": "install",
-                "autoUpdateIntervalHours": 12
+                "autoUpdateIntervalHours": 12,
+                "checkAppUpdates": false
             })
         );
     }
@@ -1915,6 +1941,7 @@ mod tests {
                 "closeToTray": false,
                 "autoUpdate": "notify",
                 "autoUpdateIntervalHours": 6,
+                "checkAppUpdates": true,
                 "trayAvailable": false
             })
         );
