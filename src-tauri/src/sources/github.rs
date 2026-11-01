@@ -729,7 +729,7 @@ fn manifest_file<'a>(
 
 /// Where the `releases/latest` redirect leads.
 #[derive(Debug, PartialEq, Eq)]
-enum Target {
+pub(crate) enum Target {
     /// `/{owner}/{repo}/releases/tag/{tag}` of the same repository: the tag, decoded.
     Tag(String),
     /// `/{owner}/{repo}/releases/latest` of another name: the repository has been moved.
@@ -744,7 +744,7 @@ enum Target {
 /// without query or fragment, to the tag of the same repository (case-insensitively, like
 /// GitHub) or to `releases/latest` of a moved repository. Otherwise
 /// `None`.
-fn latest_target(from: &str, location: Option<&str>, repo: &str) -> Option<Target> {
+pub(crate) fn latest_target(from: &str, location: Option<&str>, repo: &str) -> Option<Target> {
     let url = reqwest::Url::parse(from).ok()?.join(location?).ok()?;
     if !is_allowed_url(&url, &DOMAINS)
         || url.host_str() != Some("github.com")

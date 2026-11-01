@@ -2,6 +2,7 @@ mod addon_import;
 mod addon_list;
 mod addon_remove;
 mod addons;
+mod app_update;
 mod auto_update;
 mod autostart;
 mod backup;
@@ -56,6 +57,7 @@ pub fn run() {
         .manage(addons::cache::FingerprintCache::default())
         .manage(tray::TrayStatus::default())
         .manage(auto_update::AutoUpdate::default())
+        .manage(app_update::AppUpdate::default())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             app.manage(Mutex::new(InstallationStore::load(
@@ -83,11 +85,15 @@ pub fn run() {
             // The automatic update run (D41, issue #200) starts with `--autostart` too: the
             // first run waits `STARTUP_DELAY`, the states are already registered.
             auto_update::start(app.handle().clone());
+            // The check for a new version of the app (D46, issue #259): independent of the above.
+            app_update::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
+            commands::get_app_update,
+            commands::set_check_app_updates,
             commands::list_installations,
             commands::add_installation,
             commands::remove_installation,
