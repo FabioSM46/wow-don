@@ -98,15 +98,25 @@ const autoChecked = new Set<string>();
 /** The last check error per installation, to show it also when going back to it. */
 const errorCache = new Map<string, string>();
 /**
- * Drops the update check results of `installationIds` (issue #268): an automatic round found
- * something newer than what the table checked. The next visit to one of them checks again on its
- * own; the table on screen rereads through `reload`.
+ * How many times each installation's check results were dropped. A check records its result only
+ * if the generation is still the one it started with: one already in flight when the results are
+ * dropped would otherwise write back statuses read before the change.
+ */
+const checkGenerations = new Map<string, number>();
+function checkGeneration(id: string): number {
+  return checkGenerations.get(id) ?? 0;
+}
+/**
+ * Drops the update check results of `installationIds`: after an update or a version change, and
+ * when an automatic round found something newer than what the table checked (issue #268). The
+ * next visit to one of them checks again on its own; the table on screen rereads through `reload`.
  */
 export function forgetUpdateChecks(installationIds: readonly string[]): void {
   for (const id of installationIds) {
     updatesCache.delete(id);
     autoChecked.delete(id);
     errorCache.delete(id);
+    checkGenerations.set(id, checkGeneration(id) + 1);
   }
 }
 /**
@@ -197,19 +207,22 @@ export function AddonTable({
 
   const runCheck = useCallback((): Promise<void> => {
     const id = installation.id;
+    const generation = checkGeneration(id);
     setChecking(true);
     setCheckError(null);
     return api
       .checkUpdates(id)
       .then((result) => {
-        updatesCache.set(id, result);
-        errorCache.delete(id);
+        if (checkGeneration(id) === generation) {
+          updatesCache.set(id, result);
+          errorCache.delete(id);
+        }
         if (currentId.current !== id) return;
         setUpdates(byFolder(result));
         setChecking(false);
       })
       .catch((err) => {
-        errorCache.set(id, errorMessage(err));
+        if (checkGeneration(id) === generation) errorCache.set(id, errorMessage(err));
         if (currentId.current !== id) return;
         setCheckError(errorMessage(err));
         setChecking(false);
@@ -238,6 +251,7 @@ export function AddonTable({
   // unchanged, for changes made by hand outside the app.
   function rescan(force = false): Promise<void> {
     const id = installation.id;
+    const generation = checkGeneration(id);
     setRescanning(true);
     setRescanError(null);
     setChecking(true);
@@ -247,11 +261,14 @@ export function AddonTable({
       .refreshAddons(id, force)
       .then((result) => {
         const check = refreshCheck(result);
-        if (check.error === null) {
-          updatesCache.set(id, check.updates);
-          errorCache.delete(id);
-        } else {
-          errorCache.set(id, check.error);
+        // Results dropped while the scan was in flight stay dropped: the next check rereads them.
+        if (checkGeneration(id) === generation) {
+          if (check.error === null) {
+            updatesCache.set(id, check.updates);
+            errorCache.delete(id);
+          } else {
+            errorCache.set(id, check.error);
+          }
         }
         if (currentId.current !== id) return;
         setLoad({ state: "ready", addons: result.addons });
@@ -415,12 +432,10 @@ export function AddonTable({
       )
       .then((result) => {
         updateResults.set(id, result);
-        // The previous statuses are no longer valid: without a cache the next check rereads them.
-        updatesCache.delete(id);
-        errorCache.delete(id);
-        // With the cache empty a new check is needed even if something else is being viewed now:
-        // when going back to the table the automatic check will start again.
-        autoChecked.delete(id);
+        // The previous statuses are no longer valid: without a cache the next check rereads them,
+        // even if something else is being viewed now (the automatic check starts again on going
+        // back to the table).
+        forgetUpdateChecks([id]);
         if (!mounted.current || currentId.current !== id) return;
         setUpdateResult(result);
         return rescan();
@@ -501,9 +516,7 @@ export function AddonTable({
         () => {
           // The previous statuses apply to the other version: as after an update, the cache is
           // emptied and the check restarts (or will restart on going back to the installation).
-          updatesCache.delete(id);
-          errorCache.delete(id);
-          autoChecked.delete(id);
+          forgetUpdateChecks([id]);
           if (!mounted.current || currentId.current !== id) return;
           // The label changes immediately; the update status comes from the check.
           setUpdates((previous) => withOverride(previous, modId, versionType));
