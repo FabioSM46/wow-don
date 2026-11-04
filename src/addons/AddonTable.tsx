@@ -98,6 +98,18 @@ const autoChecked = new Set<string>();
 /** The last check error per installation, to show it also when going back to it. */
 const errorCache = new Map<string, string>();
 /**
+ * Drops the update check results of `installationIds` (issue #268): an automatic round found
+ * something newer than what the table checked. The next visit to one of them checks again on its
+ * own; the table on screen rereads through `reload`.
+ */
+export function forgetUpdateChecks(installationIds: readonly string[]): void {
+  for (const id of installationIds) {
+    updatesCache.delete(id);
+    autoChecked.delete(id);
+    errorCache.delete(id);
+  }
+}
+/**
  * Projects being updated per installation. Outside the component like the caches above: going
  * back to an installation with an update still in progress, the rows stay locked and a second
  * update of the same project does not start.

@@ -188,6 +188,28 @@ export function changedInstallations(
     .map((report) => report.installationId);
 }
 
+/**
+ * The installations whose update statuses in the Installed tab are stale when the state `next`
+ * arrives after `previous`: those for which a new round, `notify` or `install`, found updates,
+ * updated addons or hit errors (issue #268). A `notify` round touches no disk, but the table
+ * checked once at first access and would keep showing the older result. The same round read
+ * again does not count twice.
+ */
+export function staleUpdateChecks(
+  previous: AutoUpdateStatus | null,
+  next: AutoUpdateStatus,
+): string[] {
+  const round = next.lastRound;
+  if (round === null) return [];
+  if (previous?.lastRound?.finishedAt === round.finishedAt) return [];
+  return round.installations
+    .filter(
+      (report) =>
+        report.available.length > 0 || report.updated.length > 0 || report.errors.length > 0,
+    )
+    .map((report) => report.installationId);
+}
+
 /** The outcome of an Undo: the summary and the projects not restored, with the reason. */
 export function describeUndo(outcomes: readonly UndoOutcome[]): {
   text: string;

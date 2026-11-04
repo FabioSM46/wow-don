@@ -12,6 +12,7 @@ import type {
 } from "../api";
 import {
   changedInstallations,
+  staleUpdateChecks,
   clockTime,
   describeUndo,
   statusLine,
@@ -243,6 +244,38 @@ describe("changedInstallations", () => {
   it("ignores notify rounds", () => {
     const notify = status("notify", [report({ available: [available("A")] })]);
     assert.deepEqual(changedInstallations(null, notify), []);
+  });
+});
+
+describe("staleUpdateChecks", () => {
+  it("lists the installations a notify round found updates for", () => {
+    const notify = status("notify", [
+      report({ available: [available("A")] }),
+      report({ installationId: "classic" }),
+    ]);
+    assert.deepEqual(staleUpdateChecks(null, notify), ["retail"]);
+    assert.deepEqual(staleUpdateChecks(status(null, []), notify), ["retail"]);
+  });
+
+  it("lists the installations an install round updated or failed on", () => {
+    const install = status("install", [
+      report({ updated: [outcome("A", "updated")] }),
+      report({
+        installationId: "classic",
+        errors: [{ source: null, key: null, name: "B", message: "Locked." }],
+      }),
+      report({ installationId: "ptr" }),
+    ]);
+    assert.deepEqual(staleUpdateChecks(null, install), ["retail", "classic"]);
+  });
+
+  it("ignores the same round seen again", () => {
+    const notify = status("notify", [report({ available: [available("A")] })]);
+    assert.deepEqual(staleUpdateChecks(notify, notify), []);
+  });
+
+  it("ignores a status without rounds", () => {
+    assert.deepEqual(staleUpdateChecks(null, status(null, [])), []);
   });
 });
 
