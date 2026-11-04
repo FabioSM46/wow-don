@@ -11,11 +11,15 @@ import {
   type Installation,
   type Theme,
 } from "./api";
-import { AddonTable } from "./addons/AddonTable";
+import { AddonTable, forgetUpdateChecks } from "./addons/AddonTable";
 import { APP_UPDATE_EVENT, appUpdateNotice } from "./appUpdate";
 import { AppUpdateNotice } from "./AppUpdateNotice";
 import { AutoUpdateLine } from "./addons/AutoUpdateLine";
-import { AUTO_UPDATE_EVENT, changedInstallations } from "./addons/autoUpdateStatus";
+import {
+  AUTO_UPDATE_EVENT,
+  changedInstallations,
+  staleUpdateChecks,
+} from "./addons/autoUpdateStatus";
 import { ZipDrop } from "./addons/ZipDrop";
 import { ProgressBar, useInstallProgress } from "./addons/ProgressBar";
 import { progressLabel, type InstallProgress } from "./addons/progress";
@@ -135,9 +139,9 @@ function App() {
       .catch((err) => setError(errorMessage(err)));
   }, []);
 
-  // The automatic update status: read on opening, then on every event. A new `install` round
-  // changes the addons on disk: Installed and Search reread, as after an installation from
-  // Search.
+  // The automatic update status: read on opening, then on every event. A new round that found
+  // updates makes Installed reread its statuses; an `install` round also changes the addons on
+  // disk, so Search rereads too, as after an installation from Search.
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
@@ -150,10 +154,14 @@ function App() {
       // disk. An event that arrives first may come from a round finished after the list was
       // read, and so it counts.
       if (previous === null && !fromEvent) return;
-      const changed = changedInstallations(previous, next);
-      if (changed.length === 0) return;
-      setInstalledStale(true);
-      changed.forEach(markSearchStale);
+      // Any new round with findings, `notify` included, makes the Installed statuses stale
+      // (issue #268); only an `install` round changes the disk Search reads.
+      const stale = staleUpdateChecks(previous, next);
+      if (stale.length > 0) {
+        forgetUpdateChecks(stale);
+        setInstalledStale(true);
+      }
+      changedInstallations(previous, next).forEach(markSearchStale);
     };
     listen<AutoUpdateStatus>(AUTO_UPDATE_EVENT, ({ payload }) => receive(payload, true))
       .then((stop) => {
