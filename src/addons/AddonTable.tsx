@@ -213,16 +213,18 @@ export function AddonTable({
     return api
       .checkUpdates(id)
       .then((result) => {
-        if (checkGeneration(id) === generation) {
-          updatesCache.set(id, result);
-          errorCache.delete(id);
-        }
+        // Dropped while in flight (`forgetUpdateChecks`): a newer check follows and owns the
+        // cache and the screen, so this older result touches neither.
+        if (checkGeneration(id) !== generation) return;
+        updatesCache.set(id, result);
+        errorCache.delete(id);
         if (currentId.current !== id) return;
         setUpdates(byFolder(result));
         setChecking(false);
       })
       .catch((err) => {
-        if (checkGeneration(id) === generation) errorCache.set(id, errorMessage(err));
+        if (checkGeneration(id) !== generation) return;
+        errorCache.set(id, errorMessage(err));
         if (currentId.current !== id) return;
         setCheckError(errorMessage(err));
         setChecking(false);
@@ -260,18 +262,19 @@ export function AddonTable({
     return api
       .refreshAddons(id, force)
       .then((result) => {
+        // The list read from disk is current whatever happened to the check meanwhile.
+        if (currentId.current === id) setLoad({ state: "ready", addons: result.addons });
+        // Dropped while the scan was in flight (`forgetUpdateChecks`): as in `runCheck`, the newer
+        // check that follows (`rescan` or `runCheck`) owns the cache and the statuses.
+        if (checkGeneration(id) !== generation) return;
         const check = refreshCheck(result);
-        // Results dropped while the scan was in flight stay dropped: the next check rereads them.
-        if (checkGeneration(id) === generation) {
-          if (check.error === null) {
-            updatesCache.set(id, check.updates);
-            errorCache.delete(id);
-          } else {
-            errorCache.set(id, check.error);
-          }
+        if (check.error === null) {
+          updatesCache.set(id, check.updates);
+          errorCache.delete(id);
+        } else {
+          errorCache.set(id, check.error);
         }
         if (currentId.current !== id) return;
-        setLoad({ state: "ready", addons: result.addons });
         if (check.error === null) {
           setUpdates(byFolder(check.updates));
         } else {
@@ -292,10 +295,11 @@ export function AddonTable({
         setRescanError(errorMessage(err));
       })
       .finally(() => {
-        if (currentId.current === id) {
-          setRescanning(false);
-          setChecking(false);
-        }
+        if (currentId.current !== id) return;
+        // The scan is over either way; `checking` belongs to the newer check when this one was
+        // dropped, and that check (`rescan` or `runCheck`) clears it when it ends.
+        setRescanning(false);
+        if (checkGeneration(id) === generation) setChecking(false);
       });
   }
 
