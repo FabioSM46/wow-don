@@ -262,8 +262,10 @@ export function AddonTable({
     return api
       .refreshAddons(id, force)
       .then((result) => {
+        // The list read from disk is current whatever happened to the check meanwhile.
+        if (currentId.current === id) setLoad({ state: "ready", addons: result.addons });
         // Dropped while the scan was in flight (`forgetUpdateChecks`): as in `runCheck`, the newer
-        // check that follows owns the cache and the screen.
+        // check that follows (`rescan` or `runCheck`) owns the cache and the statuses.
         if (checkGeneration(id) !== generation) return;
         const check = refreshCheck(result);
         if (check.error === null) {
@@ -273,7 +275,6 @@ export function AddonTable({
           errorCache.set(id, check.error);
         }
         if (currentId.current !== id) return;
-        setLoad({ state: "ready", addons: result.addons });
         if (check.error === null) {
           setUpdates(byFolder(check.updates));
         } else {
@@ -286,7 +287,7 @@ export function AddonTable({
         }
       })
       .catch((err) => {
-        if (checkGeneration(id) !== generation || currentId.current !== id) return;
+        if (currentId.current !== id) return;
         // A read error does not remove the table already shown: it is reported above.
         setLoad((previous) =>
           previous.state === "ready" ? previous : { state: "error", message: errorMessage(err) },
@@ -294,11 +295,11 @@ export function AddonTable({
         setRescanError(errorMessage(err));
       })
       .finally(() => {
-        // A dropped scan leaves the busy flags to the newer one, which may still be running.
-        if (checkGeneration(id) === generation && currentId.current === id) {
-          setRescanning(false);
-          setChecking(false);
-        }
+        if (currentId.current !== id) return;
+        // The scan is over either way; `checking` belongs to the newer check when this one was
+        // dropped, and that check (`rescan` or `runCheck`) clears it when it ends.
+        setRescanning(false);
+        if (checkGeneration(id) === generation) setChecking(false);
       });
   }
 
