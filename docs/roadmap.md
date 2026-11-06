@@ -120,6 +120,16 @@ D41, issues #199–#204:
 - Search in the WoWInterface catalogue.
 - System notifications for automatic updates (D41): they require
   `tauri-plugin-notification`, a dependency to be approved.
+- Direct dependencies inside their addon's row in the Installed tab, opened with the chevron like
+  the `EllesmereUI*` modules. Today `Questie`, `QuestieDB` and `QuestieTrace` are three rows:
+  they are three CurseForge projects, `groupAddons` vetoes different projects, and Questie's
+  `.toc` lists the other two only as `OptionalDeps`. The relation would come from the required
+  dependencies (`relationType 3`) of the installed CurseForge file, carried by the check. Choices
+  already made: a project is nested only when exactly one installed addon requires it (installed
+  alone or shared, it stays its own row; search does not change, `QuestieDB` can be installed
+  alone); the sub-row keeps its own version menu and Update button, and a collapsed row shows a
+  hint when a dependency has an update; removing the row also removes the dependencies nested in
+  it. One level only, CurseForge only.
 
 - Wago Addons (D39): API access request sent by the user; the source is specified
   only if Wago grants a key to use in WoW-don.
