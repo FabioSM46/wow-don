@@ -37,6 +37,13 @@ import {
 import { SOURCE_LABELS, projectId, sourcesIn, updateRequest, type ProjectRef } from "./sources";
 import { ProgressBar, useInstallProgress } from "./ProgressBar";
 import { refreshCheck } from "./refresh";
+import {
+  checkGeneration,
+  claimAutoCheck,
+  errorCache,
+  forgetUpdateChecks,
+  updatesCache,
+} from "./updateChecks";
 import { ContextMenu } from "./ContextMenu";
 import {
   EXCLUDED_TITLE,
@@ -87,38 +94,6 @@ type Props = {
   autoUpdateLine?: ReactNode;
 };
 
-/**
- * Update check results per installation, valid for the session. They live outside the
- * component because changing installation reloads the component: going back to one already
- * checked does not call CurseForge again.
- */
-const updatesCache = new Map<string, AddonUpdate[]>();
-/** Installations with an automatic check already started, so as not to call CurseForge twice. */
-const autoChecked = new Set<string>();
-/** The last check error per installation, to show it also when going back to it. */
-const errorCache = new Map<string, string>();
-/**
- * How many times each installation's check results were dropped. A check records its result only
- * if the generation is still the one it started with: one already in flight when the results are
- * dropped would otherwise write back statuses read before the change.
- */
-const checkGenerations = new Map<string, number>();
-function checkGeneration(id: string): number {
-  return checkGenerations.get(id) ?? 0;
-}
-/**
- * Drops the update check results of `installationIds`: after an update or a version change, and
- * when an automatic round found something newer than what the table checked (issue #268). The
- * next visit to one of them checks again on its own; the table on screen rereads through `reload`.
- */
-export function forgetUpdateChecks(installationIds: readonly string[]): void {
-  for (const id of installationIds) {
-    updatesCache.delete(id);
-    autoChecked.delete(id);
-    errorCache.delete(id);
-    checkGenerations.set(id, checkGeneration(id) + 1);
-  }
-}
 /**
  * Projects being updated per installation. Outside the component like the caches above: going
  * back to an installation with an update still in progress, the rows stay locked and a second
@@ -239,10 +214,7 @@ export function AddonTable({
     setUpdates(cached ? byFolder(cached) : undefined);
     setChecking(false);
     setCheckError(errorCache.get(installation.id) ?? null);
-    if (!cached && !autoChecked.has(installation.id)) {
-      autoChecked.add(installation.id);
-      void runCheck();
-    }
+    if (claimAutoCheck(installation.id)) void runCheck();
   }, [installation.id, runCheck]);
 
   // Rereads `Interface/AddOns` without emptying the table or losing filters and open rows:

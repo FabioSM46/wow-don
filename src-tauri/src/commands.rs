@@ -13,7 +13,7 @@ use crate::addon_remove;
 use crate::addons::cache::FingerprintCache;
 use crate::addons::scan::{self, ListedAddon};
 use crate::app_update::{AppUpdate, AppUpdateStatus};
-use crate::auto_update::{AutoUpdate, AutoUpdateStatus};
+use crate::auto_update::{self, AutoUpdate, AutoUpdateStatus};
 use crate::autostart;
 use crate::backup::{self, BackupInfo};
 use crate::catalog::{self, AddonDetail, CatalogCategory, CatalogPage, CatalogQuery, CatalogSort};
@@ -488,12 +488,13 @@ pub async fn refresh_addons(
     let listed_records = locked_installed(&installed)?
         .records_for(&installation.id)
         .unwrap_or_default();
+    let checked_at = backup::iso_utc(std::time::SystemTime::now());
     tauri::async_runtime::spawn_blocking(move || {
         let cache = app.state::<FingerprintCache>();
         if force == Some(true) {
             cache.forget_all(&installation.path.join("Interface").join("AddOns"));
         }
-        refresh_blocking(
+        let refresh = refresh_blocking(
             &installation,
             &cache,
             base,
@@ -501,7 +502,14 @@ pub async fn refresh_addons(
             allow_beta,
             &records,
             &listed_records,
-        )
+        );
+        // The tray count and the last round follow the fresh check (issue #273).
+        if let Ok(refresh) = &refresh
+            && refresh.check_error.is_none()
+        {
+            auto_update::after_manual_check(&app, &installation.id, &refresh.updates, &checked_at);
+        }
+        refresh
     })
     .await
     .map_err(|error| format!("Reading the addons was interrupted ({error})."))?
@@ -1203,12 +1211,16 @@ pub async fn check_updates(
     let overrides = overrides_for(&settings, &installation.id)?;
     let allow_beta = beta_when_no_release(&app.state::<Mutex<AppSettingsStore>>());
     let records = records_for_matching(&installed, &installation.id);
+    let checked_at = backup::iso_utc(std::time::SystemTime::now());
     tauri::async_runtime::spawn_blocking(move || {
         let sources = LiveSources::new(base)?;
         let cache = app.state::<FingerprintCache>();
-        sources.with(&overrides, allow_beta, |sources| {
+        let found = sources.with(&overrides, allow_beta, |sources| {
             updates::check_updates_with(&installation, Some(&cache), sources, &records)
-        })
+        })?;
+        // The tray count and the last round follow the fresh check (issue #273).
+        auto_update::after_manual_check(&app, &installation.id, &found, &checked_at);
+        Ok(found)
     })
     .await
     .map_err(|error| format!("The update check was interrupted ({error})."))?
@@ -1251,12 +1263,12 @@ pub async fn update_addons(
         .collect();
     tauri::async_runtime::spawn_blocking(move || {
         let lock = app.state::<InstallLock>();
-        let _held = lock.hold();
+        let held = lock.hold();
         let sources = LiveSources::new(base)?;
         let installed = app.state::<Mutex<InstalledAddonsStore>>();
         let cache = app.state::<FingerprintCache>();
         let mut record = record_writer(&installed, &cache, &installation);
-        sources.with(&overrides, allow_beta, |sources| {
+        let outcomes = sources.with(&overrides, allow_beta, |sources| {
             updates::update_addons_with(
                 &installation,
                 Some(&cache),
@@ -1267,7 +1279,13 @@ pub async fn update_addons(
                 &mut record,
                 &emit_progress(&app, &installation.id),
             )
-        })
+        })?;
+        // As in the automatic round, the tray is refreshed without holding the lock (issue
+        // #273): the call waits for the main thread.
+        drop(record);
+        drop(held);
+        auto_update::after_manual_update(&app, &installation.id, &projects, &outcomes);
+        Ok(outcomes)
     })
     .await
     .map_err(|error| format!("The update was interrupted ({error})."))?

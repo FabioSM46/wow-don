@@ -277,6 +277,62 @@ describe("staleUpdateChecks", () => {
   it("ignores a status without rounds", () => {
     assert.deepEqual(staleUpdateChecks(null, status(null, [])), []);
   });
+
+  /** A round of `mode` that finished at `finishedAt`, with the given reports. */
+  function roundAt(
+    mode: RoundReport["mode"],
+    finishedAt: string,
+    reports: InstallationReport[],
+  ): AutoUpdateStatus {
+    return status(mode, [], {
+      lastRound: { mode, startedAt: "T0", finishedAt, retrying: false, installations: reports },
+    });
+  }
+
+  it("lists a later notify round with updates, after an earlier one", () => {
+    const earlier = roundAt("notify", "T2", [report({ available: [available("A")] })]);
+    const later = roundAt("notify", "T4", [
+      report({ checkedAt: "T3", available: [available("A"), available("B")] }),
+    ]);
+    assert.deepEqual(staleUpdateChecks(earlier, later), ["retail"]);
+  });
+
+  it("ignores a new notify round that found no updates", () => {
+    const earlier = roundAt("notify", "T2", [report({ available: [available("A")] })]);
+    const later = roundAt("notify", "T4", [
+      report({ checkedAt: "T3" }),
+      report({ installationId: "classic", checkedAt: "T3" }),
+    ]);
+    assert.deepEqual(staleUpdateChecks(earlier, later), []);
+    assert.deepEqual(staleUpdateChecks(null, later), []);
+  });
+
+  it("ignores a notify round whose only finding is a check error", () => {
+    const failed = roundAt("notify", "T4", [report({ checkError: "No network." })]);
+    assert.deepEqual(staleUpdateChecks(null, failed), []);
+  });
+
+  it("ignores the same round emitted again with a different outcome", () => {
+    // After a manual check or update the backend reconciles `lastRound` and emits it again with
+    // the same `finishedAt` (issue #273): the table already holds that manual result.
+    const round = roundAt("notify", "T2", [
+      report({ available: [available("A"), available("B")] }),
+    ]);
+    const checked = roundAt("notify", "T2", [
+      report({ checkedAt: "T5", available: [available("B")] }),
+    ]);
+    const updated = roundAt("notify", "T2", [report({ checkedAt: "T6" })]);
+    assert.deepEqual(staleUpdateChecks(round, checked), []);
+    assert.deepEqual(staleUpdateChecks(checked, updated), []);
+    const install = roundAt("install", "T2", [
+      report({ available: [available("A")], updated: [outcome("A", "updated")] }),
+    ]);
+    const reconciled = roundAt("install", "T2", [
+      report({ checkedAt: "T5", updated: [outcome("A", "updated")] }),
+    ]);
+    assert.deepEqual(staleUpdateChecks(install, reconciled), []);
+    assert.deepEqual(changedInstallations(install, reconciled), []);
+  });
 });
 
 describe("describeUndo", () => {
