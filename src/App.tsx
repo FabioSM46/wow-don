@@ -11,7 +11,8 @@ import {
   type Installation,
   type Theme,
 } from "./api";
-import { AddonTable, forgetUpdateChecks } from "./addons/AddonTable";
+import { AddonTable } from "./addons/AddonTable";
+import { forgetUpdateChecks } from "./addons/updateChecks";
 import { APP_UPDATE_EVENT, appUpdateNotice } from "./appUpdate";
 import { AppUpdateNotice } from "./AppUpdateNotice";
 import { AutoUpdateLine } from "./addons/AutoUpdateLine";
