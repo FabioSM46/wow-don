@@ -193,9 +193,14 @@ export function changedInstallations(
  * arrives after `previous`: those for which a new round, `notify` or `install`, found updates,
  * updated addons or hit errors (issue #268). A `notify` round touches no disk, but the table
  * checked once at first access and would keep showing the older result. The same round read
- * again does not count twice, even with a different outcome: after a manual check or update the
- * backend emits the round again with the same `finishedAt` and the outcome reconciled with what
- * the table has just read (issue #273), so it describes nothing the table lacks.
+ * again does not count twice, even with a different outcome. After a manual check or update the
+ * backend emits the round again with the same `finishedAt` and the outcome reconciled with that
+ * command's result (issue #273). The commands that do it (`check_updates`, `refresh_addons`,
+ * `update_addons`) are called only by `AddonTable`, which writes their result to the table itself
+ * (`runCheck`, `rescan`, and `forgetUpdateChecks` plus `rescan` after an update), so the event
+ * describes nothing the table lacks. The Undo event is followed by `onUndone`, which rereads the
+ * list. Rereading on a changed outcome would also loop: the reread runs `refresh_addons`, which
+ * reconciles and emits again with a new `checkedAt`.
  */
 export function staleUpdateChecks(
   previous: AutoUpdateStatus | null,
