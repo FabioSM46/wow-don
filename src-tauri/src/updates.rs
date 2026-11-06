@@ -636,7 +636,7 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
             )
         })?;
         let fingerprints: Vec<u32> = offered.iter().filter_map(|a| a.fingerprint).collect();
-        let matches = self
+        let mut matches = self
             .client
             .match_fingerprints(&fingerprints)
             .map_err(|e: CurseForgeError| e.to_string())?;
@@ -651,6 +651,7 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
         mod_ids.sort_unstable();
         mod_ids.dedup();
         let mods = self.client.get_mods(&mod_ids).map_err(|e| e.to_string())?;
+        latest_files_from_mods(&mut matches, &mods);
         let recorded = self.recorded_matches(&candidates, &mods);
         let mut updates = evaluate_with(
             offered,
@@ -701,6 +702,29 @@ impl<T: Transport> Source for CurseForgeSource<'_, T> {
             self.allow_beta,
             record,
         )
+    }
+}
+
+/// Replaces the `latestFiles` of every fingerprint match with those of its project as `/v1/mods`
+/// returns them (issue #276). The fingerprint endpoint answers consecutive identical requests
+/// with different snapshots of `latestFiles`, one of them days old, so a check could report an
+/// addon up to date and the next one find its update; `/v1/mods` gives the same current list every
+/// time. A project missing from `mods`, or listed there with no latest file at all, keeps the
+/// fingerprint's list rather than losing every candidate.
+fn latest_files_from_mods(matches: &mut FingerprintMatches, mods: &[Mod]) {
+    let latest: HashMap<u32, &[File]> = mods
+        .iter()
+        .filter(|m| !m.latest_files.is_empty())
+        .map(|m| (m.id, m.latest_files.as_slice()))
+        .collect();
+    for found in matches
+        .exact_matches
+        .iter_mut()
+        .chain(matches.partial_matches.iter_mut())
+    {
+        if let Some(files) = latest.get(&found.id) {
+            found.latest_files = files.to_vec();
+        }
     }
 }
 
@@ -2040,6 +2064,7 @@ mod tests {
         use std::fs;
         use std::io::{Cursor, Write};
         use std::path::PathBuf;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Mutex};
 
         use serde_json::{Value, json};
@@ -2058,6 +2083,11 @@ mod tests {
         #[derive(Default)]
         struct Routes {
             fingerprints: String,
+            /// When set, every other fingerprint request (the second, the fourth, …) gets this
+            /// response instead of `fingerprints`: the endpoint alternating two snapshots of
+            /// `latestFiles` (issue #276).
+            alternate_fingerprints: Option<String>,
+            fingerprint_requests: AtomicUsize,
             mods: String,
             files: HashMap<String, String>,
             /// The response of `POST /v1/mods/files`; without it, 404.
@@ -2096,7 +2126,11 @@ mod tests {
             fn post_json(&self, url: &str, _body: String) -> Result<HttpResponse, TransportError> {
                 self.log.posts.lock().unwrap().push(url.to_owned());
                 if url == format!("{API}/v1/fingerprints/1") {
-                    reply(Some(&self.fingerprints))
+                    let request = self.fingerprint_requests.fetch_add(1, Ordering::Relaxed);
+                    match &self.alternate_fingerprints {
+                        Some(alternate) if request % 2 == 1 => reply(Some(alternate)),
+                        _ => reply(Some(&self.fingerprints)),
+                    }
                 } else if url == format!("{API}/v1/mods") {
                     reply(Some(&self.mods))
                 } else if url == format!("{API}/v1/mods/files") {
@@ -2239,6 +2273,82 @@ mod tests {
                 .collect();
             names.sort();
             names
+        }
+
+        /// Issue #276: the fingerprint endpoint answers the same request with a current
+        /// `latestFiles` and with a days-old one, alternately. The check reads the latest files
+        /// from `/v1/mods`, so two consecutive checks find the same update.
+        #[test]
+        fn consecutive_checks_agree_when_the_fingerprint_snapshots_alternate() {
+            let fx = fixture(&[("Alpha", "alpha v1")]);
+            let current = installed(&fx, 1, &["Alpha"], true);
+            let stale = installed(&fx, 1, &["Alpha"], false);
+            let latest = current["latestFiles"].clone();
+            let routes = Routes {
+                // The first answer is stale, as in the report: before the fix the first check
+                // found nothing and the second found the update.
+                fingerprints: json!({"data": {"exactMatches": [stale]}}).to_string(),
+                alternate_fingerprints: Some(
+                    json!({"data": {"exactMatches": [current]}}).to_string(),
+                ),
+                mods: json!({"data": [{
+                    "id": 1, "name": "Alpha", "allowModDistribution": true,
+                    "latestFiles": latest,
+                }]})
+                .to_string(),
+                ..Routes::default()
+            };
+            let client = client(routes);
+
+            let first = cf_check_updates(&fx.installation, &client, &no_overrides()).unwrap();
+            let second = cf_check_updates(&fx.installation, &client, &no_overrides()).unwrap();
+
+            assert!(
+                matches!(
+                    &first[0].status,
+                    UpdateStatus::UpdateAvailable { latest } if latest.id == 11
+                ),
+                "{first:?}"
+            );
+            assert_eq!(first, second);
+        }
+
+        /// The latest files of `/v1/mods` replace the fingerprint's, even when the fingerprint
+        /// lists a newer file: `/v1/mods` is the project as it is now (a file listed only in an
+        /// old snapshot may be gone). A project with no latest file in `/v1/mods` keeps the
+        /// fingerprint's list.
+        #[test]
+        fn the_latest_files_of_the_project_replace_those_of_the_fingerprint() {
+            let fx = fixture(&[("Alpha", "alpha v1"), ("Beta", "beta v1")]);
+            let alpha = installed(&fx, 1, &["Alpha"], true);
+            let beta = installed(&fx, 2, &["Beta"], true);
+            let alpha_current = alpha["file"].clone();
+            let routes = Routes {
+                fingerprints: json!({"data": {"exactMatches": [alpha, beta]}}).to_string(),
+                mods: json!({"data": [
+                    {"id": 1, "name": "Alpha", "allowModDistribution": true,
+                     "latestFiles": [alpha_current]},
+                    project(2, "Beta", true),
+                ]})
+                .to_string(),
+                ..Routes::default()
+            };
+
+            let updates =
+                cf_check_updates(&fx.installation, &client(routes), &no_overrides()).unwrap();
+
+            let status = |folder: &str| {
+                updates
+                    .iter()
+                    .find(|u| u.folder == folder)
+                    .map(|u| u.status.clone())
+                    .unwrap()
+            };
+            assert_eq!(status("Alpha"), UpdateStatus::UpToDate);
+            assert!(
+                matches!(status("Beta"), UpdateStatus::UpdateAvailable { latest } if latest.id == 21),
+                "{updates:?}"
+            );
         }
 
         #[test]

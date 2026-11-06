@@ -71,7 +71,10 @@ shows data and calls commands; it does not know the API key.
   with React's text binding (which escapes it), never as HTML.
 - `POST /v1/fingerprints/1`: recognises installed addons from the folders' fingerprints;
   each folder is matched first against `exactMatches` and, only if it is not there, against the
-  file in `partialMatches` whose `modules` contain its fingerprint (as WowUp does).
+  file in `partialMatches` whose `modules` contain its fingerprint (as WowUp does). Its
+  `latestFiles` are not trusted for the update check: the endpoint answers the same request with
+  a current snapshot and an older one, alternately, so the check takes each project's latest
+  files from `POST /v1/mods` (issue #276).
 - `GET /v1/games/1/version-types`: game version types (Retail, Classic, …).
 - Game versions (Retail, Classic, beta) are read from the API, not written
   by hand.
