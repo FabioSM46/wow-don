@@ -326,11 +326,16 @@ pub fn plan(updates: &[AddonUpdate], auto: &InstallationAutoUpdate) -> Plan {
 impl RoundReport {
     /// A successful manual check (`check_updates`, `refresh_addons` without `checkError`) of
     /// `installation_id`, started at `checked_at`: that installation's `available` and
-    /// `excluded` become what [`plan`] computes from `updates` with its settings `auto`, and
-    /// `checked_at` its time. Nothing changes for an installation that is not in the round, for
-    /// one excluded entirely, or for a check older than the one the report already holds (a round
-    /// that finished while the manual check was running). `mode`, `started_at` and `finished_at`
-    /// are never touched. Returns whether the report changed.
+    /// `excluded` become what [`plan`] computes from `updates` with its settings `auto`, its
+    /// `check_error` is cleared (the check did not fail entirely) and `checked_at` becomes its
+    /// time. A check can succeed while one source failed: its folders come back as errors, with
+    /// no project or with an `error` status, and say nothing about those projects. So an entry
+    /// of the round leaves `available` or `excluded` only if the check answered for its project
+    /// with a status other than an error; the others stay. Nothing changes for an installation
+    /// that is not in the round, for one excluded entirely, or for a check older than the one
+    /// the report already holds (a round that finished while the manual check was running).
+    /// `mode`, `started_at` and `finished_at` are never touched. Returns whether the report
+    /// changed.
     pub fn reconcile_checked(
         &mut self,
         installation_id: &str,
@@ -348,12 +353,47 @@ impl RoundReport {
         if report.checked_at.as_str() > checked_at {
             return false;
         }
-        let plan = plan(updates, auto);
+        let answered: HashSet<ProjectKey> = updates
+            .iter()
+            .filter(|update| !matches!(update.status, UpdateStatus::Error { .. }))
+            .filter_map(|update| update.project.as_ref())
+            .map(|project| ProjectKey {
+                source: project.source,
+                key: project.key.clone(),
+            })
+            .collect();
+        let unanswered = |source: SourceKind, key: &str| {
+            !answered.contains(&ProjectKey {
+                source,
+                key: key.to_owned(),
+            })
+        };
+        let mut plan = plan(updates, auto);
+        for old in &report.available {
+            let listed = plan
+                .available
+                .iter()
+                .any(|new| new.source == old.source && new.key == old.key);
+            if !listed && unanswered(old.source, &old.key) {
+                plan.available.push(old.clone());
+            }
+        }
+        for old in &report.excluded {
+            let listed = plan
+                .excluded
+                .iter()
+                .any(|new| new.source == old.source && new.key == old.key);
+            if !listed && unanswered(old.source, &old.key) {
+                plan.excluded.push(old.clone());
+            }
+        }
         let changed = report.available != plan.available
             || report.excluded != plan.excluded
+            || report.check_error.is_some()
             || report.checked_at != checked_at;
         report.available = plan.available;
         report.excluded = plan.excluded;
+        report.check_error = None;
         report.checked_at = checked_at.to_owned();
         changed
     }
@@ -374,9 +414,17 @@ impl RoundReport {
             return false;
         };
         let mut seen = HashSet::new();
-        let distinct = requested.iter().filter(|project| seen.insert(*project));
+        let distinct: Vec<&ProjectKey> = requested
+            .iter()
+            .filter(|project| seen.insert(*project))
+            .collect();
+        // Without one outcome per distinct request the two cannot be paired: the round stays as
+        // it was rather than lose the wrong project.
+        if distinct.len() != outcomes.len() {
+            return false;
+        }
         let mut done = HashSet::new();
-        for (project, outcome) in distinct.zip(outcomes) {
+        for (project, outcome) in distinct.into_iter().zip(outcomes) {
             if outcome.status == OutcomeStatus::Updated {
                 done.insert(project.clone());
                 done.insert(ProjectKey {
@@ -1188,6 +1236,10 @@ mod tests {
         // An installation that is not in the round: nothing changes.
         assert!(!round.reconcile_updated("ptr", &[key(CF, "3")], &[updated(CF, "3")]));
         assert_eq!(round, before);
+        // Outcomes that do not pair one to one with the distinct requests: nothing changes.
+        let requested = [key(CF, "3"), key(GH, "x/y")];
+        assert!(!round.reconcile_updated("retail", &requested, &[updated(CF, "3")]));
+        assert_eq!(round, before);
     }
 
     #[test]
@@ -1263,14 +1315,66 @@ mod tests {
         assert_eq!(round, before);
 
         // Everything current: nothing is left.
+        let all_current = [
+            row("Two", Some((CF, "2")), UpdateStatus::UpToDate),
+            row("Five", Some((CF, "5")), UpdateStatus::UpToDate),
+            row("Excluded", Some((CF, "7")), UpdateStatus::UpToDate),
+        ];
         assert!(round.reconcile_checked(
             "retail",
-            &up_to_date,
+            &all_current,
             &InstallationAutoUpdate::default(),
             "2026-10-27T13:00:00Z"
         ));
         assert!(round.installations[0].available.is_empty());
         assert!(round.installations[0].excluded.is_empty());
+    }
+
+    #[test]
+    fn a_manual_check_with_a_failed_source_keeps_what_it_could_not_answer() {
+        const CF: SourceKind = SourceKind::Curseforge;
+        const GH: SourceKind = SourceKind::Github;
+        let mut retail = installation_report(
+            "retail",
+            vec![
+                pending(CF, "1", 2),
+                pending(CF, "2", 2),
+                pending(GH, "owner/repo", 2),
+            ],
+        );
+        retail.excluded = vec![UpdateOutcome::skipped(CF, "7", "7 name", EXCLUDED)];
+        retail.check_error = Some("Automatic check failed.".to_owned());
+        let mut round = notify_round(vec![retail]);
+        let failed = |message: &str| UpdateStatus::Error {
+            message: message.to_owned(),
+        };
+        // CurseForge answered only for "1"; its other folders came back unclaimed with the
+        // source's error. GitHub answered with an error for its recorded project.
+        let rows = [
+            row("One", Some((CF, "1")), UpdateStatus::UpToDate),
+            row("Two", None, failed("CurseForge check failed: offline")),
+            row("Seven", None, failed("CurseForge check failed: offline")),
+            row(
+                "Repo",
+                Some((GH, "owner/repo")),
+                failed("GitHub did not respond."),
+            ),
+        ];
+        let auto = InstallationAutoUpdate {
+            disabled: false,
+            excluded: [key(CF, "7")].into(),
+        };
+        assert!(round.reconcile_checked("retail", &rows, &auto, "2026-10-27T12:00:00Z"));
+        let retail = &round.installations[0];
+        assert_eq!(
+            retail.available,
+            [pending(CF, "2", 2), pending(GH, "owner/repo", 2)]
+        );
+        assert_eq!(retail.excluded.len(), 1);
+        assert_eq!(retail.excluded[0].key, "7");
+        // The check did not fail entirely: the older failure is no longer the latest news.
+        assert_eq!(retail.check_error, None);
+        assert_eq!(retail.checked_at, "2026-10-27T12:00:00Z");
     }
 
     #[test]
