@@ -120,17 +120,27 @@ pub struct RoundSummary {
 }
 
 /// How many updates are left to do after the round, summed over all the participating
-/// installations: in `notify` the available ones; in `install` those the round tried to
-/// install and did not install (skipped by the source or failed). In `notify` `updated` is empty,
-/// so the same subtraction works for both modes. Projects are counted, not
-/// keys: an update installed from the GitHub mirror (issue #162) can come back with a source
-/// other than the one of the check. Those excluded by the user do not count: they are not in
-/// `available`.
+/// installations: the projects of `available` that are not among the `updated` ones (matched on
+/// `source` and `key`). In `notify` `updated` is empty, so they are all the available ones; in
+/// `install` they are those the round tried to install and did not install (skipped by the
+/// source or failed). A manual update removes its projects from `available` (issue #273), so
+/// counting the difference of the two lengths would subtract them twice. Those excluded by the
+/// user do not count: they are not in `available`.
 pub fn pending_updates(round: &RoundReport) -> usize {
     round
         .installations
         .iter()
-        .map(|report| report.available.len().saturating_sub(report.updated.len()))
+        .map(|report| {
+            report
+                .available
+                .iter()
+                .filter(|available| {
+                    !report.updated.iter().any(|updated| {
+                        updated.source == available.source && updated.key == available.key
+                    })
+                })
+                .count()
+        })
         .sum()
 }
 
@@ -526,6 +536,38 @@ mod tests {
                 Some("3 updates available"),
                 "WoW-don \u{2014} 3 updates available"
             )
+        );
+    }
+
+    #[test]
+    fn in_install_mode_a_manual_update_after_the_round_is_not_subtracted_twice() {
+        use crate::sources::{ProjectKey, SourceKind};
+        use crate::store::AutoUpdateMode::Install;
+        use crate::updates::{FileSummary, UpdateOutcome};
+        // The round tried 4 and installed 2 ("0" and "1"): 2 left.
+        let mut round = round(Install, vec![report(4, 2)]);
+        assert_eq!(pending_updates(&round), 2);
+        // The user updates "2" by hand: it leaves `available`, 1 left.
+        let projects = [ProjectKey {
+            source: SourceKind::Curseforge,
+            key: "2".to_owned(),
+        }];
+        let outcome = UpdateOutcome::updated(
+            SourceKind::Curseforge,
+            "2",
+            "Addon 2",
+            FileSummary {
+                id: 2,
+                name: "v2".to_owned(),
+                date: "2026-10-27T10:00:00Z".to_owned(),
+            },
+            None,
+        );
+        assert!(round.reconcile_updated("retail", &projects, &[outcome]));
+        assert_eq!(pending_updates(&round), 1);
+        assert_eq!(
+            round_summary(Some(&round)).menu_item.as_deref(),
+            Some("1 update available")
         );
     }
 

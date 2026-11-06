@@ -321,6 +321,135 @@ pub fn plan(updates: &[AddonUpdate], auto: &InstallationAutoUpdate) -> Plan {
     plan
 }
 
+// ── Reconciliation with the manual commands (pure, issue #273) ─────────────
+
+impl RoundReport {
+    /// A successful manual check (`check_updates`, `refresh_addons` without `checkError`) of
+    /// `installation_id`, started at `checked_at`: that installation's `available` and
+    /// `excluded` become what [`plan`] computes from `updates` with its settings `auto`, its
+    /// `check_error` is cleared (the check did not fail entirely) and `checked_at` becomes its
+    /// time. A check can succeed while one source failed: its folders come back as errors, with
+    /// no project or with an `error` status, and say nothing about those projects. So an entry
+    /// of the round leaves `available` or `excluded` only if the check answered for its project
+    /// with a status other than an error; the others stay. Nothing changes for an installation
+    /// that is not in the round, for one excluded entirely, or for a check older than the one
+    /// the report already holds (a round that finished while the manual check was running).
+    /// `mode`, `started_at` and `finished_at` are never touched. Returns whether the report
+    /// changed.
+    pub fn reconcile_checked(
+        &mut self,
+        installation_id: &str,
+        updates: &[AddonUpdate],
+        auto: &InstallationAutoUpdate,
+        checked_at: &str,
+    ) -> bool {
+        if auto.disabled {
+            return false;
+        }
+        let Some(report) = self.installation_mut(installation_id) else {
+            return false;
+        };
+        // Both are `iso_utc` strings: the lexical order is the chronological one.
+        if report.checked_at.as_str() > checked_at {
+            return false;
+        }
+        let answered: HashSet<ProjectKey> = updates
+            .iter()
+            .filter(|update| !matches!(update.status, UpdateStatus::Error { .. }))
+            .filter_map(|update| update.project.as_ref())
+            .map(|project| ProjectKey {
+                source: project.source,
+                key: project.key.clone(),
+            })
+            .collect();
+        let unanswered = |source: SourceKind, key: &str| {
+            !answered.contains(&ProjectKey {
+                source,
+                key: key.to_owned(),
+            })
+        };
+        let mut plan = plan(updates, auto);
+        for old in &report.available {
+            let listed = plan
+                .available
+                .iter()
+                .any(|new| new.source == old.source && new.key == old.key);
+            if !listed && unanswered(old.source, &old.key) {
+                plan.available.push(old.clone());
+            }
+        }
+        for old in &report.excluded {
+            let listed = plan
+                .excluded
+                .iter()
+                .any(|new| new.source == old.source && new.key == old.key);
+            if !listed && unanswered(old.source, &old.key) {
+                plan.excluded.push(old.clone());
+            }
+        }
+        let changed = report.available != plan.available
+            || report.excluded != plan.excluded
+            || report.check_error.is_some()
+            || report.checked_at != checked_at;
+        report.available = plan.available;
+        report.excluded = plan.excluded;
+        report.check_error = None;
+        report.checked_at = checked_at.to_owned();
+        changed
+    }
+
+    /// A successful manual update (`update_addons`) of `installation_id`: the projects reported
+    /// `updated` leave that installation's `available`. `requested` are the projects of the
+    /// command, in its order: `update_addons_with` answers one outcome per distinct requested
+    /// project, in that order, so an outcome is matched on the project that was asked for as
+    /// well as on its own `source` and `key` (an update installed from the GitHub mirror, issue
+    /// #162, may come back with another source). Returns whether the report changed.
+    pub fn reconcile_updated(
+        &mut self,
+        installation_id: &str,
+        requested: &[ProjectKey],
+        outcomes: &[UpdateOutcome],
+    ) -> bool {
+        let Some(report) = self.installation_mut(installation_id) else {
+            return false;
+        };
+        let mut seen = HashSet::new();
+        let distinct: Vec<&ProjectKey> = requested
+            .iter()
+            .filter(|project| seen.insert(*project))
+            .collect();
+        // Without one outcome per distinct request the two cannot be paired: the round stays as
+        // it was rather than lose the wrong project.
+        if distinct.len() != outcomes.len() {
+            return false;
+        }
+        let mut done = HashSet::new();
+        for (project, outcome) in distinct.into_iter().zip(outcomes) {
+            if outcome.status == OutcomeStatus::Updated {
+                done.insert(project.clone());
+                done.insert(ProjectKey {
+                    source: outcome.source,
+                    key: outcome.key.clone(),
+                });
+            }
+        }
+        let before = report.available.len();
+        report.available.retain(|available| {
+            !done.contains(&ProjectKey {
+                source: available.source,
+                key: available.key.clone(),
+            })
+        });
+        report.available.len() != before
+    }
+
+    fn installation_mut(&mut self, installation_id: &str) -> Option<&mut InstallationReport> {
+        self.installations
+            .iter_mut()
+            .find(|report| report.installation_id == installation_id)
+    }
+}
+
 // ── Round on one installation ───────────────────────────────────────────────
 
 /// A source that remembers whether its check failed entirely; otherwise it passes everything
@@ -527,6 +656,70 @@ fn with_undoable(app: &AppHandle, mut status: AutoUpdateStatus) -> AutoUpdateSta
     };
     status.undoable = crate::previous::undoable(&app.state::<PreviousManifest>(), &ids);
     status
+}
+
+/// After a successful manual check of `installation_id` started at `checked_at` (issue #273):
+/// brings the last round up to date with [`RoundReport::reconcile_checked`]. If the
+/// installation's automatic update settings cannot be read the round stays as it was. Blocking:
+/// call it off the main thread, without holding [`InstallLock`].
+pub fn after_manual_check(
+    app: &AppHandle,
+    installation_id: &str,
+    updates: &[AddonUpdate],
+    checked_at: &str,
+) {
+    let auto = app
+        .state::<Mutex<AddonSettingsStore>>()
+        .lock()
+        .ok()
+        .and_then(|store| store.auto_update_for(installation_id).ok());
+    let Some(auto) = auto else {
+        return;
+    };
+    reconcile(app, |round| {
+        round.reconcile_checked(installation_id, updates, &auto, checked_at)
+    });
+}
+
+/// After a successful manual update of `installation_id` (issue #273): removes the updated
+/// projects from the last round with [`RoundReport::reconcile_updated`]. Blocking: call it off
+/// the main thread, without holding [`InstallLock`].
+pub fn after_manual_update(
+    app: &AppHandle,
+    installation_id: &str,
+    requested: &[ProjectKey],
+    outcomes: &[UpdateOutcome],
+) {
+    reconcile(app, |round| {
+        round.reconcile_updated(installation_id, requested, outcomes)
+    });
+}
+
+/// Applies `change` to the last round, if there is one. When it changed something, emits
+/// [`EVENT`] and refreshes the tray as [`round`] does, after releasing the status lock: the tray
+/// call waits for the main thread.
+fn reconcile(app: &AppHandle, change: impl FnOnce(&mut RoundReport) -> bool) {
+    let status = {
+        let state = app.state::<AutoUpdate>();
+        let mut shared = state.lock();
+        reconcile_status(&mut shared.status, change)
+    };
+    let Some(status) = status else {
+        return;
+    };
+    let last_round = status.last_round.clone();
+    let _ = app.emit(EVENT, &with_undoable(app, status));
+    crate::tray::show_round(app, last_round.as_ref());
+}
+
+/// Applies `change` to the last round of `status` and returns the new status if it changed
+/// something; without a last round a manual command does not invent one.
+fn reconcile_status(
+    status: &mut AutoUpdateStatus,
+    change: impl FnOnce(&mut RoundReport) -> bool,
+) -> Option<AutoUpdateStatus> {
+    let last_round = status.last_round.as_mut()?;
+    change(last_round).then(|| status.clone())
 }
 
 /// Starts the round's thread; must be called in `setup`, after registering the states.
@@ -947,6 +1140,241 @@ mod tests {
 
     fn plan_of(rows: &[AddonUpdate]) -> Plan {
         plan(rows, &InstallationAutoUpdate::default())
+    }
+
+    fn pending(source: SourceKind, key: &str, file: u32) -> AvailableUpdate {
+        AvailableUpdate {
+            source,
+            key: key.to_owned(),
+            name: format!("{key} name"),
+            latest: summary(file),
+        }
+    }
+
+    fn installation_report(id: &str, available: Vec<AvailableUpdate>) -> InstallationReport {
+        InstallationReport {
+            installation_id: id.to_owned(),
+            installation_name: id.to_owned(),
+            checked_at: "2026-10-27T10:00:00Z".to_owned(),
+            available,
+            updated: Vec::new(),
+            excluded: Vec::new(),
+            skipped: Vec::new(),
+            errors: Vec::new(),
+            check_error: None,
+        }
+    }
+
+    fn notify_round(installations: Vec<InstallationReport>) -> RoundReport {
+        RoundReport {
+            mode: AutoUpdateMode::Notify,
+            started_at: "2026-10-27T09:59:00Z".to_owned(),
+            finished_at: "2026-10-27T10:01:00Z".to_owned(),
+            retrying: false,
+            installations,
+        }
+    }
+
+    fn updated(source: SourceKind, key: &str) -> UpdateOutcome {
+        UpdateOutcome::updated(source, key, &format!("{key} name"), summary(9), None)
+    }
+
+    #[test]
+    fn a_manual_update_removes_the_updated_projects_from_the_round() {
+        const CF: SourceKind = SourceKind::Curseforge;
+        const GH: SourceKind = SourceKind::Github;
+        let mut round = notify_round(vec![
+            installation_report(
+                "retail",
+                vec![
+                    pending(CF, "1", 2),
+                    pending(CF, "2", 2),
+                    pending(CF, "3", 2),
+                    pending(GH, "owner/repo", 2),
+                ],
+            ),
+            installation_report("classic", vec![pending(CF, "1", 2)]),
+        ]);
+        let original = round.clone();
+        // "1" updated, "2" from the GitHub mirror with another source, "3" skipped; the repeated
+        // request gets no outcome of its own.
+        let requested = [
+            key(CF, "1"),
+            key(CF, "1"),
+            key(CF, "2"),
+            key(CF, "3"),
+            key(GH, "owner/repo"),
+        ];
+        let outcomes = [
+            updated(CF, "1"),
+            updated(GH, "mirror/repo"),
+            UpdateOutcome::skipped(CF, "3", "3 name", "Already up to date."),
+            updated(GH, "owner/repo"),
+        ];
+        assert!(round.reconcile_updated("retail", &requested, &outcomes));
+        assert_eq!(round.installations[0].available, [pending(CF, "3", 2)]);
+        // The other installation and the round's identity do not change.
+        assert_eq!(round.installations[1], original.installations[1]);
+        assert_eq!(round.finished_at, original.finished_at);
+        assert_eq!(round.started_at, original.started_at);
+        assert_eq!(round.mode, original.mode);
+        assert_eq!(
+            round.installations[0].checked_at,
+            original.installations[0].checked_at
+        );
+
+        // Nothing updated: nothing changes.
+        let before = round.clone();
+        let skipped = [UpdateOutcome::skipped(
+            CF,
+            "3",
+            "3 name",
+            "Already up to date.",
+        )];
+        assert!(!round.reconcile_updated("retail", &[key(CF, "3")], &skipped));
+        assert_eq!(round, before);
+        // An installation that is not in the round: nothing changes.
+        assert!(!round.reconcile_updated("ptr", &[key(CF, "3")], &[updated(CF, "3")]));
+        assert_eq!(round, before);
+        // Outcomes that do not pair one to one with the distinct requests: nothing changes.
+        let requested = [key(CF, "3"), key(GH, "x/y")];
+        assert!(!round.reconcile_updated("retail", &requested, &[updated(CF, "3")]));
+        assert_eq!(round, before);
+    }
+
+    #[test]
+    fn without_a_last_round_a_manual_command_changes_nothing() {
+        let mut status = AutoUpdateStatus::default();
+        assert_eq!(reconcile_status(&mut status, |_| true), None);
+        assert_eq!(status, AutoUpdateStatus::default());
+
+        status.last_round = Some(notify_round(vec![installation_report(
+            "retail",
+            vec![pending(SourceKind::Curseforge, "1", 2)],
+        )]));
+        assert_eq!(reconcile_status(&mut status, |_| false), None);
+        let changed = reconcile_status(&mut status, |round| {
+            round.reconcile_updated(
+                "retail",
+                &[key(SourceKind::Curseforge, "1")],
+                &[updated(SourceKind::Curseforge, "1")],
+            )
+        })
+        .expect("the round changed");
+        assert!(
+            changed.last_round.unwrap().installations[0]
+                .available
+                .is_empty()
+        );
+        assert_eq!(status.last_round.unwrap().installations[0].available, []);
+    }
+
+    #[test]
+    fn a_manual_check_replaces_available_and_excluded_respecting_exclusions() {
+        const CF: SourceKind = SourceKind::Curseforge;
+        let mut round = notify_round(vec![
+            installation_report("retail", vec![pending(CF, "1", 2), pending(CF, "2", 2)]),
+            installation_report("classic", vec![pending(CF, "1", 2)]),
+        ]);
+        let original = round.clone();
+        let rows = [
+            row("One", Some((CF, "1")), UpdateStatus::UpToDate),
+            row("Two", Some((CF, "2")), available(3)),
+            row("Five", Some((CF, "5")), available(6)),
+            row("Excluded", Some((CF, "7")), available(8)),
+        ];
+        let auto = InstallationAutoUpdate {
+            disabled: false,
+            excluded: [key(CF, "7")].into(),
+        };
+        let at = "2026-10-27T12:00:00Z";
+        assert!(round.reconcile_checked("retail", &rows, &auto, at));
+        let retail = &round.installations[0];
+        assert_eq!(retail.available, [pending(CF, "2", 3), pending(CF, "5", 6)]);
+        assert_eq!(retail.excluded.len(), 1);
+        assert_eq!(retail.excluded[0].key, "7");
+        assert_eq!(retail.checked_at, at);
+        assert_eq!(round.installations[1], original.installations[1]);
+        assert_eq!(round.finished_at, original.finished_at);
+        assert_eq!(round.started_at, original.started_at);
+        assert_eq!(round.mode, original.mode);
+
+        // The same check again changes nothing.
+        let before = round.clone();
+        assert!(!round.reconcile_checked("retail", &rows, &auto, at));
+        // A check older than what the report holds (a round finished meanwhile) is ignored.
+        let up_to_date = [row("Two", Some((CF, "2")), UpdateStatus::UpToDate)];
+        assert!(!round.reconcile_checked("retail", &up_to_date, &auto, "2026-10-27T11:00:00Z"));
+        // An installation that is not in the round, or excluded entirely, does not change.
+        assert!(!round.reconcile_checked("ptr", &up_to_date, &auto, at));
+        let disabled = InstallationAutoUpdate {
+            disabled: true,
+            excluded: Default::default(),
+        };
+        assert!(!round.reconcile_checked("retail", &up_to_date, &disabled, at));
+        assert_eq!(round, before);
+
+        // Everything current: nothing is left.
+        let all_current = [
+            row("Two", Some((CF, "2")), UpdateStatus::UpToDate),
+            row("Five", Some((CF, "5")), UpdateStatus::UpToDate),
+            row("Excluded", Some((CF, "7")), UpdateStatus::UpToDate),
+        ];
+        assert!(round.reconcile_checked(
+            "retail",
+            &all_current,
+            &InstallationAutoUpdate::default(),
+            "2026-10-27T13:00:00Z"
+        ));
+        assert!(round.installations[0].available.is_empty());
+        assert!(round.installations[0].excluded.is_empty());
+    }
+
+    #[test]
+    fn a_manual_check_with_a_failed_source_keeps_what_it_could_not_answer() {
+        const CF: SourceKind = SourceKind::Curseforge;
+        const GH: SourceKind = SourceKind::Github;
+        let mut retail = installation_report(
+            "retail",
+            vec![
+                pending(CF, "1", 2),
+                pending(CF, "2", 2),
+                pending(GH, "owner/repo", 2),
+            ],
+        );
+        retail.excluded = vec![UpdateOutcome::skipped(CF, "7", "7 name", EXCLUDED)];
+        retail.check_error = Some("Automatic check failed.".to_owned());
+        let mut round = notify_round(vec![retail]);
+        let failed = |message: &str| UpdateStatus::Error {
+            message: message.to_owned(),
+        };
+        // CurseForge answered only for "1"; its other folders came back unclaimed with the
+        // source's error. GitHub answered with an error for its recorded project.
+        let rows = [
+            row("One", Some((CF, "1")), UpdateStatus::UpToDate),
+            row("Two", None, failed("CurseForge check failed: offline")),
+            row("Seven", None, failed("CurseForge check failed: offline")),
+            row(
+                "Repo",
+                Some((GH, "owner/repo")),
+                failed("GitHub did not respond."),
+            ),
+        ];
+        let auto = InstallationAutoUpdate {
+            disabled: false,
+            excluded: [key(CF, "7")].into(),
+        };
+        assert!(round.reconcile_checked("retail", &rows, &auto, "2026-10-27T12:00:00Z"));
+        let retail = &round.installations[0];
+        assert_eq!(
+            retail.available,
+            [pending(CF, "2", 2), pending(GH, "owner/repo", 2)]
+        );
+        assert_eq!(retail.excluded.len(), 1);
+        assert_eq!(retail.excluded[0].key, "7");
+        // The check did not fail entirely: the older failure is no longer the latest news.
+        assert_eq!(retail.check_error, None);
+        assert_eq!(retail.checked_at, "2026-10-27T12:00:00Z");
     }
 
     #[test]
