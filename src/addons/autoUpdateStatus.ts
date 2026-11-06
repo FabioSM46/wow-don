@@ -193,7 +193,9 @@ export function changedInstallations(
  * arrives after `previous`: those for which a new round, `notify` or `install`, found updates,
  * updated addons or hit errors (issue #268). A `notify` round touches no disk, but the table
  * checked once at first access and would keep showing the older result. The same round read
- * again does not count twice.
+ * again does not count twice, even with a different outcome: after a manual check or update the
+ * backend emits the round again with the same `finishedAt` and the outcome reconciled with what
+ * the table has just read (issue #273), so it describes nothing the table lacks.
  */
 export function staleUpdateChecks(
   previous: AutoUpdateStatus | null,
