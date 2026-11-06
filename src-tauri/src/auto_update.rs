@@ -116,6 +116,12 @@ pub struct InstallationReport {
     pub available: Vec<AvailableUpdate>,
     /// `install` only: the updated projects, with the installed file (`file`).
     pub updated: Vec<UpdateOutcome>,
+    /// `install` only, not serialized: the planned project (as checked, the `source` and `key`
+    /// of its `available` entry) of every outcome in `updated`. An update installed from the
+    /// GitHub mirror (issue #162) may come back with another source, so the tray counts what is
+    /// left (`tray::pending_updates`) on these as well as on the outcomes.
+    #[serde(skip)]
+    pub updated_checked: Vec<ProjectKey>,
     /// The projects with an update excluded by the user, with `message`
     /// `"Excluded from automatic updates."`: a choice, not a problem (issue #214).
     pub excluded: Vec<UpdateOutcome>,
@@ -521,6 +527,7 @@ pub fn run_installation(
         checked_at,
         available: Vec::new(),
         updated: Vec::new(),
+        updated_checked: Vec::new(),
         excluded: Vec::new(),
         skipped: Vec::new(),
         errors: Vec::new(),
@@ -554,6 +561,17 @@ pub fn run_installation(
                 match result {
                     Err(error) => report.check_error = Some(error),
                     Ok(outcomes) => {
+                        // `update_addons_with` answers one outcome per distinct project, in
+                        // order, and the planned projects are already distinct.
+                        if outcomes.len() == plan.projects.len() {
+                            report.updated_checked = plan
+                                .projects
+                                .iter()
+                                .zip(&outcomes)
+                                .filter(|(_, outcome)| outcome.status == OutcomeStatus::Updated)
+                                .map(|(project, _)| project.clone())
+                                .collect();
+                        }
                         for outcome in outcomes {
                             match outcome.status {
                                 OutcomeStatus::Updated => report.updated.push(outcome),
@@ -902,6 +920,7 @@ fn failed_report(installation: &Installation, error: String) -> InstallationRepo
         checked_at: iso_utc(SystemTime::now()),
         available: Vec::new(),
         updated: Vec::new(),
+        updated_checked: Vec::new(),
         excluded: Vec::new(),
         skipped: Vec::new(),
         errors: Vec::new(),
@@ -1158,6 +1177,7 @@ mod tests {
             checked_at: "2026-10-27T10:00:00Z".to_owned(),
             available,
             updated: Vec::new(),
+            updated_checked: Vec::new(),
             excluded: Vec::new(),
             skipped: Vec::new(),
             errors: Vec::new(),
@@ -1407,6 +1427,7 @@ mod tests {
                         latest: summary(1),
                     }],
                     updated: Vec::new(),
+                    updated_checked: Vec::new(),
                     excluded: Vec::new(),
                     skipped: Vec::new(),
                     errors: Vec::new(),
@@ -1446,6 +1467,9 @@ mod tests {
         skips: Vec<&'static str>,
         /// Projects that replace the folders and then fail without writing the record.
         unrecorded: Vec<&'static str>,
+        /// Projects installed "from the GitHub mirror": the outcome comes back with the GitHub
+        /// source and another key, as an update from the mirror may (issue #162).
+        mirrored: Vec<&'static str>,
         fails: bool,
         asked: RefCell<Vec<String>>,
     }
@@ -1458,6 +1482,7 @@ mod tests {
                 broken: Vec::new(),
                 skips: Vec::new(),
                 unrecorded: Vec::new(),
+                mirrored: Vec::new(),
                 fails: false,
                 asked: RefCell::new(Vec::new()),
             }
@@ -1531,6 +1556,16 @@ mod tests {
                 },
             )
             .unwrap();
+            if self.mirrored.contains(&target.key) {
+                let key = format!("mirror/{}", target.key);
+                return UpdateOutcome::updated(
+                    SourceKind::Github,
+                    &key,
+                    target.key,
+                    summary(2),
+                    None,
+                );
+            }
             UpdateOutcome::updated(self.kind, target.key, target.key, summary(2), None)
         }
     }
@@ -1641,6 +1676,44 @@ mod tests {
         assert_eq!(report.excluded[0].key, "Gamma");
         assert!(report.skipped.is_empty());
         assert!(failed.is_empty());
+    }
+
+    #[test]
+    fn install_pairs_every_updated_outcome_with_the_checked_project() {
+        let tmp = TempDir::new();
+        let installation = installation_with(&tmp, &["Alpha", "Beta", "Gamma"]);
+        let mut source = FakeSource::new(SourceKind::Curseforge, &["Alpha", "Beta", "Gamma"]);
+        source.mirrored = vec!["Alpha"];
+        source.skips = vec!["Gamma"];
+        let (report, _, _) = run(
+            &installation,
+            AutoUpdateMode::Install,
+            &InstallationAutoUpdate::default(),
+            &[&source],
+        );
+        // "Alpha" came back under another source and key; "Gamma" was skipped.
+        assert_eq!(report.updated.len(), 2);
+        assert_eq!(report.updated[0].source, SourceKind::Github);
+        assert_eq!(report.updated[0].key, "mirror/Alpha");
+        assert_eq!(
+            report.updated_checked,
+            [
+                key(SourceKind::Curseforge, "Alpha"),
+                key(SourceKind::Curseforge, "Beta")
+            ]
+        );
+        // Not serialized: the JSON shape of the status does not change.
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json.get("updatedChecked").is_none());
+        let round = RoundReport {
+            mode: AutoUpdateMode::Install,
+            started_at: "a".to_owned(),
+            finished_at: "b".to_owned(),
+            retrying: false,
+            installations: vec![report],
+        };
+        // Only "Gamma" is left.
+        assert_eq!(crate::tray::pending_updates(&round), 1);
     }
 
     #[test]

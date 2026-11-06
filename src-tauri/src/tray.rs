@@ -120,12 +120,15 @@ pub struct RoundSummary {
 }
 
 /// How many updates are left to do after the round, summed over all the participating
-/// installations: the projects of `available` that are not among the `updated` ones (matched on
-/// `source` and `key`). In `notify` `updated` is empty, so they are all the available ones; in
-/// `install` they are those the round tried to install and did not install (skipped by the
-/// source or failed). A manual update removes its projects from `available` (issue #273), so
-/// counting the difference of the two lengths would subtract them twice. Those excluded by the
-/// user do not count: they are not in `available`.
+/// installations: the projects of `available` that the round did not update. In `notify`
+/// nothing is updated, so they are all the available ones; in `install` they are those the round
+/// tried to install and did not install (skipped by the source or failed). A project counts as
+/// updated when its `source` and `key` are those of an outcome in `updated` or of the planned
+/// project the round paired with one (`updated_checked`): an update installed from the GitHub
+/// mirror (issue #162) can come back with a source other than the one of the check. A manual
+/// update removes its projects from `available` (issue #273), so counting the difference of
+/// the two lengths would subtract them twice. Those excluded by the user do not count: they are
+/// not in `available`.
 pub fn pending_updates(round: &RoundReport) -> usize {
     round
         .installations
@@ -135,9 +138,13 @@ pub fn pending_updates(round: &RoundReport) -> usize {
                 .available
                 .iter()
                 .filter(|available| {
-                    !report.updated.iter().any(|updated| {
+                    let outcome = report.updated.iter().any(|updated| {
                         updated.source == available.source && updated.key == available.key
-                    })
+                    });
+                    let checked = report.updated_checked.iter().any(|project| {
+                        project.source == available.source && project.key == available.key
+                    });
+                    !outcome && !checked
                 })
                 .count()
         })
@@ -449,6 +456,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            updated_checked: Vec::new(),
             excluded: Vec::new(),
             skipped: Vec::new(),
             errors: Vec::new(),
@@ -569,6 +577,52 @@ mod tests {
             round_summary(Some(&round)).menu_item.as_deref(),
             Some("1 update available")
         );
+    }
+
+    #[test]
+    fn a_mirror_update_with_another_source_is_not_counted_as_pending() {
+        use crate::sources::{ProjectKey, SourceKind};
+        use crate::store::AutoUpdateMode::Install;
+        use crate::updates::{FileSummary, UpdateOutcome};
+        let file = || FileSummary {
+            id: 3,
+            name: "v3".to_owned(),
+            date: "2026-10-27T10:00:00Z".to_owned(),
+        };
+        let blocked = ProjectKey {
+            source: SourceKind::Curseforge,
+            key: "0".to_owned(),
+        };
+        // The round checked "0" and "1" on CurseForge; "0" came back from the GitHub mirror
+        // under another source and key, "1" was skipped.
+        let mut report = report(2, 0);
+        report.updated = vec![UpdateOutcome::updated(
+            SourceKind::Github,
+            "owner/mirror",
+            "Addon 0",
+            file(),
+            None,
+        )];
+        report.updated_checked = vec![blocked.clone()];
+        let mut round = round(Install, vec![report]);
+        assert_eq!(pending_updates(&round), 1);
+
+        // A manual reinstall of "0" after the round: still 1 left, not subtracted twice.
+        let reinstall =
+            UpdateOutcome::updated(SourceKind::Github, "owner/mirror", "Addon 0", file(), None);
+        assert!(round.reconcile_updated("retail", &[blocked], &[reinstall]));
+        assert_eq!(pending_updates(&round), 1);
+
+        // A manual update of "1", also from the mirror: nothing left.
+        let skipped = ProjectKey {
+            source: SourceKind::Curseforge,
+            key: "1".to_owned(),
+        };
+        let mirrored =
+            UpdateOutcome::updated(SourceKind::Github, "owner/other", "Addon 1", file(), None);
+        assert!(round.reconcile_updated("retail", &[skipped], &[mirrored]));
+        assert_eq!(pending_updates(&round), 0);
+        assert_eq!(round_summary(Some(&round)).menu_item, None);
     }
 
     /// Calls the real loader and the real session bus: it must answer without crashing
