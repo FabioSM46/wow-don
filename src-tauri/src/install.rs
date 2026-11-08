@@ -321,9 +321,11 @@ fn declared_entries<R: Read + Seek>(reader: &mut R) -> io::Result<Option<u64>> {
     if reader.read_exact(&mut record).is_err() || record[..4] != ZIP64_EOCD_SIGNATURE {
         return Ok(Some(entries));
     }
+    // Like `ZipArchive::new`: with a readable zip64 record its total is the count, and the
+    // 16-bit field (often the 0xFFFF placeholder) is ignored.
     let mut total = [0; 8];
     total.copy_from_slice(&record[32..40]);
-    Ok(Some(entries.max(u64::from_le_bytes(total))))
+    Ok(Some(u64::from_le_bytes(total)))
 }
 
 fn too_big(limits: Limits) -> String {
@@ -890,19 +892,16 @@ mod tests {
         assert!(listing(staging.path()).is_empty());
     }
 
-    #[test]
-    fn the_zip64_entry_count_is_read_through_the_locator() {
-        let tmp = TempDir::new();
-        let addons = addons_dir(&tmp);
-        let staging = WorkDir::staging(&addons).unwrap();
+    /// A zip64 end of central directory record at offset 0 declaring `entries` entries, its
+    /// locator, and a legacy record carrying the 0xFFFF placeholder.
+    fn zip64_tail(entries: u64) -> Vec<u8> {
         let mut bytes = Vec::new();
-        // zip64 end of central directory record at offset 0, declaring 5,000,000 entries.
         bytes.extend_from_slice(&ZIP64_EOCD_SIGNATURE);
         bytes.extend_from_slice(&44u64.to_le_bytes()); // record size
         bytes.extend_from_slice(&[0; 4]); // versions
         bytes.extend_from_slice(&[0; 8]); // disk numbers
-        bytes.extend_from_slice(&5_000_000u64.to_le_bytes()); // entries on this disk
-        bytes.extend_from_slice(&5_000_000u64.to_le_bytes()); // total entries
+        bytes.extend_from_slice(&entries.to_le_bytes()); // entries on this disk
+        bytes.extend_from_slice(&entries.to_le_bytes()); // total entries
         bytes.extend_from_slice(&[0; 16]); // directory size and offset
         // Locator pointing at offset 0.
         bytes.extend_from_slice(&ZIP64_LOCATOR_SIGNATURE);
@@ -910,6 +909,24 @@ mod tests {
         bytes.extend_from_slice(&0u64.to_le_bytes()); // record offset
         bytes.extend_from_slice(&1u32.to_le_bytes()); // number of disks
         bytes.extend_from_slice(&eocd(u16::MAX));
+        bytes
+    }
+
+    #[test]
+    fn the_zip64_count_replaces_the_legacy_placeholder() {
+        // As in `ZipArchive::new`: the zip64 total wins over the 16-bit 0xFFFF placeholder.
+        assert_eq!(
+            declared_entries(&mut Cursor::new(zip64_tail(3))).unwrap(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn the_zip64_entry_count_is_read_through_the_locator() {
+        let tmp = TempDir::new();
+        let addons = addons_dir(&tmp);
+        let staging = WorkDir::staging(&addons).unwrap();
+        let bytes = zip64_tail(5_000_000);
         let error = extract(&bytes, staging.path()).unwrap_err();
         assert!(error.contains("too many entries (5000000)"), "{error}");
         assert!(listing(staging.path()).is_empty());
