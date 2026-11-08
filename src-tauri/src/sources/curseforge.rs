@@ -57,7 +57,9 @@ pub fn pick_file<T: Copy, K: Ord>(
 /// 2 OptionalDependency, 3 RequiredDependency, 4 Tool, 5 Incompatible, 6 Include.
 pub const RELATION_REQUIRED_DEPENDENCY: u8 = 3;
 /// Maximum size of a downloaded zip: 1 GiB. A fixed safety limit against endless or broken
-/// responses, not a setting; the largest addons weigh a few tens of MiB.
+/// responses, not a setting; the largest addons weigh a few tens of MiB. A download is held in
+/// memory until it is extracted, so this is also the peak memory of one download: a conscious
+/// trade-off (issue #285); streaming downloads to disk is a separate change.
 pub const MAX_DOWNLOAD_BYTES: u64 = 1 << 30;
 /// The domains from which zips are downloaded, with their subdomains.
 const DOWNLOAD_DOMAINS: [&str; 2] = ["forgecdn.net", "curseforge.com"];
