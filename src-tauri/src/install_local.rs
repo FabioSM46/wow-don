@@ -9,17 +9,18 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, BufReader};
 use std::path::Path;
 
 use serde::Serialize;
 
 use crate::install;
 use crate::progress::{Phase, ProgressSink, Reporter};
-use crate::sources::curseforge::MAX_DOWNLOAD_BYTES;
 
-/// Maximum size of the zip chosen by the user: the same as a downloaded zip.
-pub const MAX_ZIP_BYTES: u64 = MAX_DOWNLOAD_BYTES;
+/// Maximum size of the zip chosen by the user: 2 GiB. A fixed safety limit, not a setting. The
+/// zip is read from disk, not loaded into memory, and its extracted size has its own limit
+/// ([`install::MAX_TOTAL_BYTES`]).
+pub const MAX_ZIP_BYTES: u64 = 2 << 30;
 
 /// Outcome of an installation from a local zip.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -50,9 +51,9 @@ pub fn install_zip(
 ) -> Result<LocalInstall, String> {
     let reporter = Reporter::new(progress, None, "", "");
     reporter.phase(Phase::Extracting);
-    let bytes = read_zip(zip_path)?;
+    let zip = open_zip(zip_path)?;
     let staging = install::WorkDir::staging(addons_dir)?;
-    let folders = install::extract(&bytes, staging.path())?;
+    let folders = install::extract_from(BufReader::new(zip), staging.path())?;
     for folder in &folders {
         if !has_own_toc(&staging.path().join(folder), folder)? {
             return Err(format!(
@@ -70,9 +71,10 @@ pub fn install_zip(
     })
 }
 
-/// Reads the zip, with the checks on type, extension and size. The messages do not contain the
-/// path: the user knows which file they chose.
-fn read_zip(zip_path: &Path) -> Result<Vec<u8>, String> {
+/// Opens the zip, with the checks on type, extension and size. The messages do not contain the
+/// path: the user knows which file they chose. A file that grows after the check is still bound
+/// by the extraction limits.
+fn open_zip(zip_path: &Path) -> Result<fs::File, String> {
     let is_zip = zip_path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -87,21 +89,12 @@ fn read_zip(zip_path: &Path) -> Result<Vec<u8>, String> {
     if metadata.len() > MAX_ZIP_BYTES {
         return Err(too_big());
     }
-    let file = fs::File::open(zip_path).map_err(open_error)?;
-    let mut bytes = Vec::new();
-    // The file can grow between the check and the read: we never read past the limit.
-    file.take(MAX_ZIP_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(open_error)?;
-    if bytes.len() as u64 > MAX_ZIP_BYTES {
-        return Err(too_big());
-    }
-    Ok(bytes)
+    fs::File::open(zip_path).map_err(open_error)
 }
 
 fn too_big() -> String {
     format!(
-        "The zip is larger than the {} MiB limit.",
+        "The zip is larger than {} MiB, WoW-don's fixed safety limit.",
         MAX_ZIP_BYTES / (1024 * 1024)
     )
 }
@@ -410,7 +403,8 @@ mod tests {
         // A sparse file: no byte actually written.
         file.set_len(MAX_ZIP_BYTES + 1).unwrap();
         let error = install_zip(&fx.addons, &big, &progress::ignore).unwrap_err();
-        assert!(error.contains("larger than"), "{error}");
+        assert!(error.contains("larger than 2048 MiB"), "{error}");
+        assert!(error.contains("fixed safety limit"), "{error}");
         assert!(listing(&fx.addons).is_empty());
     }
 }

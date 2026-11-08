@@ -16,16 +16,18 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
-use std::io::{self, Cursor, Read, Write};
+use std::io::{self, Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use zip::ZipArchive;
 
-/// Maximum number of entries in a zip.
-pub const MAX_ENTRIES: usize = 20_000;
-/// Maximum extracted size, summing all files: 1 GiB.
-pub const MAX_TOTAL_BYTES: u64 = 1 << 30;
+/// Maximum number of entries in a zip. A fixed safety limit, not a setting: it stops zip bombs,
+/// it does not budget memory.
+pub const MAX_ENTRIES: usize = 100_000;
+/// Maximum extracted size, summing all files: 4 GiB. A fixed safety limit, like
+/// [`MAX_ENTRIES`].
+pub const MAX_TOTAL_BYTES: u64 = 4 << 30;
 
 #[derive(Debug, Clone, Copy)]
 struct Limits {
@@ -101,6 +103,12 @@ pub fn extract(zip_bytes: &[u8], staging_dir: &Path) -> Result<Vec<String>, Stri
     extract_with_limits(zip_bytes, staging_dir, DEFAULT_LIMITS)
 }
 
+/// Like [`extract`], reading the zip from `reader` (for example a file on disk) instead of
+/// from memory, with the same checks.
+pub fn extract_from<R: Read + Seek>(reader: R, staging_dir: &Path) -> Result<Vec<String>, String> {
+    extract_archive(reader, staging_dir, DEFAULT_LIMITS)
+}
+
 /// A zip entry that has already been validated.
 struct Entry {
     index: usize,
@@ -113,6 +121,14 @@ fn extract_with_limits(
     staging_dir: &Path,
     limits: Limits,
 ) -> Result<Vec<String>, String> {
+    extract_archive(Cursor::new(zip_bytes), staging_dir, limits)
+}
+
+fn extract_archive<R: Read + Seek>(
+    reader: R,
+    staging_dir: &Path,
+    limits: Limits,
+) -> Result<Vec<String>, String> {
     let not_empty = fs::read_dir(staging_dir)
         .map_err(|error| format!("Could not read the staging folder ({}).", error.kind()))?
         .next()
@@ -121,11 +137,11 @@ fn extract_with_limits(
         return Err("The staging folder is not empty.".to_string());
     }
 
-    let mut archive = ZipArchive::new(Cursor::new(zip_bytes))
-        .map_err(|_| "The downloaded file is not a valid zip.".to_string())?;
+    let mut archive =
+        ZipArchive::new(reader).map_err(|_| "The file is not a valid zip.".to_string())?;
     if archive.len() > limits.entries {
         return Err(format!(
-            "The zip has too many entries ({}, maximum {}).",
+            "The zip has too many entries ({}): {} is WoW-don's fixed safety limit.",
             archive.len(),
             limits.entries
         ));
@@ -233,7 +249,7 @@ fn extract_with_limits(
 
 fn too_big(limits: Limits) -> String {
     format!(
-        "The extracted zip exceeds the {} MiB limit.",
+        "The extracted zip exceeds {} MiB, WoW-don's fixed safety limit.",
         limits.total_bytes / (1 << 20)
     )
 }
@@ -763,6 +779,7 @@ mod tests {
         };
         let error = extract_with_limits(&bytes, staging.path(), limits).unwrap_err();
         assert!(error.contains("too many entries"), "{error}");
+        assert!(error.contains("fixed safety limit"), "{error}");
         assert!(listing(staging.path()).is_empty());
     }
 
@@ -777,7 +794,7 @@ mod tests {
             total_bytes: 1000,
         };
         let error = extract_with_limits(&bytes, staging.path(), limits).unwrap_err();
-        assert!(error.contains("exceeds the"), "{error}");
+        assert!(error.contains("fixed safety limit"), "{error}");
         assert!(listing(staging.path()).is_empty());
     }
 
