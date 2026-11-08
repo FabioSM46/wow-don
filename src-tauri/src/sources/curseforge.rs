@@ -56,8 +56,11 @@ pub fn pick_file<T: Copy, K: Ord>(
 /// (docs.curseforge.com/rest-api, verified on 2026-10-24): 1 EmbeddedLibrary,
 /// 2 OptionalDependency, 3 RequiredDependency, 4 Tool, 5 Incompatible, 6 Include.
 pub const RELATION_REQUIRED_DEPENDENCY: u8 = 3;
-/// Maximum size of a downloaded zip. The largest addons weigh a few tens of MiB.
-pub const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+/// Maximum size of a downloaded zip: 1 GiB. A fixed safety limit against endless or broken
+/// responses, not a setting; the largest addons weigh a few tens of MiB. A download is held in
+/// memory until it is extracted, so this is also the peak memory of one download: a conscious
+/// trade-off (issue #285); streaming downloads to disk is a separate change.
+pub const MAX_DOWNLOAD_BYTES: u64 = 1 << 30;
 /// The domains from which zips are downloaded, with their subdomains.
 const DOWNLOAD_DOMAINS: [&str; 2] = ["forgecdn.net", "curseforge.com"];
 /// The domains of the gallery images shown in the detail view, with their subdomains: only
@@ -231,7 +234,7 @@ impl fmt::Display for CurseForgeError {
             ),
             Self::DownloadTooLarge => write!(
                 f,
-                "The file to download exceeds the {} MiB limit: download cancelled.",
+                "The file to download exceeds {} MiB, WoW-don's fixed safety limit: download cancelled.",
                 MAX_DOWNLOAD_BYTES / (1024 * 1024)
             ),
         }
@@ -1503,11 +1506,9 @@ mod tests {
         ] {
             assert!(!error.to_string().contains("forgecdn"));
         }
-        assert!(
-            CurseForgeError::DownloadTooLarge
-                .to_string()
-                .contains("200 MiB")
-        );
+        let too_large = CurseForgeError::DownloadTooLarge.to_string();
+        assert!(too_large.contains("1024 MiB"), "{too_large}");
+        assert!(too_large.contains("fixed safety limit"), "{too_large}");
     }
 
     #[test]

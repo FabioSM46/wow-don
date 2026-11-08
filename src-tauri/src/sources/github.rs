@@ -461,7 +461,7 @@ impl<T: PublicTransport> GithubSource<T> {
             .get_bytes_with_progress(&asset.browser_download_url, MAX_DOWNLOAD_BYTES, progress)
             .map_err(|error| match error {
                 TransportError::TooLarge => format!(
-                    "The file to download exceeds the {} MiB limit: download cancelled.",
+                    "The file to download exceeds {} MiB, WoW-don's fixed safety limit: download cancelled.",
                     MAX_DOWNLOAD_BYTES / (1024 * 1024)
                 ),
                 other => network_error(other),
