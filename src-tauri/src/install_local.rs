@@ -18,7 +18,9 @@ use crate::install;
 use crate::progress::{Phase, ProgressSink, Reporter};
 
 /// Maximum size of the zip chosen by the user: 2 GiB. A fixed safety limit, not a setting. The
-/// zip is read from disk, not loaded into memory, and its extracted size has its own limit
+/// zip's bytes are read from disk, not loaded into memory, but opening it parses its central
+/// directory into memory: the entry count it declares is checked first ([`install::MAX_ENTRIES`]),
+/// which bounds that cost for real zips. Its extracted size has its own limit
 /// ([`install::MAX_TOTAL_BYTES`]).
 pub const MAX_ZIP_BYTES: u64 = 2 << 30;
 
