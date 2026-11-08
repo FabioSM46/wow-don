@@ -121,7 +121,7 @@ impl<T: PublicTransport> TukuiSource<T> {
             .get_bytes_with_progress(&addon.url, MAX_DOWNLOAD_BYTES, progress)
             .map_err(|error| match error {
                 TransportError::TooLarge => format!(
-                    "The file to download exceeds the {} MiB limit: download cancelled.",
+                    "The file to download exceeds {} MiB, WoW-don's fixed safety limit: download cancelled.",
                     MAX_DOWNLOAD_BYTES / (1024 * 1024)
                 ),
                 other => network_error(other),
