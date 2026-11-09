@@ -1,9 +1,11 @@
-// The addons excluded from automatic updates in the Installed tab (D41, issue #204): who is
-// excluded, the context menu item and the effect of a choice on the multiple selection.
-// Pure functions, no React or I/O.
+// The held addons of the Installed tab ("Don't update", D41, issues #204 and #291): who is
+// held, the context menu item, the effect of a choice on the multiple selection and what
+// "Update all" leaves out. A held project is skipped by the automatic rounds and by Update all;
+// it is updated only on an explicit request for that project. Pure functions, no React or I/O.
 
 import type { AddonUpdate, InstallationAutoUpdate } from "../api";
 import { groupUpdate, type AddonGroup } from "./filter.ts";
+import { isUpdatable } from "./mirror.ts";
 import { projectId, type ProjectRef } from "./sources.ts";
 
 /**
@@ -48,9 +50,9 @@ export function exclusionChoice(
   return projects.some((project) => !excluded?.has(projectId(project)));
 }
 
-/** The item text: "Don't auto-update" when it excludes, "Allow auto-update" when it readmits. */
+/** The item text: "Don't update" when it holds, "Allow updates" when it releases. */
 export function exclusionLabel(exclude: boolean): string {
-  return exclude ? "Don't auto-update" : "Allow auto-update";
+  return exclude ? "Don't update" : "Allow updates";
 }
 
 /**
@@ -86,7 +88,7 @@ export function exclusionDisabledReason(
     count: number;
   },
 ): string | null {
-  if (state.saving) return "Wait for the automatic update choice to be saved.";
+  if (state.saving) return "Wait for the update hold to be saved.";
   if (state.count === 0) return "No addons selected.";
   if (projects.length === 0) {
     if (state.updates === undefined) {
@@ -95,17 +97,85 @@ export function exclusionDisabledReason(
         : "Check for updates first: it finds the source of each addon.";
     }
     return state.count === 1
-      ? "No recognized source: only addons matched to a source update automatically."
+      ? "No recognized source: only addons matched to a source can be held."
       : "No recognized source: none of these addons is matched to a source.";
   }
-  if (state.excluded === undefined) {
-    return state.loadError
-      ? `Could not read the automatic update choices: ${state.loadError}`
-      : "Wait for the automatic update choices to be loaded.";
-  }
-  return null;
+  return heldUnknownReason(state.excluded, state.loadError);
 }
 
-/** The `title` of the mark in the row of an excluded addon. */
+/**
+ * Why the held addons are not known yet, or `null` once they are: until then neither the menu
+ * item nor "Update all" can act, so nothing held is updated by mistake.
+ */
+export function heldUnknownReason(
+  excluded: ReadonlySet<string> | undefined,
+  loadError?: string | null,
+): string | null {
+  if (excluded !== undefined) return null;
+  return loadError
+    ? `Could not read the held addons: ${loadError}`
+    : "Wait for the held addons to be loaded.";
+}
+
+/** The `title` of the mark in the row of a held addon. */
 export const EXCLUDED_TITLE =
-  "Excluded from automatic addon updates. Right-click the row and choose Allow auto-update to include it again.";
+  "Held: not updated by automatic updates or by Update all. Right-click the row and choose Allow updates to update it again.";
+
+/** The `title` of the version pill of a held addon with an update available. */
+export function heldUpdateTitle(latest: string): string {
+  return `Update available: ${latest}. Held: right-click the row to update it anyway or to allow updates.`;
+}
+
+/**
+ * The groups with an update available that are not held: the header's "N to update". Unknown
+ * held addons (`undefined`) hold nothing.
+ */
+export function updateCount(
+  groups: AddonGroup[],
+  updates: Map<string, AddonUpdate> | undefined,
+  excluded: ReadonlySet<string> | undefined,
+): number {
+  return groups.filter((group) => {
+    const update = groupUpdate(group, updates);
+    return update?.status === "updateAvailable" && !isExcluded(update, excluded);
+  }).length;
+}
+
+/**
+ * The projects "Update all" sends: those the app can update on its own, one per source and
+ * id, without the held ones. The number on the button is the length of this list.
+ */
+export function updatableProjects(
+  groups: AddonGroup[],
+  updates: Map<string, AddonUpdate> | undefined,
+  excluded: ReadonlySet<string> | undefined,
+): ProjectRef[] {
+  return projectsWhere(groups, updates, (update) => !isExcluded(update, excluded));
+}
+
+/**
+ * The held projects the app could update: those the menu's "Update to X" / "Update N" sends,
+ * on purpose, one at a time or for the selection. Unknown held addons give none.
+ */
+export function heldUpdateProjects(
+  groups: AddonGroup[],
+  updates: Map<string, AddonUpdate> | undefined,
+  excluded: ReadonlySet<string> | undefined,
+): ProjectRef[] {
+  return projectsWhere(groups, updates, (update) => isExcluded(update, excluded));
+}
+
+function projectsWhere(
+  groups: AddonGroup[],
+  updates: Map<string, AddonUpdate> | undefined,
+  keep: (update: AddonUpdate) => boolean,
+): ProjectRef[] {
+  const projects = new Map<string, ProjectRef>();
+  for (const group of groups) {
+    const update = groupUpdate(group, updates);
+    if (update?.project && isUpdatable(update) && keep(update)) {
+      projects.set(projectId(update.project), update.project);
+    }
+  }
+  return [...projects.values()];
+}

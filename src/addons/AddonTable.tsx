@@ -51,7 +51,12 @@ import {
   excludedIds,
   exclusionChoice,
   exclusionProjects,
+  heldUnknownReason,
+  heldUpdateProjects,
+  heldUpdateTitle,
   isExcluded,
+  updatableProjects,
+  updateCount as countUpdates,
 } from "./exclusion";
 import { blockedHint, isUpdatable } from "./mirror";
 import { interfaceSummary } from "./interfaceColumn";
@@ -319,7 +324,7 @@ export function AddonTable({
     };
   }, []);
 
-  // The addons excluded from automatic updates (issue #204), by `projectId`: they are read with
+  // The held addons ("Don't update", issues #204 and #291), by `projectId`: they are read with
   // `get_auto_update` per installation and matched to the rows on `project.source` and
   // `project.key`. `undefined` until the read has succeeded.
   const [excluded, setExcluded] = useState<ReadonlySet<string> | undefined>();
@@ -368,7 +373,7 @@ export function AddonTable({
       }
     } catch (err) {
       if (mounted.current && currentId.current === id) {
-        setExclusionError(`Could not save the automatic update choice: ${errorMessage(err)}`);
+        setExclusionError(`Could not save the update hold: ${errorMessage(err)}`);
       }
     } finally {
       if (mounted.current && currentId.current === id) {
@@ -543,20 +548,16 @@ export function AddonTable({
   const groups = useMemo(() => groupAddons(addons, updates), [addons, updates]);
   const authors = useMemo(() => authorsOf(groups.map((g) => g.main)), [groups]);
   const visible = useMemo(
-    () => visibleGroups(groups, filters, sort, updates),
-    [groups, filters, sort, updates],
+    () => visibleGroups(groups, filters, sort, updates, shownExcluded),
+    [groups, filters, sort, updates, shownExcluded],
   );
-  const updateCount = groups.filter(
-    (g) => groupUpdate(g, updates)?.status === "updateAvailable",
-  ).length;
+  // Held projects (issue #291) are left out of both counts, read on the same state as the rows.
+  const updateCount = countUpdates(groups, updates, shownExcluded);
   // "Update all" counts the projects the app can update on its own: one per group, without
   // repetitions (source plus id), so the number on the button is that of the projects sent.
-  const updatable = new Map<string, ProjectRef>();
-  for (const g of groups) {
-    const update = groupUpdate(g, updates);
-    if (update && isUpdatable(update)) updatable.set(projectId(update.project!), update.project!);
-  }
-  const updatableIds = [...updatable.values()];
+  const updatableIds = updatableProjects(groups, updates, shownExcluded);
+  // Until the held addons are known, "Update all" could replace one of them: it waits.
+  const heldUnknown = heldUnknownReason(shownExcluded, excludedError);
   const sources = useMemo(() => sourcesIn(updates), [updates]);
   // A chosen source that no longer appears in the check (addon removed, new check) would hide
   // everything without a menu to clear it. A check that is still empty does not clear the choice.
@@ -660,6 +661,10 @@ export function AddonTable({
         closeMenu(true);
         updateProjects(reinstallProjects(targets, updates), true);
         break;
+      case "update":
+        closeMenu(true);
+        updateProjects(heldUpdateProjects(targets, updates, excluded));
+        break;
       case "autoUpdate": {
         const projects = exclusionProjects(targets, updates);
         closeMenu(true);
@@ -679,7 +684,15 @@ export function AddonTable({
     returnFocus.current?.focus();
   }
 
-  const menuState = { updates, busy, checking, excluded, excludedError, savingExclusion };
+  const menuState = {
+    updates,
+    busy,
+    checking,
+    excluded,
+    excludedError,
+    savingExclusion,
+    savingVersion: versionSaving !== null,
+  };
   // A row the filters have hidden cannot remain the only one reachable with Tab.
   const tabStop =
     focusRow !== null && visible.some((g) => g.main.folder === focusRow)
@@ -751,7 +764,8 @@ export function AddonTable({
             <button
               className="button soft"
               onClick={() => updateProjects(updatableIds)}
-              disabled={busy || checking || versionSaving !== null}
+              disabled={busy || checking || versionSaving !== null || heldUnknown !== null}
+              title={running ? undefined : (heldUnknown ?? undefined)}
             >
               {running
                 ? position > 0
@@ -759,7 +773,10 @@ export function AddonTable({
                   : reinstalling
                     ? "Reinstalling…"
                     : "Updating…"
-                : `Update all (${updatableIds.length})`}
+                : heldUnknown !== null
+                  ? // A count that could still include held addons is not shown.
+                    "Update all"
+                  : `Update all (${updatableIds.length})`}
             </button>
           )}
           <button className="button" onClick={() => void runCheck()} disabled={checking || busy}>
@@ -782,7 +799,7 @@ export function AddonTable({
       )}
       {excludedError && (
         <p className="message error" role="alert">
-          Could not read the automatic update choices: {excludedError}
+          Could not read the held addons: {excludedError}
         </p>
       )}
       {exclusionError && (
@@ -997,7 +1014,7 @@ export function AddonTable({
                             {isSelected && <span className="visually-hidden"> (selected)</span>}
                             {isExcluded(update, shownExcluded) && (
                               <span className="pill addon-pill" title={EXCLUDED_TITLE}>
-                                No auto-update
+                                Held
                               </span>
                             )}
                             {error && <span className="addon-error">{error}</span>}
@@ -1049,6 +1066,7 @@ export function AddonTable({
                             progress={
                               update?.project ? progress.get(projectId(update.project)) : undefined
                             }
+                            held={isExcluded(update, shownExcluded)}
                             disabled={busy || checking || versionSaving !== null}
                             onUpdate={updateProjects}
                           />
@@ -1283,6 +1301,8 @@ type UpdateCellProps = {
   reinstalling: boolean;
   /** The last progress of the project being updated, if it has arrived. */
   progress?: InstallProgress;
+  /** The project is held (issue #291): no Update button, the menu updates it on purpose. */
+  held: boolean;
   disabled: boolean;
   onUpdate: (projects: ProjectRef[]) => void;
 };
@@ -1293,6 +1313,7 @@ function UpdateCell({
   updating,
   reinstalling,
   progress,
+  held,
   disabled,
   onUpdate,
 }: UpdateCellProps) {
@@ -1312,7 +1333,11 @@ function UpdateCell({
     case "updateAvailable":
       return (
         <td className="nowrap" title={installedTitle(update, update.latest.date)}>
-          {isUpdatable(update) ? (
+          {held ? (
+            <span className="pill addon-pill" title={heldUpdateTitle(update.latest.name)}>
+              {update.latest.name}
+            </span>
+          ) : isUpdatable(update) ? (
             <button
               className="button soft small row-update"
               // The text is shortened with "…": the full version stays in the tooltip.

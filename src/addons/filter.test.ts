@@ -438,3 +438,30 @@ describe("matchesGroup with the source filter", () => {
     assert.deepEqual(shown, ["Known"]);
   });
 });
+
+describe("matchesGroup with the only updates filter (issue #291)", () => {
+  it("leaves out held rows, and keeps them while the held addons are unknown", () => {
+    const a = addon("Alpha");
+    const b = addon("Beta");
+    const c = addon("Gamma");
+    const updates = checked([a, b, c], { Alpha: [1, ["Alpha"]], Beta: [2, ["Beta"]] });
+    const latest = { id: 2, name: "new", date: "2026-11-01T00:00:00Z" };
+    for (const folder of ["Alpha", "Beta"]) {
+      updates.set(folder, { ...updates.get(folder)!, status: "updateAvailable", latest });
+    }
+    const groups = groupAddons([a, b, c], updates);
+    const shown = (excluded?: ReadonlySet<string>) =>
+      groups
+        .filter((g) => matchesGroup(g, { ...defaultFilters, onlyUpdates: true }, updates, excluded))
+        .map((g) => g.main.folder)
+        .sort();
+    assert.deepEqual(shown(new Set(["curseforge:2"])), ["Alpha"]);
+    assert.deepEqual(shown(new Set()), ["Alpha", "Beta"]);
+    assert.deepEqual(shown(undefined), ["Alpha", "Beta"]);
+    // Without the filter a held row stays visible.
+    const all = groups.filter((g) =>
+      matchesGroup(g, defaultFilters, updates, new Set(["curseforge:2"])),
+    );
+    assert.equal(all.length, 3);
+  });
+});

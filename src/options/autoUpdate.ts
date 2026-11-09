@@ -46,7 +46,7 @@ export function modeHint(mode: AutoUpdateMode | null): string {
 export function installationHint(mode: AutoUpdateMode | null): string {
   return mode === "off"
     ? "Automatic addon updates are off for every installation."
-    : "To skip a single addon, right-click it in Installed and choose Don't auto-update.";
+    : "To keep a single addon as it is, right-click it in Installed and choose Don't update.";
 }
 
 /**
