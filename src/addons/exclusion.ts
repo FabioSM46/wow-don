@@ -127,14 +127,16 @@ export function heldUpdateTitle(latest: string): string {
 }
 
 /**
- * The groups with an update available that are not held: the header's "N to update". Unknown
- * held addons (`undefined`) hold nothing.
+ * The groups with an update available that are not held: the header's "N to update". `null`
+ * while the held addons are unknown (`undefined`, not read yet or read failed): a number then
+ * could count held projects that "Update all" will not send.
  */
 export function updateCount(
   groups: AddonGroup[],
   updates: Map<string, AddonUpdate> | undefined,
   excluded: ReadonlySet<string> | undefined,
-): number {
+): number | null {
+  if (excluded === undefined) return null;
   return groups.filter((group) => {
     const update = groupUpdate(group, updates);
     return update?.status === "updateAvailable" && !isExcluded(update, excluded);
@@ -143,7 +145,9 @@ export function updateCount(
 
 /**
  * The projects "Update all" sends: those the app can update on its own, one per source and
- * id, without the held ones. The number on the button is the length of this list.
+ * id, without the held ones. The number on the button is the length of this list. With
+ * unknown held addons (`undefined`) nothing is left out, so the caller must not send the list
+ * nor show its length until `heldUnknownReason` is `null`.
  */
 export function updatableProjects(
   groups: AddonGroup[],

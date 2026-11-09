@@ -139,7 +139,7 @@ describe("Update all and the header count leave out held projects (issue #291)",
 
   it("holds nothing while the held addons are unknown, and says why Update all waits", () => {
     assert.equal(updatableProjects(groups, withUpdates, undefined).length, 2);
-    assert.equal(updateCount(groups, withUpdates, undefined), 3);
+    assert.equal(updateCount(groups, withUpdates, undefined), null);
     assert.deepEqual(heldUpdateProjects(groups, withUpdates, undefined), []);
     assert.equal(heldUnknownReason(undefined), "Wait for the held addons to be loaded.");
     assert.equal(

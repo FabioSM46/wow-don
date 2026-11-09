@@ -728,7 +728,11 @@ export function AddonTable({
             {installation.name}
             {load.state === "ready" &&
               ` · ${visible.length === groups.length ? groups.length : `${visible.length} of ${groups.length}`} ${groups.length === 1 ? "addon" : "addons"}`}
-            {load.state === "ready" && updateCount > 0 && ` · ${updateCount} to update`}
+            {/* Unknown while the held addons are not read: no count that may include them. */}
+            {load.state === "ready" &&
+              updateCount !== null &&
+              updateCount > 0 &&
+              ` · ${updateCount} to update`}
           </span>
         </h2>
         <div className="section-actions">
@@ -1333,7 +1337,9 @@ function UpdateCell({
     case "updateAvailable":
       return (
         <td className="nowrap" title={installedTitle(update, update.latest.date)}>
-          {held ? (
+          {/* A held project the app cannot install keeps the pill below: the menu has no
+              update for it, so the held tooltip would promise one. */}
+          {held && isUpdatable(update) ? (
             <span className="pill addon-pill" title={heldUpdateTitle(update.latest.name)}>
               {update.latest.name}
             </span>
