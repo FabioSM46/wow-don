@@ -17,6 +17,7 @@ import {
   selectRow,
   selectedText,
   toggleRow,
+  type MenuState,
 } from "./selection.ts";
 
 const addon = (folder: string) => ({ folder, title: folder }) as InstalledAddon;
@@ -100,14 +101,14 @@ describe("menu targets and folders", () => {
 });
 
 describe("menuItems", () => {
-  it("offers Select, Reinstall, Don't auto-update and Remove for one row", () => {
+  it("offers Select, Reinstall, Don't update and Remove for one row", () => {
     const items = menuItems([details], false, idle);
     assert.deepEqual(
       items.map((i) => [i.label, i.disabledReason]),
       [
         ["Select", null],
         ["Reinstall", null],
-        ["Don't auto-update", null],
+        ["Don't update", null],
         ["Remove", null],
       ],
     );
@@ -132,7 +133,7 @@ describe("menuItems", () => {
       items.map((i) => [i.action, i.label, i.disabledReason]),
       [
         ["reinstall", "Reinstall 2", null],
-        ["autoUpdate", "Don't auto-update", null],
+        ["autoUpdate", "Don't update", null],
         ["remove", "Remove 2", null],
         ["clear", "Clear selection", null],
       ],
@@ -240,18 +241,18 @@ describe("Reinstall of projects CurseForge blocks (issue #165)", () => {
   });
 });
 
-describe("menuItems: automatic updates", () => {
+describe("menuItems: the update hold", () => {
   it("allows again when every target is excluded, and excludes a mixed selection", () => {
     const excluded = new Set(["github:Tercioo/Details"]);
     const [, , one] = menuItems([details], false, { ...idle, excluded });
-    assert.equal(one.label, "Allow auto-update");
+    assert.equal(one.label, "Allow updates");
     const [, mixed] = menuItems([details, dbm], true, { ...idle, excluded });
-    assert.equal(mixed.label, "Don't auto-update");
+    assert.equal(mixed.label, "Don't update");
   });
 
   it("disables the item while the choices load, save or have no source", () => {
     const [, , loading] = menuItems([details], false, { ...idle, excluded: undefined });
-    assert.equal(loading.disabledReason, "Wait for the automatic update choices to be loaded.");
+    assert.equal(loading.disabledReason, "Wait for the held addons to be loaded.");
     const [, , failed] = menuItems([details], false, {
       ...idle,
       excluded: undefined,
@@ -259,7 +260,7 @@ describe("menuItems: automatic updates", () => {
     });
     assert.equal(
       failed.disabledReason,
-      "Could not read the automatic update choices: settings.json is damaged",
+      "Could not read the held addons: settings.json is damaged",
     );
     const [, , saving] = menuItems([details], false, { ...idle, savingExclusion: true });
     assert.equal(/Wait/.test(saving.disabledReason ?? ""), true);
@@ -267,5 +268,60 @@ describe("menuItems: automatic updates", () => {
     assert.equal(/No recognized source/.test(noSource.disabledReason ?? ""), true);
     const [, , unchecked] = menuItems([details], false, { ...idle, updates: undefined });
     assert.equal(/Check for updates first/.test(unchecked.disabledReason ?? ""), true);
+  });
+});
+
+describe("menuItems: updating a held project (issue #291)", () => {
+  const latest = { id: 9, name: "11.0.5", date: "2026-11-01T00:00:00Z" };
+  const available = (update: AddonUpdate) =>
+    ({ ...update, status: "updateAvailable", latest }) as AddonUpdate;
+  const withUpdates = new Map<string, AddonUpdate>([
+    ["DBM-Core", available(updates.get("DBM-Core")!)],
+    ["DBM-StatusBarTimers", available(updates.get("DBM-StatusBarTimers")!)],
+    ["Details", updates.get("Details")!],
+  ]);
+  const held: MenuState = {
+    ...idle,
+    updates: withUpdates,
+    excluded: new Set(["curseforge:3358"]),
+  };
+
+  it("offers Update to X on a held row with an update, and Allow updates", () => {
+    assert.deepEqual(
+      menuItems([dbm], false, held).map((i) => [i.action, i.label, i.disabledReason]),
+      [
+        ["select", "Select", null],
+        ["update", "Update to 11.0.5", null],
+        ["reinstall", "Reinstall", null],
+        ["autoUpdate", "Allow updates", null],
+        ["remove", "Remove", null],
+      ],
+    );
+  });
+
+  it("does not offer it on rows that are not held, up to date or before the choices load", () => {
+    const actions = (targets: AddonGroup[], state: MenuState) =>
+      menuItems(targets, false, state).map((i) => i.action);
+    assert.equal(actions([dbm], { ...held, excluded: new Set() }).includes("update"), false);
+    const detailsHeld = { ...held, excluded: new Set(["github:Tercioo/Details"]) };
+    assert.equal(actions([details], detailsHeld).includes("update"), false);
+    assert.equal(actions([dbm], { ...held, excluded: undefined }).includes("update"), false);
+  });
+
+  it("counts only the held projects with an update in a selection", () => {
+    const items = menuItems([dbm, details, loose], true, {
+      ...held,
+      excluded: new Set(["curseforge:3358", "github:Tercioo/Details"]),
+    });
+    assert.deepEqual(items[0], { action: "update", label: "Update 1", disabledReason: null });
+    assert.equal(menuItems([details, loose], true, held)[0].action, "reinstall");
+  });
+
+  it("waits for a running operation, a check or a game version being saved", () => {
+    const reason = (state: Partial<MenuState>) =>
+      menuItems([dbm], false, { ...held, ...state })[1].disabledReason;
+    assert.equal(/Wait for the current operation/.test(reason({ busy: true }) ?? ""), true);
+    assert.equal(/Wait for the update check/.test(reason({ checking: true }) ?? ""), true);
+    assert.equal(/game version/.test(reason({ savingVersion: true }) ?? ""), true);
   });
 });

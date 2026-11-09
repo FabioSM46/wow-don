@@ -103,7 +103,8 @@ D41, issues #199–#204:
   installation (#199).
 - Automatic round at startup and at intervals in the backend (#200), count in the tray (#202).
 - Previous version kept by automatic rounds and "Undo last auto-update" (#201).
-- Options, "Don't auto-update" entry and status line in the Installed tab (#203, #204).
+- Options, "Don't auto-update" entry and status line in the Installed tab (#203, #204); the entry
+  became "Don't update", a hold that also covers "Update all" (#291).
 
 ## M5 — Third-party application key and first release
 

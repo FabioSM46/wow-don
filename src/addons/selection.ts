@@ -7,6 +7,7 @@ import {
   exclusionDisabledReason,
   exclusionLabel,
   exclusionProjects,
+  heldUpdateProjects,
 } from "./exclusion.ts";
 import { groupUpdate, type AddonGroup } from "./filter.ts";
 import { reinstallBlockedReason } from "./mirror.ts";
@@ -82,7 +83,7 @@ export function reinstallProjects(
   return [...projects.values()];
 }
 
-export type MenuAction = "select" | "reinstall" | "autoUpdate" | "remove" | "clear";
+export type MenuAction = "select" | "update" | "reinstall" | "autoUpdate" | "remove" | "clear";
 
 export type MenuItem = {
   action: MenuAction;
@@ -99,22 +100,24 @@ export type MenuState = {
   /** An update check in progress. */
   checking: boolean;
   /**
-   * The projects excluded from automatic updates (`projectId`); `undefined` until
-   * `get_auto_update` has answered (issue #204).
+   * The held projects (`projectId`, issues #204 and #291); `undefined` until
+   * `get_auto_update` has answered.
    */
   excluded?: ReadonlySet<string>;
-  /** The error of reading the excluded projects, if it failed. */
+  /** The error of reading the held projects, if it failed. */
   excludedError?: string | null;
-  /** A "Don't auto-update" / "Allow auto-update" choice being saved. */
+  /** A "Don't update" / "Allow updates" choice being saved. */
   savingExclusion?: boolean;
+  /** A forced game version being saved: the rows' Update buttons wait for it too. */
+  savingVersion?: boolean;
 };
 
 const BUSY_REASON = "Wait for the current operation to finish.";
 
 /**
- * The menu items. Outside selection mode: Select, Reinstall, the automatic update item and
- * Remove for the row; inside: Reinstall N, the same item,
- * Remove N and Clear selection for the selection.
+ * The menu items. Outside selection mode: Select, "Update to X" for a held row with an update,
+ * Reinstall, the hold item and Remove for the row; inside: "Update N" when some held targets
+ * have an update, Reinstall N, the same hold item, Remove N and Clear selection.
  */
 export function menuItems(
   targets: AddonGroup[],
@@ -129,15 +132,18 @@ export function menuItems(
   else if (projects.length === 0) reinstallReason = noProjectsReason(targets, state);
   const removeReason = state.busy ? BUSY_REASON : count === 0 ? "No addons selected." : null;
   const autoUpdate = autoUpdateItem(targets, state);
+  const update = heldUpdateItem(targets, selecting, state);
   if (!selecting) {
     return [
       { action: "select", label: "Select", disabledReason: null },
+      ...update,
       { action: "reinstall", label: "Reinstall", disabledReason: reinstallReason },
       autoUpdate,
       { action: "remove", label: "Remove", disabledReason: removeReason },
     ];
   }
   return [
+    ...update,
     { action: "reinstall", label: `Reinstall ${count}`, disabledReason: reinstallReason },
     autoUpdate,
     { action: "remove", label: `Remove ${count}`, disabledReason: removeReason },
@@ -145,7 +151,26 @@ export function menuItems(
   ];
 }
 
-/** "Don't auto-update" or "Allow auto-update" for the groups' projects (issue #204). */
+/**
+ * The single manual update of held projects (issue #291): held rows have no Update button, so
+ * the menu offers it, and only when some target is held with an update the app can install.
+ */
+function heldUpdateItem(targets: AddonGroup[], selecting: boolean, state: MenuState): MenuItem[] {
+  const projects = heldUpdateProjects(targets, state.updates, state.excluded);
+  if (projects.length === 0) return [];
+  const latest = groupUpdate(targets[0], state.updates);
+  const label =
+    !selecting && latest?.status === "updateAvailable"
+      ? `Update to ${latest.latest.name}`
+      : `Update ${projects.length}`;
+  let disabledReason: string | null = null;
+  if (state.busy) disabledReason = BUSY_REASON;
+  else if (state.checking) disabledReason = "Wait for the update check to finish.";
+  else if (state.savingVersion) disabledReason = "Wait for the game version to be saved.";
+  return [{ action: "update", label, disabledReason }];
+}
+
+/** "Don't update" or "Allow updates" for the groups' projects (issues #204 and #291). */
 function autoUpdateItem(targets: AddonGroup[], state: MenuState): MenuItem {
   const projects = exclusionProjects(targets, state.updates);
   return {

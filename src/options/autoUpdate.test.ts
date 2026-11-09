@@ -52,7 +52,7 @@ describe("hints", () => {
 
   it("says that Off covers every installation", () => {
     assert.equal(installationHint("off"), "Automatic addon updates are off for every installation.");
-    assert.equal(installationHint("install").includes("Don't auto-update"), true);
+    assert.equal(installationHint("install").includes("Don't update"), true);
   });
 });
 
