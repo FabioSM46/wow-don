@@ -56,3 +56,24 @@ export function installationHint(mode: AutoUpdateMode | null): string {
 export function shownValue<T>(saved: T, pending: T | undefined): T {
   return pending === undefined ? saved : pending;
 }
+
+/** The label of the switch for system notifications after automatic rounds (issue #299). */
+export const NOTIFICATIONS_LABEL = "System notifications";
+
+/**
+ * The description under the notifications switch. With the "Off" mode there are no automatic
+ * checks, so nothing to notify: the description says why the switch is disabled.
+ */
+export function notificationsHint(mode: AutoUpdateMode | null): string {
+  return mode === "off"
+    ? "No automatic checks run while automatic addon updates are off."
+    : "Notifies you when an automatic check finds or installs updates.";
+}
+
+/**
+ * The notifications switch is disabled while the settings load and with the "Off" mode; it
+ * keeps its saved value either way.
+ */
+export function notificationsDisabled(mode: AutoUpdateMode | null): boolean {
+  return mode === null || mode === "off";
+}
