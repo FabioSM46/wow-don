@@ -7,6 +7,9 @@ import {
   intervalDisabled,
   intervalLabel,
   modeHint,
+  NOTIFICATIONS_LABEL,
+  notificationsDisabled,
+  notificationsHint,
   shownValue,
 } from "./autoUpdate";
 import { Segmented, SettingRow, SettingsSection, SwitchRow } from "./Setting";
@@ -23,9 +26,11 @@ type Schedule = { mode: AutoUpdateMode; intervalHours: number };
 
 /**
  * The "Automatic addon updates" section of Options (D41, issue #204): mode and interval
- * (`autoUpdate` and `autoUpdateIntervalHours` from `get_settings`, saved with `set_auto_update`)
- * and a switch per installation (`get_auto_update`, `set_installation_auto_update`). The rounds
- * and the updates stay in the backend: here there are only the choices.
+ * (`autoUpdate` and `autoUpdateIntervalHours` from `get_settings`, saved with `set_auto_update`),
+ * the system notifications switch (`updateNotifications`, saved with `set_update_notifications`,
+ * issue #299) and a switch per installation (`get_auto_update`, `set_installation_auto_update`).
+ * The rounds, the updates and the notifications stay in the backend: here there are only the
+ * choices.
  *
  * Each control shows the saved value; during a save the chosen one. A failed save shows the
  * error and the control goes back to the saved value.
@@ -33,6 +38,8 @@ type Schedule = { mode: AutoUpdateMode; intervalHours: number };
 export function AutoUpdateOptions({ active, installations, onModeChange }: Props) {
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [pending, setPending] = useState<Schedule | undefined>(undefined);
+  const [notifications, setNotifications] = useState<boolean | null>(null);
+  const [pendingNotifications, setPendingNotifications] = useState<boolean | undefined>(undefined);
   // Installation id → takes part in automatic updates.
   const [enabled, setEnabled] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [pendingInstallation, setPendingInstallation] = useState<
@@ -73,6 +80,7 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
           mode: settings.value.autoUpdate,
           intervalHours: settings.value.autoUpdateIntervalHours,
         });
+        setNotifications(settings.value.updateNotifications);
         modeChanged.current?.(settings.value.autoUpdate);
       } else {
         failures.push(errorMessage(settings.reason));
@@ -101,6 +109,7 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
     try {
       const saved = await api.setAutoUpdate(next.mode, next.intervalHours);
       setSchedule({ mode: saved.autoUpdate, intervalHours: saved.autoUpdateIntervalHours });
+      setNotifications(saved.updateNotifications);
       modeChanged.current?.(saved.autoUpdate);
     } catch (err) {
       setError(errorMessage(err));
@@ -108,6 +117,24 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
       savingRef.current = false;
       setRetry((n) => n + 1);
       setPending(undefined);
+    }
+  }
+
+  async function saveNotifications(next: boolean) {
+    savingRef.current = true;
+    generation.current++;
+    setError(null);
+    setPendingNotifications(next);
+    try {
+      const saved = await api.setUpdateNotifications(next);
+      setNotifications(saved.updateNotifications);
+    } catch (err) {
+      // The switch is controlled: without a new saved value it goes back to the previous one.
+      setError(errorMessage(err));
+    } finally {
+      savingRef.current = false;
+      setRetry((n) => n + 1);
+      setPendingNotifications(undefined);
     }
   }
 
@@ -129,7 +156,10 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
   }
 
   const shown = schedule ? shownValue(schedule, pending) : null;
-  const saving = pending !== undefined || pendingInstallation !== undefined;
+  const saving =
+    pending !== undefined || pendingInstallation !== undefined || pendingNotifications !== undefined;
+  const shownNotifications =
+    notifications === null ? null : shownValue(notifications, pendingNotifications);
   const shownError = error ?? loadError;
 
   return (
@@ -170,6 +200,15 @@ export function AutoUpdateOptions({ active, installations, onModeChange }: Props
             ))}
           </select>
         </SettingRow>
+        <SwitchRow
+          label={NOTIFICATIONS_LABEL}
+          description={notificationsHint(shown?.mode ?? null)}
+          checked={shownNotifications ?? false}
+          disabled={
+            notifications === null || saving || notificationsDisabled(shown?.mode ?? null)
+          }
+          onChange={(next) => void saveNotifications(next)}
+        />
       </div>
 
       {installations.length === 0 ? (

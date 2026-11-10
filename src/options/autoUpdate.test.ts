@@ -11,6 +11,9 @@ import {
   intervalLabel,
   isAutoUpdateMode,
   modeHint,
+  NOTIFICATIONS_LABEL,
+  notificationsDisabled,
+  notificationsHint,
   shownValue,
 } from "./autoUpdate.ts";
 
@@ -62,5 +65,29 @@ describe("shownValue", () => {
     assert.equal(shownValue("off", undefined), "off");
     assert.equal(shownValue(6, 12), 12);
     assert.equal(shownValue(false, undefined), false);
+  });
+});
+
+describe("system notifications switch", () => {
+  it("names the switch and says when it notifies", () => {
+    assert.equal(NOTIFICATIONS_LABEL, "System notifications");
+    assert.equal(
+      notificationsHint("notify"),
+      "Notifies you when an automatic check finds or installs updates.",
+    );
+    assert.equal(notificationsHint("install"), notificationsHint("notify"));
+    assert.equal(notificationsHint(null), notificationsHint("notify"));
+  });
+
+  it("gives the reason it is disabled with Off", () => {
+    assert.equal(notificationsHint("off").includes("off"), true);
+    assert.equal(notificationsHint("off") === notificationsHint("notify"), false);
+  });
+
+  it("is disabled with Off and while the settings load", () => {
+    assert.equal(notificationsDisabled("off"), true);
+    assert.equal(notificationsDisabled(null), true);
+    assert.equal(notificationsDisabled("notify"), false);
+    assert.equal(notificationsDisabled("install"), false);
   });
 });
