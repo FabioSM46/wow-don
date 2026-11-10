@@ -167,6 +167,20 @@ pub fn set_check_app_updates(
     settings_view(saved, &tray)
 }
 
+/// Saves the "Update notifications" option (D47, issue #298) and returns the updated settings.
+/// The next automatic round reads it: nothing to wake.
+#[tauri::command]
+pub fn set_update_notifications(
+    enabled: bool,
+    settings: AppSettingsState<'_>,
+    tray: State<'_, TrayStatus>,
+) -> Result<SettingsView, String> {
+    settings_view(
+        locked_app_settings(&settings)?.set_update_notifications(enabled),
+        &tray,
+    )
+}
+
 /// The installed version and the latest release known to the app (D46, issue #259): the same
 /// payload as the `app-update` event, see [`AppUpdateStatus`]. Memory only, no network.
 #[tauri::command]
@@ -1932,6 +1946,7 @@ mod tests {
             auto_update: AutoUpdateMode::Install,
             auto_update_interval_hours: 12,
             check_app_updates: false,
+            update_notifications: false,
         })
         .unwrap();
         assert_eq!(
@@ -1942,7 +1957,8 @@ mod tests {
                 "closeToTray": true,
                 "autoUpdate": "install",
                 "autoUpdateIntervalHours": 12,
-                "checkAppUpdates": false
+                "checkAppUpdates": false,
+                "updateNotifications": false
             })
         );
     }
@@ -1960,6 +1976,7 @@ mod tests {
                 "autoUpdate": "notify",
                 "autoUpdateIntervalHours": 6,
                 "checkAppUpdates": true,
+                "updateNotifications": true,
                 "trayAvailable": false
             })
         );

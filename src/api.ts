@@ -30,6 +30,8 @@ export type AppSettings = {
   autoUpdateIntervalHours: number;
   /** Check for a newer WoW-don release (D46, issue #259). */
   checkAppUpdates: boolean;
+  /** A system notification after an automatic round with something new (D47, issue #298). */
+  updateNotifications: boolean;
 };
 
 /**
@@ -572,6 +574,9 @@ export const api = {
   /** Turned on it checks right away, turned off it forgets the release (`app-update` follows). */
   setCheckAppUpdates: (enabled: boolean) =>
     invoke<AppSettings>("set_check_app_updates", { enabled }),
+  /** Read by the next automatic round; manual updates never notify. */
+  setUpdateNotifications: (enabled: boolean) =>
+    invoke<AppSettings>("set_update_notifications", { enabled }),
   /** Backend memory, no network. */
   getAppUpdate: () => invoke<AppUpdateStatus>("get_app_update"),
   /** The real state, read back from the operating system: not in `settings.json` (issue #159). */

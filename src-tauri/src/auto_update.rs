@@ -820,6 +820,11 @@ fn round(app: &AppHandle, state: &AutoUpdate, mode: AutoUpdateMode) -> RoundResu
     // changed on the main thread and this thread waits for it to happen: it is called without
     // holding any lock, so a command waiting for `InstallLock` cannot block the round.
     crate::tray::show_round(app, last_round.as_ref());
+    // The system notification (D47, issue #298), under the same rule: no lock held. Only the
+    // automatic round shows it, never `after_manual_update`.
+    if let Some(last_round) = &last_round {
+        crate::update_notification::show_round(app, last_round);
+    }
     if retrying {
         RoundResult::Failed
     } else {
