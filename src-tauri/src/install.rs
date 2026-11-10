@@ -16,7 +16,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
-use std::io::{self, Cursor, Read, Seek, Write};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -137,14 +137,22 @@ fn extract_archive<R: Read + Seek>(
         return Err("The staging folder is not empty.".to_string());
     }
 
+    let mut reader = reader;
+    // `ZipArchive::new` parses the whole central directory into memory: the entry count the
+    // zip declares is checked first, so a crafted directory is refused before it costs memory.
+    // An unreadable or missing record is left to `ZipArchive::new`, which refuses it.
+    if let Ok(Some(declared)) = declared_entries(&mut reader)
+        && declared > limits.entries as u64
+    {
+        return Err(too_many_entries(declared, limits));
+    }
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| "The file is not a valid zip.".to_string())?;
     let mut archive =
         ZipArchive::new(reader).map_err(|_| "The file is not a valid zip.".to_string())?;
     if archive.len() > limits.entries {
-        return Err(format!(
-            "The zip has too many entries ({}): {} is WoW-don's fixed safety limit.",
-            archive.len(),
-            limits.entries
-        ));
+        return Err(too_many_entries(archive.len() as u64, limits));
     }
 
     // First pass: checks only, no writing.
@@ -245,6 +253,83 @@ fn extract_archive<R: Read + Seek>(
         out.flush().map_err(write_error)?;
     }
     Ok(folders)
+}
+
+fn too_many_entries(count: u64, limits: Limits) -> String {
+    format!(
+        "The zip has too many entries ({count}): {} is WoW-don's fixed safety limit.",
+        limits.entries
+    )
+}
+
+/// Signature of the end of central directory record.
+const EOCD_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+/// Signature of the zip64 end of central directory locator.
+const ZIP64_LOCATOR_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
+/// Signature of the zip64 end of central directory record.
+const ZIP64_EOCD_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x06];
+/// Fixed part of the end of central directory record, before its comment (at most 64 KiB).
+const EOCD_LEN: u64 = 22;
+/// The zip64 locator is 20 bytes and sits right before the end of central directory record.
+const ZIP64_LOCATOR_LEN: u64 = 20;
+
+/// The number of entries the zip declares in its end of central directory record (the zip64
+/// one when present), read from the tail of the file without parsing the central directory.
+/// `None` when no record is found: the zip is then refused by `ZipArchive::new`.
+///
+/// The record closest to the end of the file is taken, among those whose comment does not run
+/// past the end of the file: the same consistency check as `ZipArchive::new` (zip 9.0.5,
+/// `find_central_directory_end`), so a decoy signature inside the real record's comment is
+/// skipped here as it is there, and the count checked is that of the record the parser uses.
+/// The check is `<=`, not `==`, like the parser's, which accepts bytes after the comment. The
+/// count of the parsed archive is still checked.
+fn declared_entries<R: Read + Seek>(reader: &mut R) -> io::Result<Option<u64>> {
+    let len = reader.seek(SeekFrom::End(0))?;
+    if len < EOCD_LEN {
+        return Ok(None);
+    }
+    let tail_len = len.min(EOCD_LEN + u64::from(u16::MAX));
+    let tail_start = len - tail_len;
+    reader.seek(SeekFrom::Start(tail_start))?;
+    let mut tail = vec![0; tail_len as usize];
+    reader.read_exact(&mut tail)?;
+    let Some(eocd) = (0..=tail.len() - EOCD_LEN as usize).rev().find(|&at| {
+        let comment = u64::from(u16::from_le_bytes([tail[at + 20], tail[at + 21]]));
+        tail[at..at + 4] == EOCD_SIGNATURE && tail_start + at as u64 + EOCD_LEN + comment <= len
+    }) else {
+        return Ok(None);
+    };
+    let entries = u64::from(u16::from_le_bytes([tail[eocd + 10], tail[eocd + 11]]));
+
+    // A zip64 archive keeps the real count in its own record, found through the locator.
+    let eocd_pos = tail_start + eocd as u64;
+    if eocd_pos < ZIP64_LOCATOR_LEN {
+        return Ok(Some(entries));
+    }
+    let mut locator = [0; ZIP64_LOCATOR_LEN as usize];
+    reader.seek(SeekFrom::Start(eocd_pos - ZIP64_LOCATOR_LEN))?;
+    reader.read_exact(&mut locator)?;
+    if locator[..4] != ZIP64_LOCATOR_SIGNATURE {
+        return Ok(Some(entries));
+    }
+    let mut offset = [0; 8];
+    offset.copy_from_slice(&locator[8..16]);
+    let record_pos = u64::from_le_bytes(offset);
+    if record_pos >= len {
+        return Ok(Some(entries));
+    }
+    // Signature (4), record size (8), versions (4), disk numbers (8), entries on this disk (8),
+    // total entries (8).
+    let mut record = [0; 40];
+    reader.seek(SeekFrom::Start(record_pos))?;
+    if reader.read_exact(&mut record).is_err() || record[..4] != ZIP64_EOCD_SIGNATURE {
+        return Ok(Some(entries));
+    }
+    // Like `ZipArchive::new`: with a readable zip64 record its total is the count, and the
+    // 16-bit field (often the 0xFFFF placeholder) is ignored.
+    let mut total = [0; 8];
+    total.copy_from_slice(&record[32..40]);
+    Ok(Some(u64::from_le_bytes(total)))
 }
 
 fn too_big(limits: Limits) -> String {
@@ -781,6 +866,153 @@ mod tests {
         assert!(error.contains("too many entries"), "{error}");
         assert!(error.contains("fixed safety limit"), "{error}");
         assert!(listing(staging.path()).is_empty());
+    }
+
+    /// An end of central directory record declaring `entries` entries, with no directory.
+    fn eocd(entries: u16) -> Vec<u8> {
+        let mut record = EOCD_SIGNATURE.to_vec();
+        record.extend_from_slice(&[0; 4]); // disk numbers
+        record.extend_from_slice(&entries.to_le_bytes()); // entries on this disk
+        record.extend_from_slice(&entries.to_le_bytes()); // total entries
+        record.extend_from_slice(&[0; 10]); // directory size and offset, comment length
+        record
+    }
+
+    #[test]
+    fn a_declared_entry_count_over_the_limit_is_refused_before_parsing() {
+        let tmp = TempDir::new();
+        let addons = addons_dir(&tmp);
+        let staging = WorkDir::staging(&addons).unwrap();
+        // No central directory at all: parsing would fail with "not a valid zip", so the
+        // message proves the count was read first.
+        let bytes = eocd(3);
+        let limits = Limits {
+            entries: 2,
+            total_bytes: MAX_TOTAL_BYTES,
+        };
+        let error = extract_with_limits(&bytes, staging.path(), limits).unwrap_err();
+        assert!(error.contains("too many entries (3)"), "{error}");
+        assert!(error.contains("fixed safety limit"), "{error}");
+        assert!(listing(staging.path()).is_empty());
+    }
+
+    /// A zip64 end of central directory record at offset 0 declaring `entries` entries, its
+    /// locator, and a legacy record carrying the 0xFFFF placeholder.
+    fn zip64_tail(entries: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&ZIP64_EOCD_SIGNATURE);
+        bytes.extend_from_slice(&44u64.to_le_bytes()); // record size
+        bytes.extend_from_slice(&[0; 4]); // versions
+        bytes.extend_from_slice(&[0; 8]); // disk numbers
+        bytes.extend_from_slice(&entries.to_le_bytes()); // entries on this disk
+        bytes.extend_from_slice(&entries.to_le_bytes()); // total entries
+        bytes.extend_from_slice(&[0; 16]); // directory size and offset
+        // Locator pointing at offset 0.
+        bytes.extend_from_slice(&ZIP64_LOCATOR_SIGNATURE);
+        bytes.extend_from_slice(&[0; 4]); // disk with the record
+        bytes.extend_from_slice(&0u64.to_le_bytes()); // record offset
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // number of disks
+        bytes.extend_from_slice(&eocd(u16::MAX));
+        bytes
+    }
+
+    #[test]
+    fn the_zip64_count_replaces_the_legacy_placeholder() {
+        // As in `ZipArchive::new`: the zip64 total wins over the 16-bit 0xFFFF placeholder.
+        assert_eq!(
+            declared_entries(&mut Cursor::new(zip64_tail(3))).unwrap(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn the_zip64_entry_count_is_read_through_the_locator() {
+        let tmp = TempDir::new();
+        let addons = addons_dir(&tmp);
+        let staging = WorkDir::staging(&addons).unwrap();
+        let bytes = zip64_tail(5_000_000);
+        let error = extract(&bytes, staging.path()).unwrap_err();
+        assert!(error.contains("too many entries (5000000)"), "{error}");
+        assert!(listing(staging.path()).is_empty());
+    }
+
+    #[test]
+    fn a_decoy_record_inside_the_comment_does_not_hide_the_zip64_count() {
+        // The real record's comment holds a decoy signature whose comment length runs past
+        // the end of the file: `ZipArchive::new` skips it and uses the real (zip64) record,
+        // so the early count must skip it too.
+        let mut bytes = zip64_tail(5_000_000);
+        let mut decoy = eocd(1);
+        let decoy_len = decoy.len();
+        decoy[decoy_len - 2..].copy_from_slice(&1000u16.to_le_bytes());
+        let comment_len = decoy.len() as u16;
+        let at = bytes.len();
+        // The helper must end with a bare record, or the patch would hit another field.
+        assert_eq!(bytes[at - EOCD_LEN as usize..at - 18], EOCD_SIGNATURE);
+        assert_eq!(bytes[at - 2..], [0, 0]);
+        bytes[at - 2..].copy_from_slice(&comment_len.to_le_bytes());
+        bytes.extend_from_slice(&decoy);
+        assert_eq!(
+            declared_entries(&mut Cursor::new(&bytes)).unwrap(),
+            Some(5_000_000)
+        );
+    }
+
+    /// A real zip whose record's comment is `comment`, followed by `trailing` bytes.
+    fn zip_with_tail(comment: &[u8], trailing: &[u8]) -> Vec<u8> {
+        let mut bytes = zip_of(&[File("A/1.lua", b"1"), File("A/2.lua", b"2")]);
+        let at = bytes.len();
+        assert_eq!(bytes[at - EOCD_LEN as usize..at - 18], EOCD_SIGNATURE);
+        assert_eq!(bytes[at - 2..], [0, 0]);
+        bytes[at - 2..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(comment);
+        bytes.extend_from_slice(trailing);
+        bytes
+    }
+
+    #[test]
+    fn the_early_count_is_the_count_of_the_parsed_archive() {
+        // Differential check against the zip crate: if an upgrade changes which record
+        // `ZipArchive::new` picks, the early count and the parsed one diverge here.
+        let mut overrunning = eocd(1);
+        let n = overrunning.len();
+        overrunning[n - 2..].copy_from_slice(&1000u16.to_le_bytes());
+        let cases = [
+            ("plain", zip_with_tail(b"", b"")),
+            ("comment", zip_with_tail(b"made by a packager", b"")),
+            ("trailing bytes", zip_with_tail(b"", b"trailing")),
+            (
+                "overrunning decoy in the comment",
+                zip_with_tail(&overrunning, b""),
+            ),
+        ];
+        for (name, bytes) in cases {
+            let parsed = ZipArchive::new(Cursor::new(&bytes))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                declared_entries(&mut Cursor::new(&bytes)).unwrap(),
+                Some(parsed.len() as u64),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_after_the_comment_still_leave_the_record_readable() {
+        // Like the parser, which tolerates bytes after the comment (`<=`, not `==`).
+        let mut bytes = zip_of(&[File("A/1.lua", b"1"), File("A/2.lua", b"2")]);
+        bytes.extend_from_slice(b"trailing");
+        assert_eq!(declared_entries(&mut Cursor::new(&bytes)).unwrap(), Some(2));
+    }
+
+    #[test]
+    fn the_declared_count_of_a_real_zip_is_its_entry_count() {
+        let bytes = zip_of(&[File("A/1.lua", b"1"), File("A/2.lua", b"2")]);
+        assert_eq!(declared_entries(&mut Cursor::new(&bytes)).unwrap(), Some(2));
+        assert_eq!(
+            declared_entries(&mut Cursor::new(b"not a zip")).unwrap(),
+            None
+        );
     }
 
     #[test]

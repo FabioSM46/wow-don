@@ -9,7 +9,10 @@ export type Filters = {
   author: string | null;
   hideLoadOnDemand: boolean;
   onlyErrors: boolean;
-  /** Only the addons with an update available (needs the result of the check). */
+  /**
+   * Only the addons with an update available (needs the result of the check), held ones left
+   * out (issue #291).
+   */
   onlyUpdates: boolean;
   /** Only the addons recognised by this source (needs the result of the check); `null` = all. */
   source: SourceKind | null;
@@ -272,12 +275,17 @@ export function sourceOf(addon: InstalledAddon, update?: AddonUpdate): SourceKin
   return addon.installedProject ? "curseforge" : null;
 }
 
+/** `excluded`: the held projects (`projectId`), which "only updates" leaves out. */
 export function matchesFilters(
   addon: InstalledAddon,
   filters: Filters,
   update?: AddonUpdate,
+  excluded?: ReadonlySet<string>,
 ): boolean {
-  if (filters.onlyUpdates && update?.status !== "updateAvailable") return false;
+  if (filters.onlyUpdates) {
+    if (update?.status !== "updateAvailable") return false;
+    if (update.project && excluded?.has(projectId(update.project))) return false;
+  }
   if (filters.source !== null && sourceOf(addon, update) !== filters.source) return false;
   if (filters.author !== null && addon.author !== filters.author) return false;
   if (filters.hideLoadOnDemand && addon.loadOnDemand) return false;
@@ -326,13 +334,14 @@ export function matchesGroup(
   group: AddonGroup,
   filters: Filters,
   updates?: Map<string, AddonUpdate>,
+  excluded?: ReadonlySet<string>,
 ): boolean {
   const update = groupUpdate(group, updates);
   if (filters.onlyErrors && ![group.main, ...group.others].some((a) => Boolean(a.error))) {
     return false;
   }
   const withoutErrorFilter = { ...filters, onlyErrors: false, query: "" };
-  if (!matchesFilters(group.main, withoutErrorFilter, update)) return false;
+  if (!matchesFilters(group.main, withoutErrorFilter, update, excluded)) return false;
   const query = filters.query.trim();
   if (query === "") return true;
   return (
@@ -347,8 +356,9 @@ export function visibleGroups(
   filters: Filters,
   sort: Sort,
   updates?: Map<string, AddonUpdate>,
+  excluded?: ReadonlySet<string>,
 ): AddonGroup[] {
-  const filtered = groups.filter((g) => matchesGroup(g, filters, updates));
+  const filtered = groups.filter((g) => matchesGroup(g, filters, updates, excluded));
   const order = new Map(
     sortAddons(
       filtered.map((g) => g.main),
