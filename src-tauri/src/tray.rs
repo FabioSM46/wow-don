@@ -20,11 +20,11 @@ use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
 
-use crate::auto_update::RoundReport;
+use crate::auto_update::{AvailableUpdate, InstallationReport, RoundReport};
 use crate::store::AppSettingsStore;
 
 /// The label of the main window (the one in `tauri.conf.json`, without `label`).
-const MAIN_WINDOW: &str = "main";
+pub(crate) const MAIN_WINDOW: &str = "main";
 /// Specific to the app, not `"main"`: on Linux tray-icon writes the image to
 /// `tray-icon-<id>-<n>.png` in the runtime folder and deletes it on exit, so another app with
 /// the same ID would overwrite or remove ours (issue #252).
@@ -130,25 +130,29 @@ pub struct RoundSummary {
 /// the two lengths would subtract them twice. Those excluded by the user do not count: they are
 /// not in `available`.
 pub fn pending_updates(round: &RoundReport) -> usize {
-    round
-        .installations
-        .iter()
-        .map(|report| {
-            report
-                .available
-                .iter()
-                .filter(|available| {
-                    let outcome = report.updated.iter().any(|updated| {
-                        updated.source == available.source && updated.key == available.key
-                    });
-                    let checked = report.updated_checked.iter().any(|project| {
-                        project.source == available.source && project.key == available.key
-                    });
-                    !outcome && !checked
-                })
-                .count()
-        })
-        .sum()
+    pending_projects(round).count()
+}
+
+/// The projects [`pending_updates`] counts, each with its installation's report: the same rule,
+/// for who needs to know which projects they are (the system notification, issue #298).
+pub fn pending_projects(
+    round: &RoundReport,
+) -> impl Iterator<Item = (&InstallationReport, &AvailableUpdate)> {
+    round.installations.iter().flat_map(|report| {
+        report
+            .available
+            .iter()
+            .filter(|available| {
+                let outcome = report.updated.iter().any(|updated| {
+                    updated.source == available.source && updated.key == available.key
+                });
+                let checked = report.updated_checked.iter().any(|project| {
+                    project.source == available.source && project.key == available.key
+                });
+                !outcome && !checked
+            })
+            .map(move |available| (report, available))
+    })
 }
 
 /// Text of the item and tooltip for the outcome of a round (or for no round).
