@@ -947,12 +947,54 @@ mod tests {
         decoy[decoy_len - 2..].copy_from_slice(&1000u16.to_le_bytes());
         let comment_len = decoy.len() as u16;
         let at = bytes.len();
+        // The helper must end with a bare record, or the patch would hit another field.
+        assert_eq!(bytes[at - EOCD_LEN as usize..at - 18], EOCD_SIGNATURE);
+        assert_eq!(bytes[at - 2..], [0, 0]);
         bytes[at - 2..].copy_from_slice(&comment_len.to_le_bytes());
         bytes.extend_from_slice(&decoy);
         assert_eq!(
             declared_entries(&mut Cursor::new(&bytes)).unwrap(),
             Some(5_000_000)
         );
+    }
+
+    /// A real zip whose record's comment is `comment`, followed by `trailing` bytes.
+    fn zip_with_tail(comment: &[u8], trailing: &[u8]) -> Vec<u8> {
+        let mut bytes = zip_of(&[File("A/1.lua", b"1"), File("A/2.lua", b"2")]);
+        let at = bytes.len();
+        assert_eq!(bytes[at - EOCD_LEN as usize..at - 18], EOCD_SIGNATURE);
+        assert_eq!(bytes[at - 2..], [0, 0]);
+        bytes[at - 2..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(comment);
+        bytes.extend_from_slice(trailing);
+        bytes
+    }
+
+    #[test]
+    fn the_early_count_is_the_count_of_the_parsed_archive() {
+        // Differential check against the zip crate: if an upgrade changes which record
+        // `ZipArchive::new` picks, the early count and the parsed one diverge here.
+        let mut overrunning = eocd(1);
+        let n = overrunning.len();
+        overrunning[n - 2..].copy_from_slice(&1000u16.to_le_bytes());
+        let cases = [
+            ("plain", zip_with_tail(b"", b"")),
+            ("comment", zip_with_tail(b"made by a packager", b"")),
+            ("trailing bytes", zip_with_tail(b"", b"trailing")),
+            (
+                "overrunning decoy in the comment",
+                zip_with_tail(&overrunning, b""),
+            ),
+        ];
+        for (name, bytes) in cases {
+            let parsed = ZipArchive::new(Cursor::new(&bytes))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                declared_entries(&mut Cursor::new(&bytes)).unwrap(),
+                Some(parsed.len() as u64),
+                "{name}"
+            );
+        }
     }
 
     #[test]
