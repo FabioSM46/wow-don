@@ -277,8 +277,12 @@ const ZIP64_LOCATOR_LEN: u64 = 20;
 /// one when present), read from the tail of the file without parsing the central directory.
 /// `None` when no record is found: the zip is then refused by `ZipArchive::new`.
 ///
-/// The record closest to the end of the file is taken. A comment can imitate one; that only
-/// changes this early count, and the count of the parsed archive is still checked.
+/// The record closest to the end of the file is taken, among those whose comment does not run
+/// past the end of the file: the same consistency check as `ZipArchive::new` (zip 9.0.5,
+/// `find_central_directory_end`), so a decoy signature inside the real record's comment is
+/// skipped here as it is there, and the count checked is that of the record the parser uses.
+/// The check is `<=`, not `==`, like the parser's, which accepts bytes after the comment. The
+/// count of the parsed archive is still checked.
 fn declared_entries<R: Read + Seek>(reader: &mut R) -> io::Result<Option<u64>> {
     let len = reader.seek(SeekFrom::End(0))?;
     if len < EOCD_LEN {
@@ -289,10 +293,10 @@ fn declared_entries<R: Read + Seek>(reader: &mut R) -> io::Result<Option<u64>> {
     reader.seek(SeekFrom::Start(tail_start))?;
     let mut tail = vec![0; tail_len as usize];
     reader.read_exact(&mut tail)?;
-    let Some(eocd) = (0..=tail.len() - EOCD_LEN as usize)
-        .rev()
-        .find(|&at| tail[at..at + 4] == EOCD_SIGNATURE)
-    else {
+    let Some(eocd) = (0..=tail.len() - EOCD_LEN as usize).rev().find(|&at| {
+        let comment = u64::from(u16::from_le_bytes([tail[at + 20], tail[at + 21]]));
+        tail[at..at + 4] == EOCD_SIGNATURE && tail_start + at as u64 + EOCD_LEN + comment <= len
+    }) else {
         return Ok(None);
     };
     let entries = u64::from(u16::from_le_bytes([tail[eocd + 10], tail[eocd + 11]]));
@@ -930,6 +934,33 @@ mod tests {
         let error = extract(&bytes, staging.path()).unwrap_err();
         assert!(error.contains("too many entries (5000000)"), "{error}");
         assert!(listing(staging.path()).is_empty());
+    }
+
+    #[test]
+    fn a_decoy_record_inside_the_comment_does_not_hide_the_zip64_count() {
+        // The real record's comment holds a decoy signature whose comment length runs past
+        // the end of the file: `ZipArchive::new` skips it and uses the real (zip64) record,
+        // so the early count must skip it too.
+        let mut bytes = zip64_tail(5_000_000);
+        let mut decoy = eocd(1);
+        let decoy_len = decoy.len();
+        decoy[decoy_len - 2..].copy_from_slice(&1000u16.to_le_bytes());
+        let comment_len = decoy.len() as u16;
+        let at = bytes.len();
+        bytes[at - 2..].copy_from_slice(&comment_len.to_le_bytes());
+        bytes.extend_from_slice(&decoy);
+        assert_eq!(
+            declared_entries(&mut Cursor::new(&bytes)).unwrap(),
+            Some(5_000_000)
+        );
+    }
+
+    #[test]
+    fn bytes_after_the_comment_still_leave_the_record_readable() {
+        // Like the parser, which tolerates bytes after the comment (`<=`, not `==`).
+        let mut bytes = zip_of(&[File("A/1.lua", b"1"), File("A/2.lua", b"2")]);
+        bytes.extend_from_slice(b"trailing");
+        assert_eq!(declared_entries(&mut Cursor::new(&bytes)).unwrap(), Some(2));
     }
 
     #[test]
