@@ -31,7 +31,7 @@ WoW-don is free software under the GPL. It has no ads and no account.
 - Other sources: Tukui, WoWInterface and GitHub Releases, plus zips dragged into the window.
 - Export and import of your addon list as a text string.
 - Backup of the `WTF` and `Interface` folders.
-- Tray icon with the count of pending updates, close to tray and start with the system.
+- Tray icon with the count of pending updates and a "Check for updates" item, close to tray and start with the system.
 - Light and dark themes.
 
 ## Install

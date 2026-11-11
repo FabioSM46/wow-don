@@ -13,6 +13,12 @@
 //! `get_auto_update_status` and is sent as the [`EVENT`] event at the end of every round: both
 //! carry an [`AutoUpdateStatus`]. No outcome contains the CurseForge key, URLs or paths.
 //!
+//! A round can also be requested (issue #304, the tray's "Check for updates"):
+//! [`AutoUpdate::request_round`] records the requested mode next to the wake-up flag and the same
+//! thread serves it before the schedule, whatever the saved mode. A requested round skipped
+//! because of [`InstallLock`] stays queued and retries after [`BUSY_RETRY`]; once it ran, the
+//! schedule counts it as the last round.
+//!
 //! In `install` the round keeps the previous version of the folders it replaces
 //! ([`NextGeneration`], issue #201): the last round of an installation is undone with
 //! `undo_last_auto_update`, and the status says which installations have an undoable round.
@@ -197,6 +203,9 @@ pub struct Schedule {
     busy: bool,
     /// The consecutive failed checks; zero after a successful round.
     failures: usize,
+    /// When a requested round was last skipped because a command held [`InstallLock`]: it
+    /// retries after [`BUSY_RETRY`]. `None` when it has not been skipped yet.
+    request_busy: Option<Duration>,
 }
 
 impl Schedule {
@@ -222,6 +231,38 @@ impl Schedule {
             interval
         };
         Some(last + wait.min(interval))
+    }
+
+    /// When the thread must wake up next: the scheduled round ([`Self::next_due`]) or, with a
+    /// requested round queued, that one. A requested round runs immediately, or [`BUSY_RETRY`]
+    /// after it was last skipped, whatever the mode (even `off`). While it is queued the scheduled
+    /// round waits for it: it counts as the last round anyway, and an overdue scheduled round
+    /// would otherwise re-run a skipped request on every pass of the loop.
+    pub fn next_wake(
+        &self,
+        mode: AutoUpdateMode,
+        interval_hours: u32,
+        requested: bool,
+    ) -> Option<Duration> {
+        if !requested {
+            return self.next_due(mode, interval_hours);
+        }
+        Some(
+            self.request_busy
+                .map_or(Duration::ZERO, |skipped| skipped + BUSY_RETRY),
+        )
+    }
+
+    /// Records the end of a requested round, `at` since the thread started. Skipped, it stays
+    /// queued for [`Self::next_wake`] and the schedule is untouched; otherwise it counts as the
+    /// last round, as [`Self::finished`] would.
+    pub fn finished_requested(&mut self, at: Duration, result: RoundResult) {
+        if result == RoundResult::Busy {
+            self.request_busy = Some(at);
+        } else {
+            self.request_busy = None;
+            self.finished(at, result);
+        }
     }
 
     /// Records the end of an attempt, `at` since the thread started.
@@ -601,6 +642,9 @@ struct Shared {
     status: AutoUpdateStatus,
     /// The settings changed: the thread reschedules.
     woken: bool,
+    /// A round requested by the user (the tray's "Check for updates", issue #304), with the mode
+    /// it must run in; it stays set while it is queued or running and is cleared when it ends.
+    requested: Option<AutoUpdateMode>,
 }
 
 impl AutoUpdate {
@@ -614,6 +658,30 @@ impl AutoUpdate {
     pub fn wake(&self) {
         self.lock().woken = true;
         self.wake.notify_all();
+    }
+
+    /// Asks the thread for an immediate round in `mode` (`notify` checks only, `install` also
+    /// installs), whatever the saved mode. `false`, and nothing changes, when a requested round is
+    /// already queued or running, or for `off`.
+    pub fn request_round(&self, mode: AutoUpdateMode) -> bool {
+        if mode == AutoUpdateMode::Off {
+            return false;
+        }
+        {
+            let mut shared = self.lock();
+            if shared.requested.is_some() {
+                return false;
+            }
+            shared.requested = Some(mode);
+            shared.woken = true;
+        }
+        self.wake.notify_all();
+        true
+    }
+
+    /// The requested round queued or running, if any.
+    pub fn requested(&self) -> Option<AutoUpdateMode> {
+        self.lock().requested
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
@@ -766,8 +834,16 @@ fn run(app: &AppHandle) {
     let state = app.state::<AutoUpdate>();
     let base = Instant::now();
     let mut schedule = Schedule::default();
+    // Whether the tray already shows the queued requested round as "Checking for updates…".
+    let mut request_shown = false;
     loop {
         let (mode, interval_hours) = read_settings(app);
+        let requested = state.requested().is_some();
+        if requested && !request_shown {
+            // Called from this thread, without any lock held: the tray waits for the main thread.
+            crate::tray::show_round(app, state.status().last_round.as_ref());
+            request_shown = true;
+        }
         let due = schedule.next_due(mode, interval_hours);
         state.update(|status| {
             status.next_round_at = due.map(|due| {
@@ -775,7 +851,17 @@ fn run(app: &AppHandle) {
                 iso_utc(SystemTime::now() + wait)
             });
         });
-        if !state.sleep_until(due.map(|due| base + due)) {
+        let wake = schedule.next_wake(mode, interval_hours, requested);
+        if !state.sleep_until(wake.map(|wake| base + wake)) {
+            continue;
+        }
+        // A requested round comes before the schedule, in its own mode.
+        if let Some(requested) = state.requested() {
+            let result = round(app, &state, requested, true);
+            schedule.finished_requested(base.elapsed(), result);
+            if result != RoundResult::Busy {
+                request_shown = false;
+            }
             continue;
         }
         // The settings may have changed during the wait without waking the thread (for
@@ -784,13 +870,21 @@ fn run(app: &AppHandle) {
         if mode == AutoUpdateMode::Off {
             continue;
         }
-        let result = round(app, &state, mode);
+        let result = round(app, &state, mode, false);
         schedule.finished(base.elapsed(), result);
     }
 }
 
-/// A round on all participating installations, under [`InstallLock`].
-fn round(app: &AppHandle, state: &AutoUpdate, mode: AutoUpdateMode) -> RoundResult {
+/// A round on all participating installations, under [`InstallLock`]. `requested` for a round
+/// the user asked for ([`AutoUpdate::request_round`]): when it is not skipped, the request is
+/// cleared together with the new last round, and its notification follows the rules of a
+/// requested round.
+fn round(
+    app: &AppHandle,
+    state: &AutoUpdate,
+    mode: AutoUpdateMode,
+    requested: bool,
+) -> RoundResult {
     let lock = app.state::<InstallLock>();
     let Some(held) = lock.try_hold() else {
         return RoundResult::Busy;
@@ -801,16 +895,22 @@ fn round(app: &AppHandle, state: &AutoUpdate, mode: AutoUpdateMode) -> RoundResu
         status.next_round_at = None;
     });
     let (installations, retrying) = round_installations(app, mode);
-    let status = state.update(|status| {
-        status.running = false;
-        status.last_round = Some(RoundReport {
+    let status = {
+        let mut shared = state.lock();
+        shared.status.running = false;
+        shared.status.last_round = Some(RoundReport {
             mode,
             started_at,
             finished_at: iso_utc(SystemTime::now()),
             retrying,
             installations,
         });
-    });
+        // Cleared with the new outcome: the tray below no longer shows "Checking for updates…".
+        if requested {
+            shared.requested = None;
+        }
+        shared.status.clone()
+    };
     let last_round = status.last_round.clone();
     // An event that fails to send does not stop the round: the outcome stays readable with the
     // command.
@@ -821,9 +921,10 @@ fn round(app: &AppHandle, state: &AutoUpdate, mode: AutoUpdateMode) -> RoundResu
     // holding any lock, so a command waiting for `InstallLock` cannot block the round.
     crate::tray::show_round(app, last_round.as_ref());
     // The system notification (D47, issue #298), under the same rule: no lock held. Only the
-    // automatic round shows it, never `after_manual_update`.
+    // automatic round shows it, never `after_manual_update`; a requested round (issue #304)
+    // always reports its outcome.
     if let Some(last_round) = &last_round {
-        crate::update_notification::show_round(app, last_round);
+        crate::update_notification::show_round(app, last_round, requested);
     }
     if retrying {
         RoundResult::Failed
@@ -987,6 +1088,76 @@ mod tests {
             schedule.next_due(AutoUpdateMode::Notify, 0),
             Some(HOUR + MIN * 5)
         );
+    }
+
+    #[test]
+    fn a_requested_round_runs_at_once_whatever_the_mode() {
+        use AutoUpdateMode::{Install, Notify, Off};
+        let schedule = Schedule::default();
+        for mode in [Off, Notify, Install] {
+            assert_eq!(schedule.next_wake(mode, 6, true), Some(Duration::ZERO));
+        }
+        // Without a request the wake-up is the scheduled round.
+        assert_eq!(schedule.next_wake(Notify, 6, false), Some(STARTUP_DELAY));
+        assert_eq!(schedule.next_wake(Off, 6, false), None);
+        // After an earlier round the request still runs at once, before the scheduled one.
+        let schedule = finished(&[RoundResult::Done]);
+        assert_eq!(schedule.next_wake(Notify, 6, true), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_skipped_requested_round_stays_queued_and_retries_after_busy_retry() {
+        use AutoUpdateMode::{Notify, Off};
+        let mut schedule = finished(&[RoundResult::Done]);
+        schedule.finished_requested(HOUR * 2, RoundResult::Busy);
+        assert_eq!(
+            schedule.next_wake(Off, 6, true),
+            Some(HOUR * 2 + BUSY_RETRY)
+        );
+        // The schedule is untouched by the skip.
+        assert_eq!(schedule.next_due(Notify, 6), Some(HOUR * 7));
+        assert_eq!(schedule.next_wake(Notify, 6, false), Some(HOUR * 7));
+        // A scheduled round already overdue does not bring the retry forward: otherwise every
+        // pass of the loop would re-run the skipped request while the lock is held.
+        schedule.finished_requested(HOUR * 20, RoundResult::Busy);
+        assert_eq!(
+            schedule.next_wake(Notify, 6, true),
+            Some(HOUR * 20 + BUSY_RETRY)
+        );
+    }
+
+    #[test]
+    fn a_requested_round_counts_as_the_last_round() {
+        use AutoUpdateMode::{Notify, Off};
+        let mut schedule = finished(&[RoundResult::Done]);
+        schedule.finished_requested(HOUR * 2, RoundResult::Busy);
+        schedule.finished_requested(HOUR * 3, RoundResult::Done);
+        // The next scheduled round comes one interval after the requested one.
+        assert_eq!(schedule.next_due(Notify, 6), Some(HOUR * 9));
+        // A new request is not held back by the earlier skip.
+        assert_eq!(schedule.next_wake(Notify, 6, true), Some(Duration::ZERO));
+        // With the mode off there is still no scheduled round.
+        assert_eq!(schedule.next_due(Off, 6), None);
+        assert_eq!(schedule.next_wake(Off, 6, false), None);
+        // A failed requested round backs off like a scheduled one.
+        let mut schedule = Schedule::default();
+        schedule.finished_requested(HOUR, RoundResult::Failed);
+        assert_eq!(schedule.next_due(Notify, 6), Some(HOUR + MIN * 5));
+    }
+
+    #[test]
+    fn a_round_request_is_queued_once() {
+        let state = AutoUpdate::default();
+        assert_eq!(state.requested(), None);
+        assert!(!state.request_round(AutoUpdateMode::Off));
+        assert_eq!(state.requested(), None);
+        assert!(state.request_round(AutoUpdateMode::Notify));
+        assert_eq!(state.requested(), Some(AutoUpdateMode::Notify));
+        // A second click while queued is ignored, whatever its mode.
+        assert!(!state.request_round(AutoUpdateMode::Install));
+        assert_eq!(state.requested(), Some(AutoUpdateMode::Notify));
+        // The request wakes the thread up.
+        assert!(!state.sleep_until(None));
     }
 
     #[test]
