@@ -37,7 +37,7 @@
    - Checkbox and radio at 16px with border --border-strong and `accent-color`.
    - .switch: 36×20px switch on `<input type="checkbox" role="switch" class="switch">`.
    - .segmented: group of `<button>`s; the active one (`aria-pressed`, `aria-checked` or
-     `aria-selected` set to "true") sits on --surface.
+     `aria-selected` set to "true") sits on --surface. A count goes in a .segment-count.
    - .pill: 22px-tall pill at --text-xs 600; variants .accent, .ok, .warning, .danger (with no
      variant it is neutral).
 
@@ -668,6 +668,18 @@ input[type="radio"]:checked:disabled {
   outline-offset: 0;
 }
 
+/* The count of a segment (issue #314): after its label, quieter. */
+.segment-count {
+  margin-left: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: var(--muted);
+}
+
+.segmented button:disabled .segment-count {
+  color: var(--faint);
+}
+
 /* Pill (D42): a short state next to a name. Neutral with no variant; color only for the state
    (accent, ok, warning, danger). */
 .pill {
@@ -1005,6 +1017,7 @@ label.setting-label {
 
 .row-menu-item {
   font: inherit;
+  white-space: nowrap;
   padding: 6px 10px;
   border: none;
   border-radius: calc(var(--radius) - 2px);
@@ -1027,6 +1040,23 @@ label.setting-label {
 .row-menu-item[aria-disabled="true"] {
   color: var(--faint);
   cursor: default;
+}
+
+/* A checkable item (issue #314): the mark sits at the end and keeps its place when off, so
+   the labels of the menu stay aligned. */
+.row-menu-item[role="menuitemcheckbox"] {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.row-menu-item[role="menuitemcheckbox"]::after {
+  content: "✓";
+  visibility: hidden;
+}
+
+.row-menu-item[aria-checked="true"]::after {
+  visibility: visible;
 }
 
 /* Found installations: a subtitle with "Scan again", then the rows with their "Add"; game
@@ -1135,8 +1165,8 @@ label.setting-label {
 
 /* Addons */
 
-/* The Installed tab title (issue #230): "Addons" at --text-xl with the count next to it, not
-   the uppercase label of the other sections. */
+/* The Installed tab title (issue #230): "Addons" at --text-xl, not the uppercase label of the
+   other sections. The installation and the counts are in the status line below it. */
 .addons-title {
   font-size: var(--text-xl);
   text-transform: none;
@@ -1144,17 +1174,41 @@ label.setting-label {
   color: var(--text);
 }
 
-.addons-count {
-  margin-left: var(--space-2);
-  font-size: var(--text-base);
-  font-weight: var(--weight-regular);
-  letter-spacing: 0;
+.addons-header {
+  gap: var(--space-4);
+  margin-bottom: var(--space-1);
+}
+
+/* The status line under the title (issue #314): installation, counts and time of the check, or
+   the selection; then what the automatic updates did, with its problems and Undo (issue #203).
+   Plain text, color only for the selection and for errors. */
+.status-line {
+  margin: 0 0 var(--space-4);
   color: var(--muted);
 }
 
-.addons-header {
-  gap: var(--space-4);
-  margin-bottom: var(--space-4);
+.status-line p,
+.status-line ul {
+  margin: 0;
+}
+
+.status-line ul {
+  padding-left: 18px;
+  font-size: var(--text-xs);
+}
+
+.status-line .link.error {
+  color: var(--danger);
+}
+
+.status-selection {
+  color: var(--accent);
+  font-weight: var(--weight-strong);
+}
+
+.status-line-undo {
+  margin-top: var(--space-1);
+  color: var(--text);
 }
 
 .count {
@@ -1427,36 +1481,6 @@ label.setting-label {
   text-overflow: ellipsis;
   line-height: var(--control-height-sm);
   vertical-align: middle;
-}
-
-/* The automatic update row between the title and the Installed filters (issue #203): a bar of
-   its own, understated, color only for errors (issue #230). */
-.auto-update-line {
-  margin: 0 0 var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.auto-update-line p,
-.auto-update-line ul {
-  margin: 0;
-}
-
-.auto-update-line ul {
-  padding-left: 18px;
-}
-
-.auto-update-line .link.error {
-  color: var(--danger);
-}
-
-.auto-update-undo {
-  margin-top: var(--space-1);
-  color: var(--text);
 }
 
 .update-summary p,
@@ -2300,18 +2324,6 @@ label.setting-label {
 
 .addon-table tbody tr.selected td:first-child {
   box-shadow: inset 2px 0 0 var(--accent);
-}
-
-.selection-status {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-base);
-}
-
-.selection-status .count {
-  color: var(--accent);
-  font-weight: var(--weight-strong);
 }
 
 .context-menu {

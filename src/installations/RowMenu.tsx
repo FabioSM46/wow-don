@@ -6,6 +6,10 @@ export type RowMenuItem = {
   danger?: boolean;
   /** An unavailable item stays reachable, with the reason in its `title`. */
   disabledReason?: string | null;
+  /** What the item does, in its `title` while it is available. */
+  hint?: string;
+  /** A checkable item (`menuitemcheckbox`): `true` or `false` is its state, shown by a mark. */
+  checked?: boolean;
   onSelect: () => void;
 };
 
@@ -15,16 +19,23 @@ type Props = {
   items: RowMenuItem[];
   /** The "⋯" button: whoever uses the menu brings focus back to it when the chosen action ends. */
   triggerRef?: RefObject<HTMLButtonElement | null>;
+  /** The classes of the "⋯" button; a small ghost button when omitted, as in an Options row. */
+  triggerClassName?: string;
 };
 
 /**
- * The "⋯" menu of an Options row (issue #231): an installation's rare actions, out of view
- * until they are needed. It opens below the button and closes with Esc, Tab (which moves on
+ * The "⋯" menu of an Options row (issue #231) and of the Installed header (issue #314): the
+ * rare actions, out of view until they are needed. It opens below the button and closes with Esc, Tab (which moves on
  * to the next or previous control), a click outside or the window losing focus; items are
  * chosen with the arrows and Enter (pattern
  * WAI-ARIA "menu button").
  */
-export function RowMenu({ label, items, triggerRef }: Props) {
+export function RowMenu({
+  label,
+  items,
+  triggerRef,
+  triggerClassName = "button ghost small row-menu-trigger",
+}: Props) {
   const [open, setOpen] = useState(false);
   const ownTrigger = useRef<HTMLButtonElement | null>(null);
   const trigger = triggerRef ?? ownTrigger;
@@ -95,7 +106,7 @@ export function RowMenu({ label, items, triggerRef }: Props) {
       <button
         ref={trigger}
         type="button"
-        className="button ghost small row-menu-trigger"
+        className={triggerClassName}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -119,10 +130,11 @@ export function RowMenu({ label, items, triggerRef }: Props) {
               }}
               type="button"
               className={item.danger ? "row-menu-item danger" : "row-menu-item"}
-              role="menuitem"
+              role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+              aria-checked={item.checked}
               tabIndex={-1}
               aria-disabled={Boolean(item.disabledReason)}
-              title={item.disabledReason ?? undefined}
+              title={item.disabledReason ?? item.hint}
               onClick={() => {
                 if (item.disabledReason) return;
                 setOpen(false);

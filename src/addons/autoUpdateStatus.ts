@@ -1,6 +1,6 @@
-// The automatic update status line above the table of the Installed tab (D41,
-// issue #203): the text from the outcome of the last round, the problems to show in the detail,
-// Undo and which installations to read again after a round. Pure functions, no React or I/O.
+// The automatic update part of the Installed status line (D41, issues #203 and #314): the text
+// from the outcome of the last round, the problems to show in the detail, Undo and which
+// installations to read again after a round. Pure functions, no React or I/O.
 
 import type {
   AutoUpdateMode,
@@ -21,8 +21,12 @@ export type StatusProblem = {
 };
 
 export type StatusLine = {
-  /** "3 updates available · checked 14:05", "Auto-updated 2 addons · 14:05". */
-  text: string;
+  /**
+   * "auto-updated 2 addons at 14:05", "automatic check failed at 14:05": a segment of the
+   * Installed status line, after its counts. `null` when the round adds only problems: the
+   * updates available and the time of the check are already in that line (issue #314).
+   */
+  text: string | null;
   /** "2 failed · 1 skipped", or `null` without problems. */
   problemText: string | null;
   problems: StatusProblem[];
@@ -104,18 +108,16 @@ function reportText(
   clock: Clock,
 ): string | null {
   const at = clock(report.checkedAt);
-  if (report.checkError !== null) return `Automatic check failed · ${at}`;
-  if (mode === "notify") {
-    const n = report.available.length;
-    return n > 0 ? `${plural(n, "update", "updates")} available · checked ${at}` : null;
-  }
+  if (report.checkError !== null) return `automatic check failed at ${at}`;
+  // What a `notify` round found is the table's own "n to update · checked HH:MM".
+  if (mode === "notify") return null;
   const n = report.updated.length;
-  return n > 0 ? `Auto-updated ${plural(n, "addon", "addons")} · ${at}` : null;
+  return n > 0 ? `auto-updated ${plural(n, "addon", "addons")} at ${at}` : null;
 }
 
-/** "Auto-updated 3 addons · 14:05": the undoable round, without the outcome in memory. */
+/** "auto-updated 3 addons at 14:05": the undoable round, without the outcome in memory. */
 function undoText(undo: UndoableRound, clock: Clock): string {
-  return `Auto-updated ${plural(undo.addons, "addon", "addons")} · ${clock(undo.roundAt)}`;
+  return `auto-updated ${plural(undo.addons, "addon", "addons")} at ${clock(undo.roundAt)}`;
 }
 
 /** The line made only of the undoable round, without problems. */
@@ -124,9 +126,9 @@ function undoLine(undo: UndoableRound, clock: Clock): StatusLine {
 }
 
 /**
- * The status line for the installation `installationId`, or `null` when there is nothing to
- * show: mode not read yet, no round for the installation, or a round that found nothing
- * and has nothing to undo. With `off` the line exists only for an undoable round, and
+ * What the automatic updates add to the status line of the installation `installationId`, or
+ * `null` when there is nothing to add: mode not read yet, no round for the installation, or a
+ * round with no addon updated, no problem and nothing to undo. With `off` the line exists only for an undoable round, and
  * says only that.
  *
  * `undoneRound` is the `finishedAt` of a round the user undid for the installation: its
@@ -158,10 +160,7 @@ export function statusLine(
   const problems = report ? reportProblems(report) : [];
   let text = round && report ? reportText(round.mode, report, clock) : null;
   if (text === null && undo !== null) text = undoText(undo, clock);
-  if (text === null && problems.length > 0 && round && report) {
-    text = `Checked ${clock(report.checkedAt)}`;
-  }
-  if (text === null) return null;
+  if (text === null && problems.length === 0) return null;
   return {
     text,
     problemText: problemSummary(problems),

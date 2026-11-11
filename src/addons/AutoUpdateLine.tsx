@@ -1,9 +1,14 @@
-import { useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { api, errorMessage, type AutoUpdateMode, type AutoUpdateStatus } from "../api";
 import { ProgressBar } from "./ProgressBar";
 import { describeUndo, statusLine, type StatusProblem } from "./autoUpdateStatus";
 
 type Props = {
+  /**
+   * The start of the line, from the Installed tab: the installation and its counts, or the
+   * selection (issue #314). What the automatic updates add follows it.
+   */
+  summary: ReactNode;
   status: AutoUpdateStatus | null;
   installationId: string;
   /** The saved mode; `null` until it has been read. */
@@ -20,11 +25,19 @@ type Props = {
 type UndoResult = { text: string; problems: StatusProblem[] } | { error: string };
 
 /**
- * The automatic update line above the table of the Installed tab (D41, issue #203): what the
- * last round did for the installation, the problems inline on a click and "Undo" for an
- * undoable round. The status comes from `get_auto_update_status` and the `auto-update` event.
+ * The status line under the title of the Installed tab (issue #314): the `summary` the tab
+ * passes in, then what the last automatic round did for the installation (D41, issue #203),
+ * its problems inline on a click and "Undo" for an undoable round. The status comes from
+ * `get_auto_update_status` and the `auto-update` event; this component owns the Undo.
  */
-export function AutoUpdateLine({ status, installationId, mode, undoneRound, onUndone }: Props) {
+export function AutoUpdateLine({
+  summary,
+  status,
+  installationId,
+  mode,
+  undoneRound,
+  onUndone,
+}: Props) {
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<UndoResult | null>(null);
@@ -49,45 +62,53 @@ export function AutoUpdateLine({ status, installationId, mode, undoneRound, onUn
     }
   }
 
-  if (line === null && result === null && !busy) return null;
+  // The segments after the summary, each one preceded by " · ".
+  const segments: ReactNode[] = [];
+  if (line?.text) segments.push(line.text);
+  if (line?.problemText) {
+    segments.push(
+      <button
+        className={line.failed ? "link inline error" : "link inline subtle"}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((open) => !open)}
+      >
+        {line.problemText}
+      </button>,
+    );
+  }
+  if (line?.undo && !busy) {
+    segments.push(
+      <button
+        className="link inline"
+        title={`Put back the previous version of ${line.undo.addons} ${
+          line.undo.addons === 1 ? "addon" : "addons"
+        }`}
+        onClick={() => void undo()}
+      >
+        Undo
+      </button>,
+    );
+  }
 
   return (
-    <div className="auto-update-line" role="status">
-      {line && (
-        <p>
-          <span>{line.text}</span>
-          {line.problemText && (
-            <>
+    <div className="status-line">
+      <p>
+        {summary}
+        {/* Only this part is announced: the counts before it change at every keystroke in the
+            search box. */}
+        <span role="status">
+          {segments.map((segment, index) => (
+            <Fragment key={index}>
               {" · "}
-              <button
-                className={line.failed ? "link inline error" : "link inline subtle"}
-                aria-expanded={expanded}
-                onClick={() => setExpanded((open) => !open)}
-              >
-                {line.problemText}
-              </button>
-            </>
-          )}
-          {line.undo && !busy && (
-            <>
-              {" · "}
-              <button
-                className="link inline"
-                title={`Put back the previous version of ${line.undo.addons} ${
-                  line.undo.addons === 1 ? "addon" : "addons"
-                }`}
-                onClick={() => void undo()}
-              >
-                Undo
-              </button>
-            </>
-          )}
-        </p>
-      )}
+              {segment}
+            </Fragment>
+          ))}
+        </span>
+      </p>
       {line && expanded && line.problems.length > 0 && <ProblemList problems={line.problems} />}
       {busy && <ProgressBar value={null} label="Undoing…" name="Undo" />}
       {result && (
-        <div className="auto-update-undo">
+        <div className="status-line-undo" role="status">
           <p className={"error" in result ? "error" : undefined}>
             {"error" in result ? `Undo failed: ${result.error}` : result.text}{" "}
             <button className="link inline subtle" onClick={() => setResult(null)}>

@@ -400,9 +400,10 @@ function App() {
               onInstallZip={() => void chooseZip()}
               zipBusy={zipBusy}
               onChanged={markSearchStale}
-              autoUpdateLine={
+              statusLine={(summary) => (
                 <AutoUpdateLine
                   key={active.id}
+                  summary={summary}
                   status={autoUpdateStatus}
                   installationId={active.id}
                   mode={autoUpdateMode}
@@ -415,7 +416,7 @@ function App() {
                     markSearchStale(installationId);
                   }}
                 />
-              }
+              )}
             />
           )}
           {installations !== null && installations.length === 0 && (

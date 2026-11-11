@@ -3,17 +3,18 @@
 import type { AddonUpdate, InstalledAddon, SourceKind } from "../api";
 import { projectId } from "./sources.ts";
 
+/**
+ * Which addons the list shows (issue #314): all of them, only those with an update available
+ * (needs the result of the check; held ones left out, issue #291) or only those with an error.
+ */
+export type Show = "all" | "updates" | "errors";
+
 export type Filters = {
   query: string;
   /** `null` = all authors. */
   author: string | null;
   hideLoadOnDemand: boolean;
-  onlyErrors: boolean;
-  /**
-   * Only the addons with an update available (needs the result of the check), held ones left
-   * out (issue #291).
-   */
-  onlyUpdates: boolean;
+  show: Show;
   /** Only the addons recognised by this source (needs the result of the check); `null` = all. */
   source: SourceKind | null;
 };
@@ -25,8 +26,7 @@ export const defaultFilters: Filters = {
   query: "",
   author: null,
   hideLoadOnDemand: false,
-  onlyErrors: false,
-  onlyUpdates: false,
+  show: "all",
   source: null,
 };
 
@@ -275,21 +275,21 @@ export function sourceOf(addon: InstalledAddon, update?: AddonUpdate): SourceKin
   return addon.installedProject ? "curseforge" : null;
 }
 
-/** `excluded`: the held projects (`projectId`), which "only updates" leaves out. */
+/** `excluded`: the held projects (`projectId`), which `show: "updates"` leaves out. */
 export function matchesFilters(
   addon: InstalledAddon,
   filters: Filters,
   update?: AddonUpdate,
   excluded?: ReadonlySet<string>,
 ): boolean {
-  if (filters.onlyUpdates) {
+  if (filters.show === "updates") {
     if (update?.status !== "updateAvailable") return false;
     if (update.project && excluded?.has(projectId(update.project))) return false;
   }
   if (filters.source !== null && sourceOf(addon, update) !== filters.source) return false;
   if (filters.author !== null && addon.author !== filters.author) return false;
   if (filters.hideLoadOnDemand && addon.loadOnDemand) return false;
-  if (filters.onlyErrors && addon.error === null) return false;
+  if (filters.show === "errors" && addon.error === null) return false;
   const query = filters.query.trim().toLocaleLowerCase("it");
   if (query === "") return true;
   return [addon.title, addon.folder, addon.author, addon.notes].some(
@@ -337,10 +337,15 @@ export function matchesGroup(
   excluded?: ReadonlySet<string>,
 ): boolean {
   const update = groupUpdate(group, updates);
-  if (filters.onlyErrors && ![group.main, ...group.others].some((a) => Boolean(a.error))) {
+  if (filters.show === "errors" && ![group.main, ...group.others].some((a) => Boolean(a.error))) {
     return false;
   }
-  const withoutErrorFilter = { ...filters, onlyErrors: false, query: "" };
+  // The error was just read on every folder of the group, not only on the main one.
+  const withoutErrorFilter: Filters = {
+    ...filters,
+    show: filters.show === "errors" ? "all" : filters.show,
+    query: "",
+  };
   if (!matchesFilters(group.main, withoutErrorFilter, update, excluded)) return false;
   const query = filters.query.trim();
   if (query === "") return true;
@@ -348,6 +353,21 @@ export function matchesGroup(
     matchesFilters(group.main, { ...defaultFilters, query }) ||
     group.others.some((other) => lower(other.folder).includes(lower(query)))
   );
+}
+
+/**
+ * How many groups each choice of `show` would list with the other filters as they are: the
+ * counts of the segmented control, each the number of rows a click on it shows.
+ */
+export function showCounts(
+  groups: AddonGroup[],
+  filters: Filters,
+  updates?: Map<string, AddonUpdate>,
+  excluded?: ReadonlySet<string>,
+): Record<Show, number> {
+  const count = (show: Show) =>
+    groups.filter((g) => matchesGroup(g, { ...filters, show }, updates, excluded)).length;
+  return { all: count("all"), updates: count("updates"), errors: count("errors") };
 }
 
 /** Filters and sorts groups already computed with `groupAddons`: count and rows use the same. */

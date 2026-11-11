@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { AddonUpdate, InstalledAddon, SourceKind } from "../api";
-import { defaultFilters, groupAddons, matchesGroup } from "./filter.ts";
+import { defaultFilters, groupAddons, matchesGroup, showCounts } from "./filter.ts";
 
 function addon(folder: string, fields: Partial<InstalledAddon> = {}): InstalledAddon {
   return {
@@ -439,7 +439,7 @@ describe("matchesGroup with the source filter", () => {
   });
 });
 
-describe("matchesGroup with the only updates filter (issue #291)", () => {
+describe("matchesGroup showing only updates (issue #291)", () => {
   it("leaves out held rows, and keeps them while the held addons are unknown", () => {
     const a = addon("Alpha");
     const b = addon("Beta");
@@ -452,7 +452,7 @@ describe("matchesGroup with the only updates filter (issue #291)", () => {
     const groups = groupAddons([a, b, c], updates);
     const shown = (excluded?: ReadonlySet<string>) =>
       groups
-        .filter((g) => matchesGroup(g, { ...defaultFilters, onlyUpdates: true }, updates, excluded))
+        .filter((g) => matchesGroup(g, { ...defaultFilters, show: "updates" }, updates, excluded))
         .map((g) => g.main.folder)
         .sort();
     assert.deepEqual(shown(new Set(["curseforge:2"])), ["Alpha"]);
@@ -463,5 +463,70 @@ describe("matchesGroup with the only updates filter (issue #291)", () => {
       matchesGroup(g, defaultFilters, updates, new Set(["curseforge:2"])),
     );
     assert.equal(all.length, 3);
+  });
+});
+
+describe("the show filter (issue #314)", () => {
+  // Alpha and Beta have an update, Beta is held; Gamma is up to date with an error in a module.
+  const alpha = addon("Alpha", { author: "Ann" });
+  const beta = addon("Beta", { author: "Bob" });
+  const gamma = addon("Gamma", { author: "Ann", dependencies: ["GammaData"] });
+  const gammaData = addon("GammaData", { error: "Missing .toc file.", loadOnDemand: true });
+  const delta = addon("Delta", { error: "Unreadable .toc file." });
+  const all = [alpha, beta, gamma, gammaData, delta];
+  const updates = checked(all, { Alpha: [1, ["Alpha"]], Beta: [2, ["Beta"]] });
+  const latest = { id: 2, name: "new", date: "2026-11-01T00:00:00Z" };
+  for (const folder of ["Alpha", "Beta"]) {
+    updates.set(folder, { ...updates.get(folder)!, status: "updateAvailable", latest });
+  }
+  const groups = groupAddons(all, updates);
+  const held = new Set(["curseforge:2"]);
+  const shown = (filters: Partial<typeof defaultFilters>) =>
+    groups
+      .filter((g) => matchesGroup(g, { ...defaultFilters, ...filters }, updates, held))
+      .map((g) => g.main.folder)
+      .sort();
+
+  it("shows everything by default", () => {
+    assert.equal(defaultFilters.show, "all");
+    assert.deepEqual(shown({}), ["Alpha", "Beta", "Delta", "Gamma"]);
+  });
+
+  it("shows only the updates that are not held", () => {
+    assert.deepEqual(shown({ show: "updates" }), ["Alpha"]);
+  });
+
+  it("shows a group with an error in any of its folders", () => {
+    assert.deepEqual(shown({ show: "errors" }), ["Delta", "Gamma"]);
+  });
+
+  it("combines with the other filters", () => {
+    assert.deepEqual(shown({ show: "errors", author: "Ann" }), ["Gamma"]);
+    assert.deepEqual(shown({ show: "errors", query: "delta" }), ["Delta"]);
+    assert.deepEqual(shown({ show: "updates", author: "Bob" }), []);
+  });
+
+  it("counts the rows each choice would show", () => {
+    assert.deepEqual(showCounts(groups, defaultFilters, updates, held), {
+      all: 4,
+      updates: 1,
+      errors: 2,
+    });
+  });
+
+  it("counts the same whichever choice is active", () => {
+    const counts = showCounts(groups, { ...defaultFilters, show: "errors" }, updates, held);
+    assert.deepEqual(counts, { all: 4, updates: 1, errors: 2 });
+  });
+
+  it("counts within the other filters", () => {
+    const counts = showCounts(groups, { ...defaultFilters, author: "Ann" }, updates, held);
+    assert.deepEqual(counts, { all: 2, updates: 1, errors: 1 });
+  });
+
+  it("counts held updates while the held addons are unknown, and none before a check", () => {
+    assert.equal(showCounts(groups, defaultFilters, updates, undefined).updates, 2);
+    const unchecked = groupAddons(all);
+    assert.deepEqual(showCounts(unchecked, defaultFilters), { all: 4, updates: 0, errors: 2 });
   });
 });
