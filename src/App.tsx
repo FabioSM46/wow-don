@@ -391,6 +391,7 @@ function App() {
           role="tabpanel"
           aria-labelledby="tab-installed"
           hidden={tab !== "installed"}
+          className="tab-panel"
         >
           {active && (
             <AddonTable
@@ -433,6 +434,7 @@ function App() {
           role="tabpanel"
           aria-labelledby="tab-search"
           hidden={tab !== "search"}
+          className="tab-panel"
         >
           {active && (
             <Search
@@ -460,43 +462,45 @@ function App() {
           role="tabpanel"
           aria-labelledby="tab-options"
           hidden={tab !== "options"}
-          className="options-page"
+          className="tab-panel options-scroll"
         >
-          <h2 className="options-title">Options</h2>
-          {installations !== null && (
-            <Installations
-              active={tab === "options"}
-              installations={installations}
-              onAdded={setActiveId}
-              onChange={changeInstallations}
-            />
-          )}
-          <Appearance theme={theme} loadError={settingsError} onChange={setTheme} />
-          <BetaOption
-            enabled={betaWhenNoRelease}
-            onChange={(enabled) => {
-              setBetaWhenNoRelease(enabled);
-              // The Installed tab statuses depend on the option: they are reread.
-              setInstalledStale(true);
-            }}
-          />
-          {installations !== null && (
-            <AutoUpdateOptions
-              active={tab === "options"}
-              installations={installations}
-              onModeChange={setAutoUpdateMode}
-            />
-          )}
-          <SystemOptions active={tab === "options"} onCheckAppUpdatesChange={setCheckAppUpdates} />
-          {installations !== null && (
-            <ImportExport
-              installation={active ?? null}
-              onImported={(installationId) => {
+          <div className="options-page">
+            <h2 className="options-title">Options</h2>
+            {installations !== null && (
+              <Installations
+                active={tab === "options"}
+                installations={installations}
+                onAdded={setActiveId}
+                onChange={changeInstallations}
+              />
+            )}
+            <Appearance theme={theme} loadError={settingsError} onChange={setTheme} />
+            <BetaOption
+              enabled={betaWhenNoRelease}
+              onChange={(enabled) => {
+                setBetaWhenNoRelease(enabled);
+                // The Installed tab statuses depend on the option: they are reread.
                 setInstalledStale(true);
-                markSearchStale(installationId);
               }}
             />
-          )}
+            {installations !== null && (
+              <AutoUpdateOptions
+                active={tab === "options"}
+                installations={installations}
+                onModeChange={setAutoUpdateMode}
+              />
+            )}
+            <SystemOptions active={tab === "options"} onCheckAppUpdatesChange={setCheckAppUpdates} />
+            {installations !== null && (
+              <ImportExport
+                installation={active ?? null}
+                onImported={(installationId) => {
+                  setInstalledStale(true);
+                  markSearchStale(installationId);
+                }}
+              />
+            )}
+          </div>
         </div>
       </main>
 

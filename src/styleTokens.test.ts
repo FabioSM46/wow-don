@@ -45,6 +45,7 @@ describe("App.css type scale", () => {
       "--space-6": "32px",
       "--cell-pad-x": "14px",
       "--cell-pad-y": "8px",
+      "--scroll-min-height": "192px",
     };
     for (const [name, value] of Object.entries(expected)) {
       assert.equal(rootToken(name), value, name);
