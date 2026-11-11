@@ -1036,6 +1036,23 @@ export function AddonTable({
                                 <span className="addon-title" title={addon.notes ?? undefined}>
                                   {displayTitle(addon)}
                                 </span>
+                                {/* A collapsed row still says the addon has more folders: the
+                                    names are in the tooltip and, for screen readers, in the
+                                    text (a span without a role does not always read a label). */}
+                                {others.length > 0 && (
+                                  <span
+                                    className="more-folders"
+                                    title={others.map((o) => o.folder).join(", ")}
+                                  >
+                                    <span aria-hidden="true">+{others.length}</span>
+                                    <span className="visually-hidden">
+                                      {" "}
+                                      and {others.length} more{" "}
+                                      {others.length === 1 ? "folder" : "folders"}:{" "}
+                                      {others.map((o) => o.folder).join(", ")}
+                                    </span>
+                                  </span>
+                                )}
                                 {/* `aria-selected` on a table row is not read by every screen
                                     reader: the state is also in the row's text. */}
                                 {isSelected && <span className="visually-hidden"> (selected)</span>}
