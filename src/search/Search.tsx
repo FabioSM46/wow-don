@@ -132,6 +132,10 @@ export function Search({
   }
   const selected = selection?.installationId === installation.id ? selection.addon : null;
   const resultsRef = useRef<HTMLDivElement>(null);
+  // The two regions of the tab that scroll on their own (issue #312): the results and the
+  // detail. The window itself never scrolls.
+  const resultsScrollRef = useRef<HTMLDivElement>(null);
+  const detailScrollRef = useRef<HTMLDivElement>(null);
   const savedScroll = useRef(0);
   const shown = useRef({ open: false, installationId: installation.id });
 
@@ -374,7 +378,7 @@ export function Search({
   }
 
   function openDetail(addon: CatalogAddon) {
-    if (!selected) savedScroll.current = window.scrollY;
+    if (!selected) savedScroll.current = resultsScrollRef.current?.scrollTop ?? 0;
     setSelection({ installationId: installation.id, addon });
     setLastSelectedId(addon.id);
     setPageError(null);
@@ -412,10 +416,10 @@ export function Search({
     shown.current = { open, installationId: installation.id };
     if (previous.installationId !== installation.id || open === previous.open) return;
     if (open) {
-      window.scrollTo(0, 0);
+      detailScrollRef.current?.scrollTo(0, 0);
       return;
     }
-    window.scrollTo(0, savedScroll.current);
+    resultsScrollRef.current?.scrollTo(0, savedScroll.current);
     resultsRef.current
       ?.querySelector<HTMLElement>('tr[aria-selected="true"]')
       ?.focus({ preventScroll: true });
@@ -458,6 +462,10 @@ export function Search({
         // A new search retries the automatic checks of the new projects; the failed ones stay
         // failed (Install retries).
         autoPaused.current = false;
+        // The first page replaces the list: it is read from its start, also when the search
+        // was typed with the previous results scrolled down. Behind an open detail the
+        // region is hidden and keeps the position saved for the return.
+        resultsScrollRef.current?.scrollTo(0, 0);
         setLoad({ results: firstPage(page), loading: false, error: null });
       })
       .catch((err) => {
@@ -571,30 +579,47 @@ export function Search({
   const sortLabel = SORTS.find((s) => s.id === params.sort)?.label ?? "";
   const ascending = params.sortOrder === "asc";
 
+  // "Load more" closes the scrolled results; with a page whose add-ons are all hidden it
+  // follows the sentence that says so.
+  const loadMoreRow = results && hasMore(results) && (
+    <div className="load-more">
+      {moreError && (
+        <span className="error" role="alert">
+          {moreError}
+        </span>
+      )}
+      <button className="button secondary" onClick={loadMore} disabled={loadingMore || load.loading}>
+        {loadingMore ? "Loading…" : moreError ? "Try again" : "Load more"}
+      </button>
+    </div>
+  );
+
   return (
-    <section aria-label="Search CurseForge">
+    <section className="search-page" aria-label="Search CurseForge">
       {selected && (
-        <AddonDetailView
-          installationId={installation.id}
-          addon={withInstalled(selected, installedHere)}
-          versionType={versionType}
-          versionTypes={versionTypes}
-          refresh={refresh}
-          active={active}
-          onBack={closeDetail}
-          renderActions={renderInstall("detail")}
-          blockedNote={renderBlockedNote}
-        >
-          {pageError && (
-            <p className="message error" role="alert">
-              {pageError}
-            </p>
-          )}
-          {selectedRun && <InstallResult run={selectedRun} onOpenPage={openPage} />}
-        </AddonDetailView>
+        <div ref={detailScrollRef} className="detail-scroll">
+          <AddonDetailView
+            installationId={installation.id}
+            addon={withInstalled(selected, installedHere)}
+            versionType={versionType}
+            versionTypes={versionTypes}
+            refresh={refresh}
+            active={active}
+            onBack={closeDetail}
+            renderActions={renderInstall("detail")}
+            blockedNote={renderBlockedNote}
+          >
+            {pageError && (
+              <p className="message error" role="alert">
+                {pageError}
+              </p>
+            )}
+            {selectedRun && <InstallResult run={selectedRun} onOpenPage={openPage} />}
+          </AddonDetailView>
+        </div>
       )}
 
-      <div ref={resultsRef} hidden={selected !== null}>
+      <div ref={resultsRef} className="search-results" hidden={selected !== null}>
         <div className="toolbar search-toolbar">
           <span className="search-field">
             <SearchIcon />
@@ -720,42 +745,33 @@ export function Search({
               </p>
             )}
             {results.addons.length === 0 ? (
-              <p className="empty">
-                {hiddenOnlyMessage(results) ?? (filtered ? (
-                  <>
-                    No add-ons match this search. Try another name or{" "}
-                    <button className="link inline" onClick={clearFilters}>
-                      clear the filters
-                    </button>
-                    .
-                  </>
-                ) : (
-                  "No add-ons for this game version. Try another version in the menu above."
-                ))}
-              </p>
+              <>
+                <p className="empty">
+                  {hiddenOnlyMessage(results) ?? (filtered ? (
+                    <>
+                      No add-ons match this search. Try another name or{" "}
+                      <button className="link inline" onClick={clearFilters}>
+                        clear the filters
+                      </button>
+                      .
+                    </>
+                  ) : (
+                    "No add-ons for this game version. Try another version in the menu above."
+                  ))}
+                </p>
+                {loadMoreRow}
+              </>
             ) : (
-              <CatalogTable
-                addons={shownAddons}
-                onSelect={openDetail}
-                selectedId={lastSelectedId}
-                renderActions={renderInstall("row")}
-                pillFor={(addon) => blockedPill(mirrorOf(addon))}
-              />
-            )}
-            {hasMore(results) && (
-              <div className="load-more">
-                {moreError && (
-                  <span className="error" role="alert">
-                    {moreError}
-                  </span>
-                )}
-                <button
-                  className="button secondary"
-                  onClick={loadMore}
-                  disabled={loadingMore || load.loading}
-                >
-                  {loadingMore ? "Loading…" : moreError ? "Try again" : "Load more"}
-                </button>
+              // The region of the tab that scrolls: the table and, at its end, "Load more".
+              <div ref={resultsScrollRef} className="results-scroll">
+                <CatalogTable
+                  addons={shownAddons}
+                  onSelect={openDetail}
+                  selectedId={lastSelectedId}
+                  renderActions={renderInstall("row")}
+                  pillFor={(addon) => blockedPill(mirrorOf(addon))}
+                />
+                {loadMoreRow}
               </div>
             )}
           </div>
