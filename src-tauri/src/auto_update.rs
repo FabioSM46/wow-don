@@ -834,7 +834,8 @@ fn run(app: &AppHandle) {
     let state = app.state::<AutoUpdate>();
     let base = Instant::now();
     let mut schedule = Schedule::default();
-    // Whether the tray already shows the queued requested round as "Checking for updates…".
+    // Whether the tray already shows the queued requested round ("Checking for updates…" or
+    // "Updating…").
     let mut request_shown = false;
     loop {
         let (mode, interval_hours) = read_settings(app);
@@ -905,7 +906,8 @@ fn round(
             retrying,
             installations,
         });
-        // Cleared with the new outcome: the tray below no longer shows "Checking for updates…".
+        // Cleared with the new outcome: the tray below no longer shows "Checking for updates…"
+        // or "Updating…".
         if requested {
             shared.requested = None;
         }
