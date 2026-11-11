@@ -230,3 +230,16 @@ describe("App.css warning and table density tokens (D48)", () => {
     assert.equal(/(?<![-\w])padding/.test(narrow), false, narrow);
   });
 });
+
+describe("App.css scrolling regions (D48)", () => {
+  it("makes every scrolling region the containing block of its content", () => {
+    const regions = declarations(
+      ruleBody(".table-wrap,\n.results-scroll,\n.detail-scroll,\n.options-scroll"),
+    );
+    assert.deepEqual(regions, ["position: relative"]);
+  });
+
+  it("keeps visually hidden text absolutely positioned, so the regions must contain it", () => {
+    assert.equal(declarations(ruleBody(".visually-hidden")).includes("position: absolute"), true);
+  });
+});

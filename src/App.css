@@ -327,6 +327,17 @@ h2 {
   scroll-padding-top: calc(var(--text-xs) * 2 + var(--cell-pad-y) * 2);
 }
 
+/* A scrolling region is the containing block of what it scrolls. An absolutely positioned
+   element with no positioned ancestor (`.visually-hidden` in a table row, in a form) is laid
+   out against the document instead: it is not clipped by the region, and its place far down
+   the list makes the document itself scroll behind the fixed shell. */
+.table-wrap,
+.results-scroll,
+.detail-scroll,
+.options-scroll {
+  position: relative;
+}
+
 .addons > .table-wrap,
 .results-scroll {
   flex: 1 1 0;
