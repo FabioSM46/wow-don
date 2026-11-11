@@ -1,6 +1,7 @@
 // The two icons of the Search tab (issue #229): the magnifier in the search box and the
 // external link mark on the buttons that open CurseForge in the browser. Inline SVG, in the
-// text color, hidden from screen readers: the text next to them already says what they do.
+// text color, hidden from screen readers: the text next to them, or the `aria-label` of an
+// icon-only button, already says what they do.
 
 /** The magnifier of the search box. */
 export function SearchIcon() {

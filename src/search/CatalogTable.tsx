@@ -39,7 +39,7 @@ export function CatalogTable({
           <tr>
             <th className="logo-cell" aria-label="Logo" />
             <th>Name</th>
-            <th>Summary</th>
+            <th className="summary-cell">Summary</th>
             <th>Author</th>
             <th className="numeric">Downloads</th>
             <th>Updated</th>
@@ -73,7 +73,7 @@ export function CatalogTable({
               <td>
                 <NameCell addon={addon} pill={addon.allowModDistribution ? null : pillFor(addon)} />
               </td>
-              <td>
+              <td className="summary-cell">
                 <span className="summary" title={addon.summary || undefined}>
                   {addon.summary || "—"}
                 </span>

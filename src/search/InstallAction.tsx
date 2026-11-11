@@ -28,10 +28,15 @@ type ActionProps = {
   onOpenPage: (url: string) => void;
 };
 
+/** What the icon-only button of a website-only row does: its accessible name and tooltip. */
+const OPEN_ON_CURSEFORGE = "Open on CurseForge";
+
 /**
  * An addon's install action: Install, the progress bar, Checking… or the link to the
  * website. In the row it sits in a last column that is always visible (issue #229); for an
  * addon already installed the row has no actions: the "Installed" pill under the name says so.
+ * A website-only row shows the external link as an icon-only button, so every row has the same
+ * shape (issue #316); why it cannot be installed is in the hint of the "website only" pill.
  */
 export function InstallAction(props: ActionProps) {
   if (props.variant === "detail") return <ActionContent {...props} />;
@@ -79,8 +84,9 @@ function ActionContent({
     const url = addon.url;
     return (
       <button
-        className="button ghost small"
-        title={unavailableText(step.reason)}
+        className="button ghost small icon"
+        aria-label={OPEN_ON_CURSEFORGE}
+        title={OPEN_ON_CURSEFORGE}
         onClick={(event) => {
           // The action does not select the row.
           event.stopPropagation();
@@ -88,7 +94,6 @@ function ActionContent({
         }}
       >
         <ExternalLinkIcon />
-        Open on CurseForge
       </button>
     );
   }
