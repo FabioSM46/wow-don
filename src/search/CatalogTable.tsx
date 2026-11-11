@@ -16,7 +16,8 @@ type Props = {
   pillFor?: (addon: CatalogAddon) => StatePill;
 };
 
-/** The catalog results table: logo, name, summary, author, downloads, date. */
+/** The catalog results table: logo, name, summary, author, downloads, date. Next to an open
+ *  detail (issue #317) the style sheet drops the summary and the author. */
 export function CatalogTable({
   addons,
   onSelect,
@@ -38,9 +39,9 @@ export function CatalogTable({
         <thead>
           <tr>
             <th className="logo-cell" aria-label="Logo" />
-            <th>Name</th>
+            <th className="name-cell">Name</th>
             <th className="summary-cell">Summary</th>
-            <th>Author</th>
+            <th className="author-cell">Author</th>
             <th className="numeric">Downloads</th>
             <th>Updated</th>
             {renderActions && <th className="actions-cell" aria-label="Actions" />}
@@ -70,7 +71,7 @@ export function CatalogTable({
                   <span className="catalog-logo" />
                 )}
               </td>
-              <td>
+              <td className="name-cell">
                 <NameCell addon={addon} pill={addon.allowModDistribution ? null : pillFor(addon)} />
               </td>
               <td className="summary-cell">
@@ -78,7 +79,7 @@ export function CatalogTable({
                   {addon.summary || "—"}
                 </span>
               </td>
-              <td>
+              <td className="author-cell">
                 <span className="clip" title={formatAuthors(addon.authors)}>
                   {formatAuthors(addon.authors)}
                 </span>

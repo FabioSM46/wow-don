@@ -119,8 +119,11 @@ export function Search({
   const [categoriesError, setCategoriesError] = useState<string | null>(null);
   const [versionTypes, setVersionTypes] = useState<VersionType[]>([]);
 
-  // The detail takes the place of the results, which stay mounted and hidden: search, filters
-  // and loaded pages do not change, and the scroll position is restored on return.
+  // In a narrow window the detail takes the place of the results, which stay mounted and
+  // hidden: search, filters and loaded pages do not change, and the scroll position is restored
+  // on return. In a wide one it opens in a panel next to them (issue #317). Which of the two
+  // is a container query in App.css (`.search-page.with-detail`): nothing here knows the
+  // width, so resizing across the threshold keeps the same addon open.
   const [selection, setSelection] = useState<Selection | null>(null);
   // The last opened row stays marked after returning, and receives focus.
   const [lastSelectedId, setLastSelectedId] = useState<number | null>(null);
@@ -136,8 +139,15 @@ export function Search({
   // detail. The window itself never scrolls.
   const resultsScrollRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
+  // Where the results were scrolled to while they had a box: a hidden region loses its
+  // position, and gets it back when it is shown again.
   const savedScroll = useRef(0);
-  const shown = useRef({ open: false, installationId: installation.id });
+  const resultsVisible = useRef(false);
+  const shown = useRef<{ open: boolean; addonId: number | null; installationId: string }>({
+    open: false,
+    addonId: null,
+    installationId: installation.id,
+  });
 
   // The installations started in the session and the projects installed after the search
   // response, which the response's "installed" mark does not know about yet.
@@ -145,7 +155,8 @@ export function Search({
   const [installedKeys, setInstalledKeys] = useState<Set<string>>(new Set());
   // The last installation started: its outcome is shown above the results.
   const [lastInstall, setLastInstall] = useState<string | null>(null);
-  const [pageError, setPageError] = useState<string | null>(null);
+  // A page that did not open, and where it was asked from: the message shows there.
+  const [pageError, setPageError] = useState<{ text: string; inDetail: boolean } | null>(null);
   const installedHere = useMemo(() => {
     const prefix = `${installation.id}:`;
     const ids = new Set<number>();
@@ -323,10 +334,13 @@ export function Search({
       });
   }
 
-  function openPage(url: string) {
+  function openPage(url: string, inDetail = false) {
     setPageError(null);
-    openUrl(url).catch((err) => setPageError(`The page could not be opened: ${errorMessage(err)}`));
+    openUrl(url).catch((err) =>
+      setPageError({ text: `The page could not be opened: ${errorMessage(err)}`, inDetail }),
+    );
   }
+  const openPageFromDetail = (url: string) => openPage(url, true);
 
   function runProgressOf(modId: number) {
     const run = curseforgeRun(modId);
@@ -343,7 +357,7 @@ export function Search({
         variant={variant}
         mirror={mirrorOf(addon)}
         onInstall={requestInstall}
-        onOpenPage={openPage}
+        onOpenPage={variant === "detail" ? openPageFromDetail : openPage}
       />
     );
   }
@@ -384,7 +398,8 @@ export function Search({
     setPageError(null);
   }
 
-  // The error of a link opened in the detail does not concern the results, and vice versa.
+  // The error of a link opened in the detail does not concern the results, and vice versa:
+  // opening and closing forget it, and side by side each one shows only its own.
   const closeDetail = useCallback(() => {
     setSelection(null);
     setPageError(null);
@@ -406,24 +421,45 @@ export function Search({
     // Only on opening (or when the addon becomes one to check): an error does not retry by itself.
   }, [selected?.id, detailBlocked, installation.id]);
 
-  // Before painting: the detail starts from the top, the results go back to where they were,
-  // with focus on the row they started from.
+  // Before painting: the detail starts from the top, also when another row replaces its
+  // content; on closing, the results go back to where they were, with focus on the row they
+  // started from (next to the detail they never moved, and only the focus goes back).
   // On an installation change nothing is restored: the saved scroll position and the row
   // belong to the results of the previous installation.
   useLayoutEffect(() => {
     const open = selected !== null;
+    const addonId = selected?.id ?? null;
     const previous = shown.current;
-    shown.current = { open, installationId: installation.id };
-    if (previous.installationId !== installation.id || open === previous.open) return;
+    shown.current = { open, addonId, installationId: installation.id };
+    if (previous.installationId !== installation.id) return;
     if (open) {
-      detailScrollRef.current?.scrollTo(0, 0);
+      if (previous.addonId !== addonId) detailScrollRef.current?.scrollTo(0, 0);
       return;
     }
+    if (!previous.open) return;
     resultsScrollRef.current?.scrollTo(0, savedScroll.current);
     resultsRef.current
       ?.querySelector<HTMLElement>('tr[aria-selected="true"]')
       ?.focus({ preventScroll: true });
   }, [selected, installation.id]);
+
+  // The results lose their box, and with it the scroll position, also without a change of
+  // state: a window resized below the side-by-side threshold with a detail open hides them,
+  // and widening it again shows them. Whenever they get a box back they return to where they
+  // were, before painting.
+  useEffect(() => {
+    const element = resultsRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      const visible = element.clientHeight > 0;
+      if (visible && !resultsVisible.current) {
+        resultsScrollRef.current?.scrollTo(0, savedScroll.current);
+      }
+      resultsVisible.current = visible;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   // Categories and game versions do not change during the session: a single request.
   useEffect(() => {
@@ -575,7 +611,8 @@ export function Search({
   const shownAddons = results?.addons.map((addon) => withInstalled(addon, installedHere)) ?? [];
   const lastRun =
     lastInstall?.startsWith(`${installation.id}:`) ? runs.get(lastInstall) : undefined;
-  const selectedRun = selected ? runs.get(installKey(installation.id, selected.id)) : undefined;
+  const selectedKey = selected ? installKey(installation.id, selected.id) : null;
+  const selectedRun = selectedKey ? runs.get(selectedKey) : undefined;
   const sortLabel = SORTS.find((s) => s.id === params.sort)?.label ?? "";
   const ascending = params.sortOrder === "asc";
 
@@ -595,31 +632,11 @@ export function Search({
   );
 
   return (
-    <section className="search-page" aria-label="Search CurseForge">
-      {selected && (
-        <div ref={detailScrollRef} className="detail-scroll">
-          <AddonDetailView
-            installationId={installation.id}
-            addon={withInstalled(selected, installedHere)}
-            versionType={versionType}
-            versionTypes={versionTypes}
-            refresh={refresh}
-            active={active}
-            onBack={closeDetail}
-            renderActions={renderInstall("detail")}
-            blockedNote={renderBlockedNote}
-          >
-            {pageError && (
-              <p className="message error" role="alert">
-                {pageError}
-              </p>
-            )}
-            {selectedRun && <InstallResult run={selectedRun} onOpenPage={openPage} />}
-          </AddonDetailView>
-        </div>
-      )}
-
-      <div ref={resultsRef} className="search-results" hidden={selected !== null}>
+    <section
+      className={selected ? "search-page with-detail" : "search-page"}
+      aria-label="Search CurseForge"
+    >
+      <div ref={resultsRef} className="search-results">
         <div className="toolbar search-toolbar">
           <span className="search-field">
             <SearchIcon />
@@ -713,12 +730,15 @@ export function Search({
 
         {addByLink}
 
-        {pageError && (
+        {pageError && !pageError.inDetail && (
           <p className="message error" role="alert">
-            {pageError}
+            {pageError.text}
           </p>
         )}
-        {lastRun && <InstallResult run={lastRun} onOpenPage={openPage} />}
+        {/* The outcome of the open addon is in its detail: next to it, it is not said twice. */}
+        {lastRun && lastInstall !== selectedKey && (
+          <InstallResult run={lastRun} onOpenPage={openPage} />
+        )}
 
         {categoriesError && (
           <p className="message hint" role="status">
@@ -763,7 +783,16 @@ export function Search({
               </>
             ) : (
               // The region of the tab that scrolls: the table and, at its end, "Load more".
-              <div ref={resultsScrollRef} className="results-scroll">
+              <div
+                ref={resultsScrollRef}
+                className="results-scroll"
+                onScroll={(event) => {
+                  const region = event.currentTarget;
+                  if (resultsVisible.current && region.clientHeight > 0) {
+                    savedScroll.current = region.scrollTop;
+                  }
+                }}
+              >
                 <CatalogTable
                   addons={shownAddons}
                   onSelect={openDetail}
@@ -777,6 +806,31 @@ export function Search({
           </div>
         )}
       </div>
+
+      {/* After the results: next to them it is the panel on the right, reached after the
+          list. */}
+      {selected && (
+        <div ref={detailScrollRef} className="detail-scroll">
+          <AddonDetailView
+            installationId={installation.id}
+            addon={withInstalled(selected, installedHere)}
+            versionType={versionType}
+            versionTypes={versionTypes}
+            refresh={refresh}
+            active={active}
+            onBack={closeDetail}
+            renderActions={renderInstall("detail")}
+            blockedNote={renderBlockedNote}
+          >
+            {pageError?.inDetail && (
+              <p className="message error" role="alert">
+                {pageError.text}
+              </p>
+            )}
+            {selectedRun && <InstallResult run={selectedRun} onOpenPage={openPageFromDetail} />}
+          </AddonDetailView>
+        </div>
+      )}
     </section>
   );
 }

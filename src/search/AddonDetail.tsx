@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorMessage, type AddonDetail, type CatalogAddon, type VersionType } from "../api";
 import { formatAuthors, formatCount, formatDate, formatDownloads } from "./catalog";
@@ -11,7 +18,7 @@ import {
   versionName,
 } from "./detail";
 import { Gallery } from "./Gallery";
-import { ExternalLinkIcon } from "./icons";
+import { CloseIcon, ExternalLinkIcon } from "./icons";
 import { galleryLabel, tabIndexForKey } from "./screenshots";
 
 type Props = {
@@ -25,6 +32,8 @@ type Props = {
   refresh?: number;
   /** The tab is visible: only then does Esc go back to the results. */
   active: boolean;
+  /** Leaves the detail: "Back to results" where it replaces the results, the close button
+   *  where it sits next to them (issue #317), and Esc in both. */
   onBack: () => void;
   /** The actions on the addon (for example Install), on the right of the header. */
   renderActions?: (addon: CatalogAddon) => ReactNode;
@@ -58,6 +67,7 @@ export function AddonDetailView({
   const [retry, setRetry] = useState(0);
   const [linkError, setLinkError] = useState<string | null>(null);
   const backRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   // The detail already loaded stays in view while the same addon is read again (`refresh`).
   const loadedKey = useRef<string | null>(null);
@@ -77,10 +87,44 @@ export function AddonDetailView({
     };
   }, [installationId, addon.id, versionType, retry, refresh]);
 
-  // Focus goes to the back button: from the keyboard the view can be left at once.
+  // Focus goes to the control that leaves the detail: from the keyboard the view can be left
+  // at once. The style sheet shows only one of the two, by layout; the hidden one has no box.
+  function focusLeave() {
+    [backRef.current, closeRef.current]
+      .find((button) => button !== null && button.offsetParent !== null)
+      ?.focus({ preventScroll: true });
+  }
+  useEffect(focusLeave, [addon.id]);
+  // A resize across the layout threshold hides the focused one: focus moves to the other
+  // instead of being lost. `lastLeave` is the one that last held the focus, until the focus
+  // moves to another element. Engines differ on when a focused element that loses its box
+  // stops being the focused one, so there are two triggers with the same test: its blur, and
+  // an observer on the detail, whose width changes with the layout and which runs after
+  // that layout, whether the hidden button still has the focus or the page already took it.
+  const lastLeave = useRef<HTMLButtonElement | null>(null);
+  const rootRef = useRef<HTMLElement>(null);
+  function restoreLeaveFocus() {
+    const last = lastLeave.current;
+    if (last === null || last.offsetParent !== null) return;
+    const focused = document.activeElement;
+    if (focused === last || focused === document.body || focused === null) focusLeave();
+  }
   useEffect(() => {
-    backRef.current?.focus({ preventScroll: true });
-  }, [addon.id]);
+    const root = rootRef.current;
+    if (!root) return;
+    const observer = new ResizeObserver(restoreLeaveFocus);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, []);
+  const leaveFocus = {
+    onFocus: (event: FocusEvent<HTMLButtonElement>) => {
+      lastLeave.current = event.currentTarget;
+    },
+    onBlur: (event: FocusEvent<HTMLButtonElement>) => {
+      if (event.relatedTarget !== null) lastLeave.current = null;
+      else if (event.currentTarget.offsetParent === null) focusLeave();
+    },
+  };
 
   useEffect(() => {
     if (!active) return;
@@ -103,10 +147,22 @@ export function AddonDetailView({
   const name = shown.name || `#${shown.id}`;
 
   return (
-    <article className="detail" aria-label={`${name} details`}>
-      <button ref={backRef} className="link inline back" onClick={onBack}>
-        ← Back to results
-      </button>
+    <article ref={rootRef} className="detail" aria-label={`${name} details`}>
+      <div className="detail-nav">
+        <button ref={backRef} className="link inline back" onClick={onBack} {...leaveFocus}>
+          ← Back to results
+        </button>
+        <button
+          ref={closeRef}
+          className="button ghost small icon detail-close"
+          aria-label="Close details"
+          title="Close details"
+          onClick={onBack}
+          {...leaveFocus}
+        >
+          <CloseIcon />
+        </button>
+      </div>
 
       <header className="detail-header">
         {shown.thumbnailUrl ? (
