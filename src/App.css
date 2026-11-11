@@ -1311,8 +1311,46 @@ label.setting-label {
   color: var(--accent);
 }
 
+/* The Installed table (D48, issue #313): four columns, Addon, Version, Source and Status. Below
+   this width the table keeps its columns readable and scrolls sideways inside `.table-wrap`. */
+.installed-table {
+  min-width: 40rem;
+}
+
+/* The Addon cell: the chevron, then the title with its pills and, on the lines below, the
+   author and the row error, aligned with the title. */
+.addon-cell {
+  display: flex;
+  align-items: flex-start;
+}
+
+.addon-main {
+  min-width: 0;
+}
+
 .addon-title {
   font-weight: var(--weight-strong);
+}
+
+.addon-author {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* Version: tabular numerals, so the versions line up down the column; the version an update
+   leads to is in the accent text color. */
+.version-cell {
+  font-variant-numeric: tabular-nums;
+}
+
+.version-latest {
+  color: var(--accent);
+}
+
+/* Status: the update control and the state pills sit on the right edge of the table. */
+.addon-table .status-cell {
+  text-align: right;
 }
 
 .addon-error {
@@ -1441,20 +1479,17 @@ label.setting-label {
   color: var(--muted);
 }
 
-/* Folder groups: the row opens with a click and shows the other folders below. */
+/* Expanded rows: the row opens with a click or with its chevron and shows its details and,
+   for a multi-folder addon, the other folders below. */
 
 .addon-table tr.expandable {
   cursor: pointer;
 }
 
-.chevron,
-.chevron-space {
-  display: inline-block;
+.chevron {
+  flex: none;
   width: 1.1em;
   margin-right: var(--space-1);
-}
-
-.chevron {
   padding: 0;
   border: none;
   background: none;
@@ -1463,10 +1498,9 @@ label.setting-label {
   cursor: pointer;
 }
 
-.addon-table tr.open td {
-  border-bottom: none;
-}
-
+/* The dividers are the top borders of the cells (see `.addon-table`): the details and the
+   sub-rows have none, so an open addon reads as one block down to the next addon. */
+.addon-table tbody tr.details-row td,
 .addon-table tbody tr.sub-row td {
   border-top: none;
   padding-top: var(--space-1);
@@ -1474,9 +1508,45 @@ label.setting-label {
   color: var(--muted);
 }
 
+.addon-table tbody tr.details-row td {
+  padding-top: 0;
+  padding-bottom: var(--space-2);
+}
+
+/* The details are part of the row above, not a row of their own to point at. */
+.addon-table tbody tr.details-row:hover {
+  background: none;
+}
+
+/* Folder, Interface, Modified and Notes: label and value on two columns, aligned with the
+   title above. */
+.addon-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 0 calc(1.1em + var(--space-1));
+  font-size: var(--text-xs);
+}
+
+.addon-details dd {
+  margin: 0;
+  color: var(--text);
+}
+
+/* A long list of folders wraps instead of widening the table. */
+.addon-details .mono {
+  white-space: normal;
+}
+
 .sub-title {
   display: inline-block;
   padding-left: calc(1.1em + var(--space-1));
+}
+
+/* The folder of a sub-row, next to its title. */
+.sub-folder {
+  margin-left: var(--space-2);
+  white-space: normal;
 }
 
 .sub-title::before {
