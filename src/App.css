@@ -1575,7 +1575,7 @@ label.setting-label {
 }
 
 /* The summary on a single line, shortened with "…": the full text is in the tooltip. */
-.summary {
+.catalog-table .summary {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
