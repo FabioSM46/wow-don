@@ -10,6 +10,9 @@
    - Control heights: --control-height 32px, --control-height-sm 28px.
    - Radii: --radius 8px (controls), --radius-lg 10px (cards and panels).
    - Spacing: --space-1 … --space-6 = 4, 8, 12, 16, 24, 32px.
+   - Table density (D48, issue #311): --cell-pad-x 14px and --cell-pad-y 8px, the padding of
+     every .addon-table cell. A narrow table overrides --cell-pad-x instead of writing a
+     padding.
    - Colors: --bg (page), --surface (cards, fields), --surface-2 (muted background, disabled
      controls), --border (dividers, table rows, cards: not controls), --border-strong (the
      border of every control: fields, menus, textarea, checkbox, radio, switch when off,
@@ -18,7 +21,9 @@
      accent color), --accent-hover (the solid accent background on mouse hover), --accent-soft
      and --accent-soft-text (soft accent background and text), --on-accent (text on solid
      accent or danger backgrounds), --hover, --danger and --danger-soft, --ok-soft and
-     --ok-text, --knob (the switch knob).
+     --ok-text, --warning-soft and --warning-text (D48: a state that needs attention but is not
+     an error; a state color used only by .pill.warning, not a second accent; at least 4.5:1
+     on --surface in both themes), --knob (the switch knob).
 
    Control classes
    - .button (primary, solid accent) with the variants .secondary (bordered), .soft (background
@@ -29,8 +34,8 @@
    - .switch: 36×20px switch on `<input type="checkbox" role="switch" class="switch">`.
    - .segmented: group of `<button>`s; the active one (`aria-pressed`, `aria-checked` or
      `aria-selected` set to "true") sits on --surface.
-   - .pill: 22px-tall pill at --text-xs 600; variants .accent, .ok, .danger (with no variant it
-     is neutral).
+   - .pill: 22px-tall pill at --text-xs 600; variants .accent, .ok, .warning, .danger (with no
+     variant it is neutral).
 
    Theme (issue #92): `data-theme` on <html> forces `light` or `dark`; with no attribute (the
    `system` choice) `prefers-color-scheme` applies. The dark colors exist only once, as
@@ -54,6 +59,8 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  --cell-pad-x: 14px;
+  --cell-pad-y: 8px;
   --progress-height: 4px;
 
   --bg: #f4f4f5;
@@ -74,6 +81,8 @@
   --danger-soft: rgb(196 38 46 / 10%);
   --ok-soft: rgb(22 128 61 / 10%);
   --ok-text: #166534;
+  --warning-soft: rgb(180 110 0 / 12%);
+  --warning-text: #7a4a00;
   --knob: #ffffff;
   --overlay: rgb(244 244 245 / 85%);
   --progress-track: #d4d4d8;
@@ -104,6 +113,8 @@
   --dark-danger-soft: rgb(255 107 107 / 14%);
   --dark-ok-soft: rgb(74 222 128 / 12%);
   --dark-ok-text: #86efac;
+  --dark-warning-soft: rgb(245 184 74 / 14%);
+  --dark-warning-text: #f5c46b;
   --dark-knob: #ececef;
   --dark-overlay: rgb(17 17 19 / 85%);
   --dark-progress-track: #33333a;
@@ -146,6 +157,8 @@
     --danger-soft: var(--dark-danger-soft);
     --ok-soft: var(--dark-ok-soft);
     --ok-text: var(--dark-ok-text);
+    --warning-soft: var(--dark-warning-soft);
+    --warning-text: var(--dark-warning-text);
     --knob: var(--dark-knob);
     --overlay: var(--dark-overlay);
     --progress-track: var(--dark-progress-track);
@@ -176,6 +189,8 @@
   --danger-soft: var(--dark-danger-soft);
   --ok-soft: var(--dark-ok-soft);
   --ok-text: var(--dark-ok-text);
+  --warning-soft: var(--dark-warning-soft);
+  --warning-text: var(--dark-warning-text);
   --knob: var(--dark-knob);
   --overlay: var(--dark-overlay);
   --progress-track: var(--dark-progress-track);
@@ -564,7 +579,7 @@ input[type="radio"]:checked:disabled {
 }
 
 /* Pill (D42): a short state next to a name. Neutral with no variant; color only for the state
-   (accent, ok, danger). */
+   (accent, ok, warning, danger). */
 .pill {
   box-sizing: border-box;
   display: inline-flex;
@@ -589,6 +604,11 @@ input[type="radio"]:checked:disabled {
 .pill.ok {
   background: var(--ok-soft);
   color: var(--ok-text);
+}
+
+.pill.warning {
+  background: var(--warning-soft);
+  color: var(--warning-text);
 }
 
 .pill.danger {
@@ -1151,7 +1171,7 @@ label.setting-label {
 .addon-table td {
   /* A long text without spaces wraps instead of widening the table beyond the window. */
   overflow-wrap: anywhere;
-  padding: var(--space-2) 14px;
+  padding: var(--cell-pad-y) var(--cell-pad-x);
   text-align: left;
   vertical-align: top;
 }
@@ -1366,10 +1386,8 @@ label.setting-label {
 /* Narrow table (small window): less space between columns, so the headers, which do not wrap,
    fit in the width instead of making the bottom scrollbar appear. */
 @container (max-width: 960px) {
-  .addon-table th,
-  .addon-table td {
-    padding-left: 7px;
-    padding-right: 7px;
+  .addon-table {
+    --cell-pad-x: 7px;
   }
 
   .addon-table th {
