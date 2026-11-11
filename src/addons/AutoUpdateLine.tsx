@@ -1,5 +1,6 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { api, errorMessage, type AutoUpdateMode, type AutoUpdateStatus } from "../api";
+import { StatusMessage } from "../StatusArea";
 import { ProgressBar } from "./ProgressBar";
 import { describeUndo, statusLine, type StatusProblem } from "./autoUpdateStatus";
 
@@ -28,7 +29,9 @@ type UndoResult = { text: string; problems: StatusProblem[] } | { error: string 
  * The status line under the title of the Installed tab (issue #314): the `summary` the tab
  * passes in, then what the last automatic round did for the installation (D41, issue #203),
  * its problems inline on a click and "Undo" for an undoable round. The status comes from
- * `get_auto_update_status` and the `auto-update` event; this component owns the Undo.
+ * `get_auto_update_status` and the `auto-update` event; this component owns the Undo, whose
+ * progress and result are messages of the status area (issue #315): they would move the table
+ * if they opened here.
  */
 export function AutoUpdateLine({
   summary,
@@ -106,19 +109,18 @@ export function AutoUpdateLine({
         </span>
       </p>
       {line && expanded && line.problems.length > 0 && <ProblemList problems={line.problems} />}
-      {busy && <ProgressBar value={null} label="Undoing…" name="Undo" />}
+      {busy && (
+        <StatusMessage progress>
+          <ProgressBar value={null} label="Undoing…" name="Undo" />
+        </StatusMessage>
+      )}
       {result && (
-        <div className="status-line-undo" role="status">
-          <p className={"error" in result ? "error" : undefined}>
-            {"error" in result ? `Undo failed: ${result.error}` : result.text}{" "}
-            <button className="link inline subtle" onClick={() => setResult(null)}>
-              Dismiss
-            </button>
-          </p>
+        <StatusMessage error={"error" in result} onDismiss={() => setResult(null)}>
+          <p>{"error" in result ? `Undo failed: ${result.error}` : result.text}</p>
           {"problems" in result && result.problems.length > 0 && (
             <ProblemList problems={result.problems} />
           )}
-        </div>
+        </StatusMessage>
       )}
     </div>
   );
