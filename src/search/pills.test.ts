@@ -23,9 +23,14 @@ describe("blockedPill", () => {
     assert.equal(pill.className, "pill accent");
   });
 
-  it("is a neutral pill for website only, checking and not yet checked", () => {
+  it("is a warning pill when the project can only be opened on the website", () => {
+    const pill = blockedPill(different);
+    assert.equal(pill.label, "website only");
+    assert.equal(pill.className, "pill warning");
+  });
+
+  it("is a neutral pill while checking and when not yet checked", () => {
     const cases: [MirrorCheck | undefined, string][] = [
-      [different, "website only"],
       [{ status: "checking" }, "checking GitHub…"],
       [undefined, "blocked on CurseForge"],
       [failed, "blocked on CurseForge"],

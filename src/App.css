@@ -27,7 +27,8 @@
 
    Control classes
    - .button (primary, solid accent) with the variants .secondary (bordered), .soft (background
-     --accent-soft), .ghost (no background), .danger and .small (--control-height-sm tall).
+     --accent-soft), .ghost (no background), .danger, .small (--control-height-sm tall) and
+     .icon (a square button holding only an icon; it needs an `aria-label`).
    - .search and .select (fields and menus), .import-text (textarea): border --border-strong,
      placeholder --faint, visible focus; disabled in --faint on --surface-2.
    - Checkbox and radio at 16px with border --border-strong and `accent-color`.
@@ -398,6 +399,16 @@ h2 {
 .button.small {
   height: var(--control-height-sm);
   padding: 0 10px;
+}
+
+/* Only an icon: as wide as it is tall. The name is in `aria-label`. */
+.button.icon {
+  width: var(--control-height);
+  padding: 0;
+}
+
+.button.icon.small {
+  width: var(--control-height-sm);
 }
 
 .button:disabled,
@@ -1518,8 +1529,7 @@ label.setting-label {
 }
 
 /* Rows of uniform height (issue #229): every cell is vertically centered and the row is as
-   tall as one with the name, the pills below and the summary on two lines. The height of a
-   table cell is a minimum. */
+   tall as one with the name and the pills below. The height of a table cell is a minimum. */
 .catalog-table td {
   height: 62px;
   box-sizing: border-box;
@@ -1544,21 +1554,32 @@ label.setting-label {
   margin-top: 2px;
 }
 
-/* The actions column, always visible and aligned to the right. */
+/* The actions column, always visible: a fixed width, wide enough for the progress bar with its
+   phase, and the content aligned to the right, so the right edge is even whatever the row
+   shows (issue #316). */
 .catalog-table .actions-cell {
-  width: 1%;
+  width: 11rem;
+  min-width: 11rem;
   text-align: right;
   white-space: nowrap;
 }
 
-/* The summary takes at most two lines; the full text is in the tooltip. */
-.summary {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+/* The summary column takes the width the others leave: a cell with `max-width: 0` does not
+   grow with its content, so the text is clipped instead of widening the table. In a narrow
+   window it is the column that gives way, header included, and the actions stay in view. */
+.catalog-table .summary-cell {
+  width: 100%;
+  max-width: 0;
   overflow: hidden;
-  max-width: 36rem;
+  text-overflow: ellipsis;
+}
+
+/* The summary on a single line, shortened with "…": the full text is in the tooltip. */
+.summary {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
 }
 
