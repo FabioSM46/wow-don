@@ -330,7 +330,13 @@ h2 {
 /* A scrolling region is the containing block of what it scrolls. An absolutely positioned
    element with no positioned ancestor (`.visually-hidden` in a table row, in a form) is laid
    out against the document instead: it is not clipped by the region, and its place far down
-   the list makes the document itself scroll behind the fixed shell. */
+   the list makes the document itself scroll behind the fixed shell. `.app-main` is one of
+   them: it scrolls as a whole when the window is too short for a region. What is positioned
+   inside a region today is anchored to a nearer ancestor (`.row-menu`, `.search-field`,
+   `.progress-track`), or is `position: fixed` (`.context-menu`, `.zip-drop`), so nothing
+   else changes its containing block. `src/styleTokens.test.ts` checks that every rule that
+   scrolls is positioned. */
+.app-main,
 .table-wrap,
 .results-scroll,
 .detail-scroll,

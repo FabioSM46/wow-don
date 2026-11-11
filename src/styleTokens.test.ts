@@ -232,14 +232,34 @@ describe("App.css warning and table density tokens (D48)", () => {
 });
 
 describe("App.css scrolling regions (D48)", () => {
-  it("makes every scrolling region the containing block of its content", () => {
-    const regions = declarations(
-      ruleBody(".table-wrap,\n.results-scroll,\n.detail-scroll,\n.options-scroll"),
-    );
-    assert.deepEqual(regions, ["position: relative"]);
-  });
+  /** Every rule of the sheet as its selectors and its declarations. */
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selectors: match[1].split(",").map((selector) => selector.trim()),
+    declarations: declarations(match[2]),
+  }));
 
-  it("keeps visually hidden text absolutely positioned, so the regions must contain it", () => {
-    assert.equal(declarations(ruleBody(".visually-hidden")).includes("position: absolute"), true);
+  it("makes every scrolling region the containing block of its content", () => {
+    const scrolling = new Set(
+      rules
+        .filter((rule) =>
+          rule.declarations.some((d) => /^overflow(-x|-y)?:\s*(auto|scroll)\b/.test(d)),
+        )
+        .flatMap((rule) => rule.selectors),
+    );
+    const positioned = new Set(
+      rules
+        .filter((rule) =>
+          rule.declarations.some((d) => /^position:\s*(relative|absolute|fixed|sticky)$/.test(d)),
+        )
+        .flatMap((rule) => rule.selectors),
+    );
+    assert.equal(scrolling.size >= 5, true, "the scrolling regions were not found");
+    for (const selector of scrolling) {
+      assert.equal(
+        positioned.has(selector),
+        true,
+        `${selector} scrolls but is not positioned: absolutely positioned content escapes it`,
+      );
+    }
   });
 });
