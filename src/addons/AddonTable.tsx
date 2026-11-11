@@ -28,6 +28,7 @@ import {
   groupAddons,
   groupUpdate,
   nextSort,
+  showCounts,
   visibleGroups,
   type AddonGroup,
   type Filters,
@@ -38,6 +39,7 @@ import { SOURCE_LABELS, projectId, sourcesIn, updateRequest, type ProjectRef } f
 import { ProgressBar, useInstallProgress } from "./ProgressBar";
 import { refreshCheck } from "./refresh";
 import {
+  checkedAtCache,
   checkGeneration,
   claimAutoCheck,
   errorCache,
@@ -45,6 +47,9 @@ import {
   updatesCache,
 } from "./updateChecks";
 import { ContextMenu } from "./ContextMenu";
+import { RowMenu, type RowMenuItem } from "../installations/RowMenu";
+import { clockTime } from "./autoUpdateStatus";
+import { primaryAction, showOptions, statusParts, updateAllLabel } from "./header";
 import {
   EXCLUDED_TITLE,
   excludedAfter,
@@ -74,6 +79,7 @@ import {
   selectedText,
   toggleRow,
   type MenuAction,
+  type MenuItem,
   type Selection,
 } from "./selection";
 import {
@@ -95,9 +101,9 @@ type Props = {
   /** Removal, update or reinstall have (perhaps) changed the addons on disk of the
    * `installationId` installation: the Search tab rereads its results. */
   onChanged?: (installationId: string) => void;
-  /** The automatic update row (`AutoUpdateLine`): a bar of its own between the title and the
-   * filters. */
-  autoUpdateLine?: ReactNode;
+  /** Draws the status line under the title around this tab's `summary` (`AutoUpdateLine`, which
+   * adds the automatic updates and owns their Undo); without it, the summary alone is the line. */
+  statusLine?: (summary: ReactNode) => ReactNode;
 };
 
 /**
@@ -136,6 +142,20 @@ function loadVersionTypes(): Promise<VersionType[]> {
   return versionTypesRequest;
 }
 
+/** With no check result at all "Updates" has no data to act on: the filter goes back to "All". */
+function withoutUpdatesFilter(filters: Filters): Filters {
+  return filters.show === "updates" ? { ...filters, show: "all" } : filters;
+}
+
+/** The context menu's actions that the header offers for the selection (issue #314). */
+type BulkAction = Exclude<MenuAction, "select" | "clear">;
+
+function isBulk(item: MenuItem): item is MenuItem & { action: BulkAction } {
+  return item.action !== "select" && item.action !== "clear";
+}
+
+const BUSY_REASON = "Wait for the current operation to finish.";
+
 function byFolder(updates: AddonUpdate[]): Map<string, AddonUpdate> {
   return new Map(updates.map((update) => [update.folder, update]));
 }
@@ -167,7 +187,7 @@ export function AddonTable({
   onInstallZip,
   zipBusy = false,
   onChanged,
-  autoUpdateLine,
+  statusLine,
 }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
@@ -184,8 +204,10 @@ export function AddonTable({
     });
   }
   // The last valid result stays visible even during a new check, so the table and the
-  // "Only with updates" filter do not empty while waiting.
+  // "Updates" filter do not empty while waiting.
   const [updates, setUpdates] = useState<Map<string, AddonUpdate> | undefined>();
+  // When that result was read (ISO 8601): the "checked HH:MM" of the status line.
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
   // The component does not remount when changing installation: every response, automatic or
@@ -204,10 +226,13 @@ export function AddonTable({
         // Dropped while in flight (`forgetUpdateChecks`): a newer check follows and owns the
         // cache and the screen, so this older result touches neither.
         if (checkGeneration(id) !== generation) return;
+        const at = new Date().toISOString();
         updatesCache.set(id, result);
+        checkedAtCache.set(id, at);
         errorCache.delete(id);
         if (currentId.current !== id) return;
         setUpdates(byFolder(result));
+        setCheckedAt(at);
         setChecking(false);
       })
       .catch((err) => {
@@ -217,7 +242,7 @@ export function AddonTable({
         setCheckError(errorMessage(err));
         setChecking(false);
         // With no results at all the filter has no data to act on: it is removed.
-        if (!updatesCache.has(id)) setFilters((f) => ({ ...f, onlyUpdates: false }));
+        if (!updatesCache.has(id)) setFilters(withoutUpdatesFilter);
       });
   }, [installation.id]);
 
@@ -225,6 +250,7 @@ export function AddonTable({
   useEffect(() => {
     const cached = updatesCache.get(installation.id);
     setUpdates(cached ? byFolder(cached) : undefined);
+    setCheckedAt(checkedAtCache.get(installation.id) ?? null);
     setChecking(false);
     setCheckError(errorCache.get(installation.id) ?? null);
     if (claimAutoCheck(installation.id)) void runCheck();
@@ -253,8 +279,10 @@ export function AddonTable({
         // check that follows (`rescan` or `runCheck`) owns the cache and the statuses.
         if (checkGeneration(id) !== generation) return;
         const check = refreshCheck(result);
+        const at = new Date().toISOString();
         if (check.error === null) {
           updatesCache.set(id, check.updates);
+          checkedAtCache.set(id, at);
           errorCache.delete(id);
         } else {
           errorCache.set(id, check.error);
@@ -262,13 +290,14 @@ export function AddonTable({
         if (currentId.current !== id) return;
         if (check.error === null) {
           setUpdates(byFolder(check.updates));
+          setCheckedAt(at);
         } else {
           // As in `runCheck`: the last valid result stays visible next to the error, so a failed
           // check (no network) does not remove all the statuses. After an update
           // `updateProjects` has already emptied the cache, so nothing stale remains there.
           setCheckError(check.error);
           // With no results at all the filter has no data to act on: it is removed.
-          if (!updatesCache.has(id)) setFilters((f) => ({ ...f, onlyUpdates: false }));
+          if (!updatesCache.has(id)) setFilters(withoutUpdatesFilter);
         }
       })
       .catch((err) => {
@@ -559,6 +588,11 @@ export function AddonTable({
     () => visibleGroups(groups, filters, sort, updates, shownExcluded),
     [groups, filters, sort, updates, shownExcluded],
   );
+  // The counts of the "All / Updates / Errors" filter: the rows each choice would show.
+  const counts = useMemo(
+    () => showCounts(groups, filters, updates, shownExcluded),
+    [groups, filters, updates, shownExcluded],
+  );
   // Held projects (issue #291) are left out of both counts, read on the same state as the rows.
   const updateCount = countUpdates(groups, updates, shownExcluded);
   // "Update all" counts the projects the app can update on its own: one per group, without
@@ -656,32 +690,30 @@ export function AddonTable({
   function chooseAction(action: MenuAction) {
     if (!menu) return;
     const targets = menuTargets(groups, selection, menu.row);
+    // Focus goes back to the row, except for Remove: there it goes to the confirmation bar.
+    closeMenu(action !== "remove");
+    if (action === "select") setSelection((previous) => selectRow(previous, menu.row));
+    else runAction(action, targets);
+  }
+
+  /** An action of the context menu or, for the selection, of the header (issue #314). */
+  function runAction(action: Exclude<MenuAction, "select">, targets: AddonGroup[]) {
     switch (action) {
-      case "select":
-        setSelection((previous) => selectRow(previous, menu.row));
-        closeMenu(true);
-        break;
       case "clear":
         setSelection(null);
-        closeMenu(true);
         break;
       case "reinstall":
-        closeMenu(true);
         updateProjects(reinstallProjects(targets, updates), true);
         break;
       case "update":
-        closeMenu(true);
         updateProjects(heldUpdateProjects(targets, updates, excluded));
         break;
       case "autoUpdate": {
         const projects = exclusionProjects(targets, updates);
-        closeMenu(true);
         void saveExclusion(projects, exclusionChoice(projects, excluded));
         break;
       }
       case "remove":
-        // Focus goes to the confirmation bar, not to the row.
-        closeMenu(false);
         setConfirming(targets);
         break;
     }
@@ -711,6 +743,82 @@ export function AddonTable({
     setFilters((previous) => ({ ...previous, ...patch }));
   }
 
+  // The header (issue #314): one primary action, the rest secondary or behind the "⋯" menu.
+  const primary = primaryAction({
+    selecting: selection !== null,
+    running,
+    updatable: updatableIds.length,
+  });
+  const selected = selection !== null ? groups.filter((g) => selection.has(g.main.folder)) : [];
+  // The bulk actions are the context menu's items for the selection, with the same reasons
+  // when they are off; "Clear selection" is in the status line.
+  const bulkActions = selection !== null ? menuItems(selected, true, menuState).filter(isBulk) : [];
+  const reloadReason = rescanning
+    ? "The addons are being reloaded."
+    : busy
+      ? BUSY_REASON
+      : load.state === "loading"
+        ? "Wait for the addons to be loaded."
+        : null;
+  const moreItems: RowMenuItem[] = [
+    ...(onInstallZip
+      ? [
+          {
+            label: "Install from zip…",
+            hint: "Install an addon zip downloaded from a website; you can also drop it into the window",
+            disabledReason: zipBusy
+              ? "Wait for the zip to be installed."
+              : busy
+                ? BUSY_REASON
+                : null,
+            onSelect: onInstallZip,
+          },
+        ]
+      : []),
+    {
+      label: rescanning ? "Reloading…" : "Reload addons",
+      hint: "Reads the Interface/AddOns folder again",
+      disabledReason: reloadReason,
+      onSelect: () => void rescan(true),
+    },
+    {
+      label: "Hide LoadOnDemand modules",
+      checked: filters.hideLoadOnDemand,
+      onSelect: () => update({ hideLoadOnDemand: !filters.hideLoadOnDemand }),
+    },
+  ];
+  // The status line: the installation, then the selection or the counts of the list.
+  const summary = (
+    <>
+      {/* The installation labels the section together with the title. */}
+      <span id="addons-installation">{installation.name}</span>
+      {selection !== null ? (
+        <>
+          {" · "}
+          <span className="status-selection">{selectedText(selection)}</span>{" "}
+          <button
+            className="link inline"
+            aria-label="Clear selection"
+            onClick={() => setSelection(null)}
+          >
+            Clear
+          </button>
+        </>
+      ) : (
+        load.state === "ready" &&
+        statusParts({
+          total: groups.length,
+          visible: visible.length,
+          // Unknown while the held addons are not read: no count that may include them.
+          toUpdate: updateCount,
+          checked: updates && checkedAt !== null ? clockTime(checkedAt) : null,
+        })
+          .map((part) => ` · ${part}`)
+          .join("")
+      )}
+    </>
+  );
+
   const ascending = sort.direction === "asc";
   const sortLabel = SORT_OPTIONS.find((option) => option.key === sort.key)?.label ?? "";
 
@@ -730,77 +838,74 @@ export function AddonTable({
   }
 
   return (
-    <section ref={sectionRef} className="addons" aria-labelledby="addons-title">
+    <section
+      ref={sectionRef}
+      className="addons"
+      aria-labelledby="addons-title addons-installation"
+    >
       <header className="section-header addons-header">
         <h2 id="addons-title" className="addons-title">
           Addons
-          {/* The installation stays in the title: the section is labelled by this text. */}
-          <span className="addons-count">
-            {installation.name}
-            {load.state === "ready" &&
-              ` · ${visible.length === groups.length ? groups.length : `${visible.length} of ${groups.length}`} ${groups.length === 1 ? "addon" : "addons"}`}
-            {/* Unknown while the held addons are not read: no count that may include them. */}
-            {load.state === "ready" &&
-              updateCount !== null &&
-              updateCount > 0 &&
-              ` · ${updateCount} to update`}
-          </span>
         </h2>
         <div className="section-actions">
-          {selection !== null && (
-            <span className="selection-status">
-              <span className="count">{selectedText(selection)}</span>
-              <button className="link" onClick={() => setSelection(null)}>
-                Clear selection
-              </button>
-            </span>
-          )}
-          {onInstallZip && (
-            <button
-              className="button secondary"
-              onClick={onInstallZip}
-              disabled={zipBusy || busy}
-              title="Install an addon zip downloaded from a website; you can also drop it into the window"
-            >
-              Install from zip…
-            </button>
-          )}
           <button
-            className="button secondary"
-            onClick={() => void rescan(true)}
-            disabled={rescanning || busy || load.state === "loading"}
-            title="Reads the Interface/AddOns folder again"
+            className={primary === "check" ? "button" : "button secondary"}
+            onClick={() => void runCheck()}
+            disabled={checking || busy}
           >
-            {rescanning ? "Reloading…" : "Reload addons"}
+            {checking ? "Checking…" : "Check for updates"}
           </button>
-          {/* A single primary button (D20, D42): "Update all" is soft like the rows'
-              Update buttons. */}
-          {(running || updatableIds.length > 0) && (
+          {/* A single primary button (D20, D42): "Update all" while there is something to
+              update, otherwise the check above. */}
+          {primary === "updateAll" && (
             <button
-              className="button soft"
+              className="button"
               onClick={() => updateProjects(updatableIds)}
               disabled={busy || checking || versionSaving !== null || heldUnknown !== null}
               title={running ? undefined : (heldUnknown ?? undefined)}
             >
-              {running
-                ? position > 0
-                  ? `${reinstalling ? "Reinstalling" : "Updating"} ${position} of ${updating.size}`
-                  : reinstalling
-                    ? "Reinstalling…"
-                    : "Updating…"
-                : heldUnknown !== null
-                  ? // A count that could still include held addons is not shown.
-                    "Update all"
-                  : `Update all (${updatableIds.length})`}
+              {updateAllLabel({
+                running,
+                reinstalling,
+                position,
+                total: updating.size,
+                updatable: updatableIds.length,
+                heldUnknown: heldUnknown !== null,
+              })}
             </button>
           )}
-          <button className="button" onClick={() => void runCheck()} disabled={checking || busy}>
-            {checking ? "Checking…" : "Check for updates"}
-          </button>
+          {/* With a selection the bulk actions take the primary place. */}
+          {primary === "selection" &&
+            bulkActions.map((item) => (
+              <button
+                key={item.action}
+                className="button secondary"
+                disabled={item.disabledReason !== null}
+                title={item.disabledReason ?? undefined}
+                onClick={(event) => {
+                  // "Cancel" in the removal confirmation brings focus back here.
+                  returnFocus.current = event.currentTarget;
+                  runAction(item.action, selected);
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          <RowMenu
+            label="More actions"
+            items={moreItems}
+            triggerClassName="button secondary icon"
+          />
         </div>
       </header>
 
-      {autoUpdateLine}
+      {statusLine ? (
+        statusLine(summary)
+      ) : (
+        <div className="status-line">
+          <p>{summary}</p>
+        </div>
+      )}
 
       {checkError && (
         <p className="message error" role="alert">
@@ -906,14 +1011,6 @@ export function AddonTable({
                 </option>
               ))}
             </select>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={filters.hideLoadOnDemand}
-                onChange={(event) => update({ hideLoadOnDemand: event.target.checked })}
-              />
-              Hide LoadOnDemand modules
-            </label>
             {sources.length > 1 && (
               <select
                 className="select"
@@ -931,23 +1028,20 @@ export function AddonTable({
                 ))}
               </select>
             )}
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={filters.onlyErrors}
-                onChange={(event) => update({ onlyErrors: event.target.checked })}
-              />
-              Only with errors
-            </label>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={filters.onlyUpdates}
-                disabled={!updates}
-                onChange={(event) => update({ onlyUpdates: event.target.checked })}
-              />
-              Only with updates
-            </label>
+            <div className="segmented" role="group" aria-label="Show">
+              {showOptions(counts, updates !== undefined).map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  aria-pressed={filters.show === option.id}
+                  disabled={option.disabled}
+                  onClick={() => update({ show: option.id })}
+                >
+                  {option.label}
+                  {option.count !== null && <span className="segment-count">{option.count}</span>}
+                </button>
+              ))}
+            </div>
             <div className="sort-control">
               <select
                 className="select"
