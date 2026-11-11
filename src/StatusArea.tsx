@@ -78,11 +78,21 @@ type MessageProps = {
   /** Work in progress: it goes away by itself when the work ends, so it has no "Dismiss". */
   progress?: boolean;
   /**
+   * No "Dismiss": the message is the only thing that says why the screen is empty, and it
+   * stays as long as its owner renders it.
+   */
+  persistent?: boolean;
+  /**
    * How the message is announced. By default an error is an alert, progress is not a live
    * region (the bar inside it describes itself) and anything else is a status.
    */
   role?: "alert" | "status";
-  /** Clears the owner's state behind the message; without it "Dismiss" only hides it. */
+  /**
+   * Clears the owner's state behind the message, which unmounts it. Without it "Dismiss" only
+   * hides the message, and the hiding lasts as long as this instance: an owner whose message
+   * can change while it stays rendered must give it a `key` that changes with the content, or
+   * a later message would stay hidden.
+   */
   onDismiss?: () => void;
   children: ReactNode;
 };
@@ -94,7 +104,14 @@ type MessageProps = {
  * they appeared, newest last, whoever owns them. Nothing leaves on a timer: a message stays
  * until its owner removes it or the user dismisses it.
  */
-export function StatusMessage({ error, progress, role, onDismiss, children }: MessageProps) {
+export function StatusMessage({
+  error,
+  progress,
+  persistent,
+  role,
+  onDismiss,
+  children,
+}: MessageProps) {
   const { element: area, hidden } = useContext(StatusAreaContext);
   const [dismissed, setDismissed] = useState(false);
   const mounted = area !== null && !dismissed;
@@ -112,7 +129,7 @@ export function StatusMessage({ error, progress, role, onDismiss, children }: Me
       hidden={hidden}
     >
       <div className="status-message-body">{children}</div>
-      {!progress && (
+      {!progress && !persistent && (
         <button
           className="link subtle"
           onClick={() => {

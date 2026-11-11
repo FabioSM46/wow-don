@@ -365,10 +365,11 @@ function App() {
 
       <main className="app-main">
         {/* The app's own messages go to the status area whatever the tab: a zip can be dropped
-            on any of them. "Dismiss" only hides the load error: the state behind it stays. */}
+            on any of them. "Dismiss" only hides the load error, the state behind it stays; with
+            no installations read the error is all there is on screen, and it has no "Dismiss". */}
         <StatusAreaProvider element={statusArea}>
           {error && (
-            <StatusMessage key={error} error>
+            <StatusMessage key={error} error persistent={installations === null}>
               {error}
             </StatusMessage>
           )}

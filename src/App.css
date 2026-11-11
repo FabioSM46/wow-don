@@ -386,9 +386,15 @@ h2 {
   box-shadow: var(--menu-shadow);
 }
 
-/* Nothing to show: no message, or only those of a tab that is not in view. */
-.status-area:not(:has(> .status-message:not([hidden]))),
+/* A message of a tab that is not in view. A rule of its own: `display: flex` above would
+   otherwise win over the browser's `[hidden]`, and a selector list is dropped as a whole when
+   one of its selectors is not understood. */
 .status-message[hidden] {
+  display: none;
+}
+
+/* Nothing to show: no message, or only those of a tab that is not in view. */
+.status-area:not(:has(> .status-message:not([hidden]))) {
   display: none;
 }
 
@@ -1951,7 +1957,8 @@ label.setting-label {
   .search-page > .detail-scroll {
     flex: 0 0 clamp(26rem, 38%, 34rem);
     box-sizing: border-box;
-    padding: var(--space-4);
+    /* Its own padding, plus the height of the status area while it shows (see above). */
+    padding: var(--space-4) var(--space-4) calc(var(--space-4) + var(--status-area-height, 0px));
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);

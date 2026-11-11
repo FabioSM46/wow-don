@@ -930,7 +930,9 @@ export function AddonTable({
       )}
       {/* "Dismiss" only hides this one: the error still keeps "Update all" off. */}
       {excludedError && (
-        <StatusMessage error>Could not read the held addons: {excludedError}</StatusMessage>
+        <StatusMessage key={excludedError} error>
+          Could not read the held addons: {excludedError}
+        </StatusMessage>
       )}
       {exclusionError && (
         <StatusMessage error onDismiss={() => setExclusionError(null)}>
