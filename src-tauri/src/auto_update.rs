@@ -234,22 +234,23 @@ impl Schedule {
     }
 
     /// When the thread must wake up next: the scheduled round ([`Self::next_due`]) or, with a
-    /// requested round queued, that one if it comes earlier. A requested round runs immediately,
-    /// or [`BUSY_RETRY`] after it was last skipped, whatever the mode (even `off`).
+    /// requested round queued, that one. A requested round runs immediately, or [`BUSY_RETRY`]
+    /// after it was last skipped, whatever the mode (even `off`). While it is queued the scheduled
+    /// round waits for it: it counts as the last round anyway, and an overdue scheduled round
+    /// would otherwise re-run a skipped request on every pass of the loop.
     pub fn next_wake(
         &self,
         mode: AutoUpdateMode,
         interval_hours: u32,
         requested: bool,
     ) -> Option<Duration> {
-        let scheduled = self.next_due(mode, interval_hours);
         if !requested {
-            return scheduled;
+            return self.next_due(mode, interval_hours);
         }
-        let request = self
-            .request_busy
-            .map_or(Duration::ZERO, |at| at + BUSY_RETRY);
-        Some(scheduled.map_or(request, |scheduled| scheduled.min(request)))
+        Some(
+            self.request_busy
+                .map_or(Duration::ZERO, |skipped| skipped + BUSY_RETRY),
+        )
     }
 
     /// Records the end of a requested round, `at` since the thread started. Skipped, it stays
@@ -1099,7 +1100,7 @@ mod tests {
         // Without a request the wake-up is the scheduled round.
         assert_eq!(schedule.next_wake(Notify, 6, false), Some(STARTUP_DELAY));
         assert_eq!(schedule.next_wake(Off, 6, false), None);
-        // A scheduled round already overdue stays overdue: the request does not delay it.
+        // After an earlier round the request still runs at once, before the scheduled one.
         let schedule = finished(&[RoundResult::Done]);
         assert_eq!(schedule.next_wake(Notify, 6, true), Some(Duration::ZERO));
     }
@@ -1116,6 +1117,13 @@ mod tests {
         // The schedule is untouched by the skip.
         assert_eq!(schedule.next_due(Notify, 6), Some(HOUR * 7));
         assert_eq!(schedule.next_wake(Notify, 6, false), Some(HOUR * 7));
+        // A scheduled round already overdue does not bring the retry forward: otherwise every
+        // pass of the loop would re-run the skipped request while the lock is held.
+        schedule.finished_requested(HOUR * 20, RoundResult::Busy);
+        assert_eq!(
+            schedule.next_wake(Notify, 6, true),
+            Some(HOUR * 20 + BUSY_RETRY)
+        );
     }
 
     #[test]

@@ -13,8 +13,9 @@
 //!
 //! A round the user requested (issue #304, the tray's "Check for updates") always reports its
 //! outcome, under the same setting and window rules: the pending updates even if already
-//! notified, "All addons are up to date" when nothing is pending, and "Could not check for
-//! updates" when nothing is pending because a check failed.
+//! notified, "All addons are up to date" when nothing is pending, "Could not check for updates"
+//! when an installation's check failed and "Some addons could not be checked" when only single
+//! projects failed: a failed check is never reported as up to date.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -73,8 +74,9 @@ impl Notified {
 /// already in `notified`.
 ///
 /// A `requested` round (issue #304) always has a notice: it ignores `notified` (the user asked),
-/// and with nothing to report it says "All addons are up to date", or "Could not check for
-/// updates" when an installation's check failed. The returned set is computed in the same way.
+/// and with nothing to report it says "All addons are up to date", "Could not check for updates"
+/// when an installation's check failed, or "Some addons could not be checked" when only single
+/// projects' checks failed. The returned set is computed in the same way.
 pub fn decide(
     round: &RoundReport,
     notified: &HashSet<NotifiedUpdate>,
@@ -124,12 +126,19 @@ pub fn decide(
         AutoUpdateMode::Off => Vec::new(),
     };
     if requested && lines.is_empty() {
-        let check_failed = round
+        let installation_failed = round
             .installations
             .iter()
             .any(|report| report.check_error.is_some());
-        lines.push(if check_failed {
+        // A project whose check failed is in `errors` and not in `available`.
+        let project_failed = round
+            .installations
+            .iter()
+            .any(|report| !report.errors.is_empty());
+        lines.push(if installation_failed {
             "Could not check for updates".to_owned()
+        } else if project_failed {
+            "Some addons could not be checked".to_owned()
         } else {
             "All addons are up to date".to_owned()
         });
@@ -510,5 +519,30 @@ mod tests {
             requested_body(&round(Notify, vec![failed, found]), &HashSet::new()).as_deref(),
             Some("1 addon update available")
         );
+    }
+
+    #[test]
+    fn a_requested_round_with_a_failed_project_does_not_claim_up_to_date() {
+        let mut failed = report("retail", Vec::new());
+        failed.errors.push(crate::auto_update::AutoUpdateError {
+            source: Some(SourceKind::Curseforge),
+            key: Some("1".to_owned()),
+            name: "Addon 1".to_owned(),
+            message: "The source did not answer.".to_owned(),
+        });
+        let clean = report("classic", Vec::new());
+        assert_eq!(
+            requested_body(&round(Notify, vec![failed.clone(), clean]), &HashSet::new()).as_deref(),
+            Some("Some addons could not be checked")
+        );
+        // A failed installation check takes precedence.
+        let mut whole = report("ptr", Vec::new());
+        whole.check_error = Some("The source did not answer.".to_owned());
+        assert_eq!(
+            requested_body(&round(Notify, vec![failed.clone(), whole]), &HashSet::new()).as_deref(),
+            Some("Could not check for updates")
+        );
+        // A scheduled round stays silent, as before.
+        assert_eq!(body(&round(Notify, vec![failed]), &HashSet::new()), None);
     }
 }
