@@ -119,8 +119,6 @@ D41, issues #199–#204:
 
 - Optional personal GitHub token, to get past the limit of 60 requests an hour.
 - Search in the WoWInterface catalogue.
-- System notifications for automatic updates (D41): they require
-  `tauri-plugin-notification`, a dependency to be approved.
 - Direct dependencies inside their addon's row in the Installed tab, opened with the chevron like
   the `EllesmereUI*` modules. Today `Questie`, `QuestieDB` and `QuestieTrace` are three rows:
   they are three CurseForge projects, `groupAddons` vetoes different projects, and Questie's

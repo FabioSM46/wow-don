@@ -23,6 +23,7 @@ mod store;
 #[cfg(test)]
 mod test_support;
 mod tray;
+mod update_notification;
 mod updates;
 
 use std::sync::Mutex;
@@ -43,6 +44,9 @@ pub fn run() {
         // Start with the system (D36): only the backend uses it, through `get_autostart` and
         // `set_autostart`; no `autostart:*` permission reaches the frontend.
         .plugin(autostart::plugin())
+        // System notifications after an automatic round (D47, issue #298): only the backend
+        // shows them; no `notification:*` permission reaches the frontend.
+        .plugin(tauri_plugin_notification::init())
         // Remember only size, position and maximized state of the main window (D28): the
         // default flags would also restore visibility, decorations and fullscreen, and
         // without the filter every future window would be tracked too.
@@ -57,6 +61,7 @@ pub fn run() {
         .manage(addons::cache::FingerprintCache::default())
         .manage(tray::TrayStatus::default())
         .manage(auto_update::AutoUpdate::default())
+        .manage(update_notification::Notified::default())
         .manage(app_update::AppUpdate::default())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
@@ -94,6 +99,7 @@ pub fn run() {
             commands::app_status,
             commands::get_app_update,
             commands::set_check_app_updates,
+            commands::set_update_notifications,
             commands::list_installations,
             commands::add_installation,
             commands::remove_installation,

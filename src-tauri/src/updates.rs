@@ -102,7 +102,7 @@ pub fn version_type_for(flavor: &str) -> Option<u32> {
 /// A project's installed or available file. `id` is the CurseForge file id, needed to
 /// download it; sources without a numeric id (GitHub, WoWInterface, Tukui) put `0` and the
 /// version or tag in `name`, the same string they write in `SourceRecord::file`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSummary {
     pub id: u32,

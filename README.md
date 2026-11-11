@@ -27,10 +27,11 @@ WoW-don is free software under the GPL. It has no ads and no account.
 - Update one addon or all of them, reinstall, remove, or force the game version of an addon.
 - Automatic addon updates: off, notify or install, on an interval you choose, with an
   "Undo last auto-update"; "Don't update" holds an addon out of automatic updates and "Update all".
+  A system notification tells you what an automatic round found or installed (it can be turned off).
 - Other sources: Tukui, WoWInterface and GitHub Releases, plus zips dragged into the window.
 - Export and import of your addon list as a text string.
 - Backup of the `WTF` and `Interface` folders.
-- Tray icon, close to tray and start with the system.
+- Tray icon with the count of pending updates and "Check for updates" and "Update all" items, close to tray and start with the system.
 - Light and dark themes.
 
 ## Install
@@ -96,7 +97,7 @@ for these fields:
 A good report looks like this:
 
 ```text
-WoW-don version: 0.3.0
+WoW-don version: 0.4.0
 Operating system: Linux, Ubuntu 24.04
 How you run the game: Lutris
 Game version: Classic Era

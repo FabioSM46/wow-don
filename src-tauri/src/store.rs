@@ -859,9 +859,17 @@ pub struct AppSettings {
     /// lacks the field: it counts as on, like a new installation.
     #[serde(default = "default_check_app_updates")]
     pub check_app_updates: bool,
+    /// Show a system notification after an automatic round with something new (D47, issue
+    /// #298). An older `settings.json` lacks the field: it counts as on, like a new installation.
+    #[serde(default = "default_update_notifications")]
+    pub update_notifications: bool,
 }
 
 fn default_check_app_updates() -> bool {
+    true
+}
+
+fn default_update_notifications() -> bool {
     true
 }
 
@@ -874,6 +882,7 @@ impl Default for AppSettings {
             auto_update: AutoUpdateMode::default(),
             auto_update_interval_hours: DEFAULT_AUTO_UPDATE_INTERVAL_HOURS,
             check_app_updates: default_check_app_updates(),
+            update_notifications: default_update_notifications(),
         }
     }
 }
@@ -965,6 +974,15 @@ impl AppSettingsStore {
         self.reload()?;
         let mut next = self.settings;
         next.check_app_updates = enabled;
+        self.save(next)?;
+        Ok(next)
+    }
+
+    /// Saves the "Update notifications" option (D47) and returns the updated settings.
+    pub fn set_update_notifications(&mut self, enabled: bool) -> Result<AppSettings, String> {
+        self.reload()?;
+        let mut next = self.settings;
+        next.update_notifications = enabled;
         self.save(next)?;
         Ok(next)
     }
@@ -1868,7 +1886,8 @@ mod tests {
                 "closeToTray": false,
                 "autoUpdate": "notify",
                 "autoUpdateIntervalHours": 6,
-                "checkAppUpdates": true
+                "checkAppUpdates": true,
+                "updateNotifications": true
             })
         );
 
@@ -1912,6 +1931,46 @@ mod tests {
                 .get()
                 .unwrap()
                 .check_app_updates
+        );
+    }
+
+    #[test]
+    fn update_notifications_default_to_on_and_keep_the_other_settings() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join(APP_SETTINGS_FILE);
+        assert!(
+            AppSettingsStore::load(file.clone())
+                .get()
+                .unwrap()
+                .update_notifications
+        );
+
+        // A file written before issue #298 does not have the field: it reads as on.
+        fs::write(
+            &file,
+            r#"{"version": 1, "theme": "dark", "checkAppUpdates": false}"#,
+        )
+        .unwrap();
+        let mut store = AppSettingsStore::load(file.clone());
+        assert!(store.get().unwrap().update_notifications);
+
+        let saved = store.set_update_notifications(false).unwrap();
+        assert!(!saved.update_notifications);
+        assert_eq!(saved.theme, Theme::Dark);
+        assert!(!saved.check_app_updates);
+        let reloaded = AppSettingsStore::load(file.clone()).get().unwrap();
+        assert!(!reloaded.update_notifications);
+        assert_eq!(reloaded.theme, Theme::Dark);
+
+        let saved = AppSettingsStore::load(file.clone())
+            .set_update_notifications(true)
+            .unwrap();
+        assert!(saved.update_notifications);
+        assert!(
+            AppSettingsStore::load(file)
+                .get()
+                .unwrap()
+                .update_notifications
         );
     }
 

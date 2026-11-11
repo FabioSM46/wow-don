@@ -1,9 +1,9 @@
 //! Tray icon and the "Close to tray" option (issue #158, D35).
 //!
-//! At startup [`create`] builds the icon with the "Show WoW-don" / "Quit" menu. If creation
-//! fails (on Linux, for example, without the AppIndicator library) the error is written to stderr
-//! and [`TrayStatus`] stays off; on Linux the icon counts as available only if something on the
-//! session bus shows it. Without a visible icon the X quits the app even with `closeToTray`
+//! At startup [`create`] builds the icon with the "Show WoW-don" / "Check for updates" / "Quit"
+//! menu. If creation fails (on Linux, for example, without the AppIndicator library) the error
+//! is written to stderr and [`TrayStatus`] stays off; on Linux the icon counts as available only
+//! if something on the session bus shows it. Without a visible icon the X quits the app even with `closeToTray`
 //! on, so the user is never left with a hidden window and no icon to reopen it.
 //!
 //! [`on_window_event`] intercepts the closing of the main window; [`on_run_event`]
@@ -12,6 +12,18 @@
 //! After every automatic round (D41, issue #202) [`show_round`] puts a non-clickable
 //! "N updates available" item above "Show WoW-don" and repeats it in the tooltip; text and tooltip
 //! come from the pure function [`round_summary`]. Without an icon nothing happens.
+//!
+//! "Check for updates" (issue #304) asks the automatic-update thread for an immediate check-only
+//! round ([`AutoUpdate::request_round`] in `notify` mode, whatever the saved mode). While that
+//! round is queued or running the item reads "Checking for updates…" and is disabled; the menu's
+//! texts come from the pure function [`menu_text`].
+//!
+//! "Update all (N)" (issue #305) appears right after "Check for updates" when the last round left
+//! N > 0 pending updates ([`pending_updates`]). It asks for an immediate round in `install` mode
+//! through the same mechanism, so it follows the rules of an automatic install round (held and
+//! excluded projects skipped, previous version kept for Undo). While any requested round is
+//! queued or running both items are disabled; during an install request the item reads
+//! "Updating…".
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,11 +32,11 @@ use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
 
-use crate::auto_update::RoundReport;
-use crate::store::AppSettingsStore;
+use crate::auto_update::{AutoUpdate, AvailableUpdate, InstallationReport, RoundReport};
+use crate::store::{AppSettingsStore, AutoUpdateMode};
 
 /// The label of the main window (the one in `tauri.conf.json`, without `label`).
-const MAIN_WINDOW: &str = "main";
+pub(crate) const MAIN_WINDOW: &str = "main";
 /// Specific to the app, not `"main"`: on Linux tray-icon writes the image to
 /// `tray-icon-<id>-<n>.png` in the runtime folder and deletes it on exit, so another app with
 /// the same ID would overwrite or remove ours (issue #252).
@@ -32,6 +44,8 @@ const TRAY_ID: &str = "wow-don";
 const MENU_SHOW: &str = "show";
 const MENU_QUIT: &str = "quit";
 const MENU_UPDATES: &str = "updates";
+const MENU_CHECK: &str = "check";
+const MENU_UPDATE_ALL: &str = "update-all";
 const TOOLTIP: &str = "WoW-don";
 
 /// Whether the tray icon was created. State managed by Tauri, read by `get_settings`
@@ -79,7 +93,7 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .default_window_icon()
         .cloned()
         .ok_or_else(|| "the app has no icon".to_owned())?;
-    let menu = menu(app, None).map_err(|error| error.to_string())?;
+    let menu = menu(app, &menu_text(None, None)).map_err(|error| error.to_string())?;
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip(TOOLTIP)
@@ -94,21 +108,67 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
-/// The tray menu: "Show WoW-don" and "Quit", with the non-clickable `updates` item above them
-/// when there is one.
-fn menu<R: Runtime>(app: &AppHandle<R>, updates: Option<&str>) -> tauri::Result<Menu<R>> {
+/// The tray menu: "Show WoW-don", "Check for updates", "Update all (N)" when there is something
+/// to update, and "Quit", with the non-clickable `updates` item above them when there is one.
+fn menu<R: Runtime>(app: &AppHandle<R>, text: &MenuText) -> tauri::Result<Menu<R>> {
     let mut builder = MenuBuilder::new(app);
-    if let Some(text) = updates {
-        let item = MenuItemBuilder::with_id(MENU_UPDATES, text)
+    if let Some(updates) = &text.updates {
+        let item = MenuItemBuilder::with_id(MENU_UPDATES, updates)
             .enabled(false)
             .build(app)?;
         builder = builder.item(&item).separator();
     }
-    builder
-        .text(MENU_SHOW, "Show WoW-don")
-        .separator()
-        .text(MENU_QUIT, "Quit")
-        .build()
+    let check = MenuItemBuilder::with_id(MENU_CHECK, text.check)
+        .enabled(text.check_enabled)
+        .build(app)?;
+    builder = builder.text(MENU_SHOW, "Show WoW-don").item(&check);
+    if let Some(update_all) = &text.update_all {
+        let item = MenuItemBuilder::with_id(MENU_UPDATE_ALL, update_all)
+            .enabled(text.update_all_enabled)
+            .build(app)?;
+        builder = builder.item(&item);
+    }
+    builder.separator().text(MENU_QUIT, "Quit").build()
+}
+
+/// The texts of the tray menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuText {
+    /// The non-clickable "N updates available" item; `None` without updates.
+    pub updates: Option<String>,
+    /// The "Check for updates" item.
+    pub check: &'static str,
+    /// Whether "Check for updates" can be clicked: not while a requested round is queued or
+    /// running.
+    pub check_enabled: bool,
+    /// The "Update all (N)" item, or "Updating…" while a requested install round is queued or
+    /// running; `None` when there is nothing to update and no install is requested.
+    pub update_all: Option<String>,
+    /// Whether "Update all (N)" can be clicked: not while a requested round is queued or running.
+    pub update_all_enabled: bool,
+}
+
+/// The menu after `round` (or before any round), with `requested` the mode of the requested
+/// round queued or running, if any: `notify` reads "Checking for updates…", `install`
+/// "Updating…", and either disables both items.
+pub fn menu_text(round: Option<&RoundReport>, requested: Option<AutoUpdateMode>) -> MenuText {
+    let pending = round.map_or(0, pending_updates);
+    let update_all = match requested {
+        Some(AutoUpdateMode::Install) => Some("Updating\u{2026}".to_owned()),
+        _ if pending > 0 => Some(format!("Update all ({pending})")),
+        _ => None,
+    };
+    MenuText {
+        updates: round_summary(round).menu_item,
+        check: if requested == Some(AutoUpdateMode::Notify) {
+            "Checking for updates\u{2026}"
+        } else {
+            "Check for updates"
+        },
+        check_enabled: requested.is_none(),
+        update_all,
+        update_all_enabled: requested.is_none(),
+    }
 }
 
 /// Text of the menu item and tooltip after an automatic round.
@@ -130,25 +190,29 @@ pub struct RoundSummary {
 /// the two lengths would subtract them twice. Those excluded by the user do not count: they are
 /// not in `available`.
 pub fn pending_updates(round: &RoundReport) -> usize {
-    round
-        .installations
-        .iter()
-        .map(|report| {
-            report
-                .available
-                .iter()
-                .filter(|available| {
-                    let outcome = report.updated.iter().any(|updated| {
-                        updated.source == available.source && updated.key == available.key
-                    });
-                    let checked = report.updated_checked.iter().any(|project| {
-                        project.source == available.source && project.key == available.key
-                    });
-                    !outcome && !checked
-                })
-                .count()
-        })
-        .sum()
+    pending_projects(round).count()
+}
+
+/// The projects [`pending_updates`] counts, each with its installation's report: the same rule,
+/// for who needs to know which projects they are (the system notification, issue #298).
+pub fn pending_projects(
+    round: &RoundReport,
+) -> impl Iterator<Item = (&InstallationReport, &AvailableUpdate)> {
+    round.installations.iter().flat_map(|report| {
+        report
+            .available
+            .iter()
+            .filter(|available| {
+                let outcome = report.updated.iter().any(|updated| {
+                    updated.source == available.source && updated.key == available.key
+                });
+                let checked = report.updated_checked.iter().any(|project| {
+                    project.source == available.source && project.key == available.key
+                });
+                !outcome && !checked
+            })
+            .map(move |available| (report, available))
+    })
 }
 
 /// Text of the item and tooltip for the outcome of a round (or for no round).
@@ -174,7 +238,11 @@ pub fn show_round<R: Runtime>(app: &AppHandle<R>, round: Option<&RoundReport>) {
         return;
     };
     let summary = round_summary(round);
-    if let Ok(menu) = menu(app, summary.menu_item.as_deref()) {
+    // Read before touching the tray, with the status lock already released.
+    let requested = app
+        .try_state::<AutoUpdate>()
+        .and_then(|state| state.requested());
+    if let Ok(menu) = menu(app, &menu_text(round, requested)) {
         let _ = tray.set_menu(Some(menu));
     }
     let _ = tray.set_tooltip(Some(summary.tooltip));
@@ -183,6 +251,20 @@ pub fn show_round<R: Runtime>(app: &AppHandle<R>, round: Option<&RoundReport>) {
 fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match event.id().as_ref() {
         MENU_SHOW => show_main_window(app),
+        // Only queues the round: the automatic-update thread refreshes the menu to "Checking for
+        // updates…" and runs it. A click while one is queued is ignored.
+        MENU_CHECK => {
+            if let Some(state) = app.try_state::<AutoUpdate>() {
+                state.request_round(AutoUpdateMode::Notify);
+            }
+        }
+        // The same for an install round (issue #305): the thread refreshes the item to
+        // "Updating…" and runs it with the rules of an automatic install round.
+        MENU_UPDATE_ALL => {
+            if let Some(state) = app.try_state::<AutoUpdate>() {
+                state.request_round(AutoUpdateMode::Install);
+            }
+        }
         // `exit` emits `RunEvent::Exit`, where tauri-plugin-window-state writes the window
         // state (D28) also when the window is hidden.
         MENU_QUIT => app.exit(0),
@@ -499,6 +581,100 @@ mod tests {
             round_summary(Some(&round(Install, vec![report(3, 3)]))),
             plain
         );
+    }
+
+    /// The menu texts when no round is requested, with the given count item and "Update all".
+    fn idle(updates: Option<&str>, update_all: Option<&str>) -> MenuText {
+        MenuText {
+            updates: updates.map(str::to_owned),
+            check: "Check for updates",
+            check_enabled: true,
+            update_all: update_all.map(str::to_owned),
+            update_all_enabled: true,
+        }
+    }
+
+    #[test]
+    fn the_check_item_reads_checking_and_is_disabled_while_a_round_is_requested() {
+        use crate::store::AutoUpdateMode::{Install, Notify};
+        let checking = |updates: Option<&str>, update_all: Option<&str>| MenuText {
+            updates: updates.map(str::to_owned),
+            check: "Checking for updates\u{2026}",
+            check_enabled: false,
+            update_all: update_all.map(str::to_owned),
+            update_all_enabled: false,
+        };
+        assert_eq!(menu_text(None, None), idle(None, None));
+        assert_eq!(menu_text(None, Some(Notify)), checking(None, None));
+        let none = round(Notify, vec![report(0, 0)]);
+        assert_eq!(menu_text(Some(&none), None), idle(None, None));
+        assert_eq!(menu_text(Some(&none), Some(Notify)), checking(None, None));
+        // The count of the last round stays in view while the check runs; "Update all" is
+        // there but cannot be clicked.
+        let three = round(Notify, vec![report(3, 0)]);
+        assert_eq!(
+            menu_text(Some(&three), None),
+            idle(Some("3 updates available"), Some("Update all (3)"))
+        );
+        assert_eq!(
+            menu_text(Some(&three), Some(Notify)),
+            checking(Some("3 updates available"), Some("Update all (3)"))
+        );
+        // An install request does not read "Checking for updates…".
+        assert_eq!(
+            menu_text(Some(&three), Some(Install)).check,
+            "Check for updates"
+        );
+    }
+
+    #[test]
+    fn update_all_appears_only_with_pending_updates() {
+        use crate::store::AutoUpdateMode::{Install, Notify};
+        // No round yet, or nothing pending: no item.
+        assert_eq!(menu_text(None, None).update_all, None);
+        assert_eq!(
+            menu_text(Some(&round(Notify, vec![report(0, 0)])), None).update_all,
+            None
+        );
+        // An install round that installed everything leaves nothing to update.
+        assert_eq!(
+            menu_text(Some(&round(Install, vec![report(3, 3)])), None).update_all,
+            None
+        );
+        // One pending update, and a sum over every installation.
+        assert_eq!(
+            menu_text(Some(&round(Notify, vec![report(1, 0)])), None),
+            idle(Some("1 update available"), Some("Update all (1)"))
+        );
+        assert_eq!(
+            menu_text(
+                Some(&round(Install, vec![report(4, 3), report(2, 0)])),
+                None
+            ),
+            idle(Some("3 updates available"), Some("Update all (3)"))
+        );
+    }
+
+    #[test]
+    fn update_all_reads_updating_and_both_items_are_disabled_while_installing() {
+        use crate::store::AutoUpdateMode::{Install, Notify};
+        let updating = |updates: Option<&str>| MenuText {
+            updates: updates.map(str::to_owned),
+            check: "Check for updates",
+            check_enabled: false,
+            update_all: Some("Updating\u{2026}".to_owned()),
+            update_all_enabled: false,
+        };
+        let five = round(Notify, vec![report(5, 0)]);
+        assert_eq!(
+            menu_text(Some(&five), Some(Install)),
+            updating(Some("5 updates available"))
+        );
+        // A manual update that emptied the count while the request was queued: the item still
+        // says what is going on.
+        let none = round(Notify, vec![report(0, 0)]);
+        assert_eq!(menu_text(Some(&none), Some(Install)), updating(None));
+        assert_eq!(menu_text(None, Some(Install)), updating(None));
     }
 
     #[test]
