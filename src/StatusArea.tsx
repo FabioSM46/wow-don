@@ -40,9 +40,9 @@ type AreaProps = {
 /**
  * The status area (D48, issue #315): one box anchored to the bottom of the content, above the
  * footer, where errors, progress and results appear without moving what is above them. It is
- * laid over the content, so its height is published as `--status-area-height` on the parent
- * element: the scrolling regions pad their end by that much and their last row can always be
- * scrolled clear of the area. With nothing to show, the area is not displayed and the height
+ * laid over the content, so its height is published as `--status-area-height` on the enclosing
+ * `.app` element, which holds the scrolling regions: they pad their end by that much and their
+ * last row can always be scrolled clear of the area. With nothing to show, the area is not displayed and the height
  * is zero.
  */
 export function StatusArea({ onElement }: AreaProps) {
@@ -53,7 +53,9 @@ export function StatusArea({ onElement }: AreaProps) {
   }, [element, onElement]);
 
   useEffect(() => {
-    const host = element?.parentElement?.parentElement;
+    // The `.app` shell, looked up by class rather than by nesting depth, so that wrapping or
+    // moving the anchor cannot make the height land on an element the regions do not inherit from.
+    const host = element?.closest<HTMLElement>(".app");
     if (!element || !host) return;
     const publish = () => host.style.setProperty(HEIGHT_PROPERTY, `${element.offsetHeight}px`);
     publish();
