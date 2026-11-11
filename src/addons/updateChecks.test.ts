@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 
 import type { AddonUpdate } from "../api";
 import {
+  checkedAtCache,
   checkGeneration,
   claimAutoCheck,
   errorCache,
@@ -32,11 +33,13 @@ describe("forgetUpdateChecks", () => {
     // The table checked once, then left the installation: the next visit shows the cache.
     assert.equal(claimAutoCheck("round-a"), true);
     updatesCache.set("round-a", result);
+    checkedAtCache.set("round-a", "2026-11-01T14:05:00Z");
     errorCache.set("round-a", "No network.");
     assert.equal(claimAutoCheck("round-a"), false);
 
     forgetUpdateChecks(["round-a"]);
     assert.equal(updatesCache.has("round-a"), false);
+    assert.equal(checkedAtCache.has("round-a"), false);
     assert.equal(errorCache.has("round-a"), false);
     assert.equal(claimAutoCheck("round-a"), true);
   });

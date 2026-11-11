@@ -12,6 +12,11 @@ const autoChecked = new Set<string>();
 /** The last check error per installation, to show it also when going back to it. */
 export const errorCache = new Map<string, string>();
 /**
+ * When the results in `updatesCache` were read (ISO 8601), per installation: the "checked HH:MM"
+ * of the Installed status line (issue #314).
+ */
+export const checkedAtCache = new Map<string, string>();
+/**
  * How many times each installation's check results were dropped. A check records its result only
  * if the generation is still the one it started with: one already in flight when the results are
  * dropped would otherwise write back statuses read before the change.
@@ -41,6 +46,7 @@ export function claimAutoCheck(id: string): boolean {
 export function forgetUpdateChecks(installationIds: readonly string[]): void {
   for (const id of installationIds) {
     updatesCache.delete(id);
+    checkedAtCache.delete(id);
     autoChecked.delete(id);
     errorCache.delete(id);
     checkGenerations.set(id, checkGeneration(id) + 1);

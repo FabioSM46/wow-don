@@ -10,6 +10,15 @@
    - Control heights: --control-height 32px, --control-height-sm 28px.
    - Radii: --radius 8px (controls), --radius-lg 10px (cards and panels).
    - Spacing: --space-1 … --space-6 = 4, 8, 12, 16, 24, 32px.
+   - Table density (D48, issue #311): --cell-pad-x 14px and --cell-pad-y 8px, the padding of
+     every .addon-table cell. A narrow table overrides --cell-pad-x instead of writing a
+     padding.
+   - Fixed shell (D48, issue #312): --scroll-min-height 192px, the least height of a region
+     that scrolls on its own (.table-wrap in Installed, .results-scroll in Search). Below it
+     the region stops shrinking and the whole .app-main scrolls instead.
+   - Status area (D48, issue #315): --status-area-height is not a token but a measure, set on
+     .app by src/StatusArea.tsx while the area shows messages; the scrolling regions add it to
+     their bottom padding.
    - Colors: --bg (page), --surface (cards, fields), --surface-2 (muted background, disabled
      controls), --border (dividers, table rows, cards: not controls), --border-strong (the
      border of every control: fields, menus, textarea, checkbox, radio, switch when off,
@@ -18,19 +27,22 @@
      accent color), --accent-hover (the solid accent background on mouse hover), --accent-soft
      and --accent-soft-text (soft accent background and text), --on-accent (text on solid
      accent or danger backgrounds), --hover, --danger and --danger-soft, --ok-soft and
-     --ok-text, --knob (the switch knob).
+     --ok-text, --warning-soft and --warning-text (D48: a state that needs attention but is not
+     an error; a state color used only by .pill.warning, not a second accent; at least 4.5:1
+     on --surface in both themes), --knob (the switch knob).
 
    Control classes
    - .button (primary, solid accent) with the variants .secondary (bordered), .soft (background
-     --accent-soft), .ghost (no background), .danger and .small (--control-height-sm tall).
+     --accent-soft), .ghost (no background), .danger, .small (--control-height-sm tall) and
+     .icon (a square button holding only an icon; it needs an `aria-label`).
    - .search and .select (fields and menus), .import-text (textarea): border --border-strong,
      placeholder --faint, visible focus; disabled in --faint on --surface-2.
    - Checkbox and radio at 16px with border --border-strong and `accent-color`.
    - .switch: 36×20px switch on `<input type="checkbox" role="switch" class="switch">`.
    - .segmented: group of `<button>`s; the active one (`aria-pressed`, `aria-checked` or
-     `aria-selected` set to "true") sits on --surface.
-   - .pill: 22px-tall pill at --text-xs 600; variants .accent, .ok, .danger (with no variant it
-     is neutral).
+     `aria-selected` set to "true") sits on --surface. A count goes in a .segment-count.
+   - .pill: 22px-tall pill at --text-xs 600; variants .accent, .ok, .warning, .danger (with no
+     variant it is neutral).
 
    Theme (issue #92): `data-theme` on <html> forces `light` or `dark`; with no attribute (the
    `system` choice) `prefers-color-scheme` applies. The dark colors exist only once, as
@@ -54,6 +66,9 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  --cell-pad-x: 14px;
+  --cell-pad-y: 8px;
+  --scroll-min-height: 192px;
   --progress-height: 4px;
 
   --bg: #f4f4f5;
@@ -74,6 +89,8 @@
   --danger-soft: rgb(196 38 46 / 10%);
   --ok-soft: rgb(22 128 61 / 10%);
   --ok-text: #166534;
+  --warning-soft: rgb(180 110 0 / 12%);
+  --warning-text: #7a4a00;
   --knob: #ffffff;
   --overlay: rgb(244 244 245 / 85%);
   --progress-track: #d4d4d8;
@@ -104,6 +121,8 @@
   --dark-danger-soft: rgb(255 107 107 / 14%);
   --dark-ok-soft: rgb(74 222 128 / 12%);
   --dark-ok-text: #86efac;
+  --dark-warning-soft: rgb(245 184 74 / 14%);
+  --dark-warning-text: #f5c46b;
   --dark-knob: #ececef;
   --dark-overlay: rgb(17 17 19 / 85%);
   --dark-progress-track: #33333a;
@@ -146,6 +165,8 @@
     --danger-soft: var(--dark-danger-soft);
     --ok-soft: var(--dark-ok-soft);
     --ok-text: var(--dark-ok-text);
+    --warning-soft: var(--dark-warning-soft);
+    --warning-text: var(--dark-warning-text);
     --knob: var(--dark-knob);
     --overlay: var(--dark-overlay);
     --progress-track: var(--dark-progress-track);
@@ -176,6 +197,8 @@
   --danger-soft: var(--dark-danger-soft);
   --ok-soft: var(--dark-ok-soft);
   --ok-text: var(--dark-ok-text);
+  --warning-soft: var(--dark-warning-soft);
+  --warning-text: var(--dark-warning-text);
   --knob: var(--dark-knob);
   --overlay: var(--dark-overlay);
   --progress-track: var(--dark-progress-track);
@@ -213,13 +236,21 @@ h2 {
   color: var(--muted);
 }
 
-/* Header, content and footer are three rows one below the other: the content grows but never
-   shrinks below its own height, so the footer comes after the content (at the bottom of the
-   window if the page is short) and never covers it. */
+/* Fixed shell (D48, issue #312): header, content and footer are three rows of a column as tall
+   as the window. Header and footer never scroll; the content takes what is left and each tab
+   scrolls inside its own region:
+   - Installed: `.table-wrap` (the table);
+   - Search: `.results-scroll` (the results and "Load more") and `.detail-scroll` (the detail,
+     in place of the results or, in a wide window, in a panel next to them: issue #317);
+   - Options: `.options-scroll` (the whole panel).
+   Every box between `.app-main` and a scrolling region is a column with `min-height: 0`, so
+   the region gets the height left by what sits above it. In a window too short for that, the
+   region stops at --scroll-min-height, overflows its boxes and `.app-main` scrolls as a
+   whole: nothing is clipped. */
 .app {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
 }
 
 .app-header,
@@ -247,9 +278,172 @@ h2 {
 }
 
 .app-main {
-  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
   padding-top: var(--space-5);
   padding-bottom: var(--space-6);
+}
+
+/* A tab's panel fills the content. `display` is set only on a panel that is not hidden: the
+   tabs stay mounted and the `hidden` attribute must keep hiding them. */
+.tab-panel {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.tab-panel:not([hidden]),
+.addons,
+.search-page,
+.search-results:not([hidden]),
+.results {
+  display: flex;
+  flex-direction: column;
+}
+
+.addons,
+.search-page,
+.search-results,
+.results {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* In a column the margins of two paragraphs no longer collapse: the box above already leaves
+   the space. */
+.addons > .muted,
+.addons > .empty,
+.search-results > .muted,
+.results > .empty {
+  margin-top: 0;
+}
+
+/* The regions that scroll on their own. The headers of a table stay at the top of the region
+   (see `.addon-table th`), so a row reached with the keyboard stops below them. */
+.table-wrap,
+.results-scroll {
+  scroll-padding-top: calc(var(--text-xs) * 2 + var(--cell-pad-y) * 2);
+}
+
+/* A scrolling region is the containing block of what it scrolls. An absolutely positioned
+   element with no positioned ancestor (`.visually-hidden` in a table row, in a form) is laid
+   out against the document instead: it is not clipped by the region, and its place far down
+   the list makes the document itself scroll behind the fixed shell. `.app-main` is one of
+   them: it scrolls as a whole when the window is too short for a region. What is positioned
+   inside a region today is anchored to a nearer ancestor (`.row-menu`, `.search-field`,
+   `.progress-track`), or is `position: fixed` (`.context-menu`, `.zip-drop`), so nothing
+   else changes its containing block. `src/styleTokens.test.ts` checks that every rule that
+   scrolls is positioned. */
+.app-main,
+.table-wrap,
+.results-scroll,
+.detail-scroll,
+.options-scroll {
+  position: relative;
+}
+
+.addons > .table-wrap,
+.results-scroll {
+  flex: 1 1 0;
+  min-height: var(--scroll-min-height);
+}
+
+/* The status area lies over the end of the content (see `.status-area`): while it shows, a
+   scrolling region ends with as much padding as the area is tall, so its last row scrolls
+   clear of it. The padding is at the end of the scrolled content: nothing above it moves. */
+.addons > .table-wrap,
+.results-scroll,
+.detail-scroll {
+  padding-bottom: var(--status-area-height, 0px);
+}
+
+.detail-scroll,
+.options-scroll {
+  overflow-y: auto;
+}
+
+.detail-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* Options scrolls as a whole panel: it reaches the sides and the bottom of the content, so
+   the scrollbar sits on the window's edge and the last card scrolls up to the footer. */
+.options-scroll {
+  margin: 0 calc(-1 * var(--space-6)) calc(-1 * var(--space-6));
+  padding: 0 var(--space-6) calc(var(--space-6) + var(--status-area-height, 0px));
+}
+
+/* The status area (D48, issue #315): the one place for errors, progress and results, at the
+   bottom of the content and above the footer. It is laid over the content instead of taking a
+   row of the shell, so a message that appears or goes away moves nothing: the anchor is a
+   row of no height between content and footer, and the area grows upwards from it. Messages
+   stack in the order they appeared, newest last; beyond a third of the window the area
+   scrolls. It sits above the sticky column headers and below menus and the zip overlay. */
+.status-anchor {
+  position: relative;
+  flex: none;
+  height: 0;
+}
+
+.status-area {
+  position: absolute;
+  right: var(--space-6);
+  bottom: 0;
+  left: var(--space-6);
+  z-index: 10;
+  box-sizing: border-box;
+  max-height: calc(100vh / 3);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--menu-shadow);
+}
+
+/* A message of a tab that is not in view. A rule of its own: `display: flex` above would
+   otherwise win over the browser's `[hidden]`, and a selector list is dropped as a whole when
+   one of its selectors is not understood. */
+.status-message[hidden] {
+  display: none;
+}
+
+/* Nothing to show: no message, or only those of a tab that is not in view. */
+.status-area:not(:has(> .status-message:not([hidden]))) {
+  display: none;
+}
+
+.status-message {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.status-message:not([hidden]) ~ .status-message:not([hidden]) {
+  border-top: 1px solid var(--border);
+}
+
+.status-message-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.status-message-body p,
+.status-message-body ul {
+  margin: 0;
+}
+
+.status-message-body ul {
+  padding-left: 18px;
+  font-size: var(--text-xs);
+}
+
+.status-message > .link {
+  flex: none;
 }
 
 /* Tabs: text only; the active tab has a thin line in the accent color, resting on the header's
@@ -383,6 +577,16 @@ h2 {
 .button.small {
   height: var(--control-height-sm);
   padding: 0 10px;
+}
+
+/* Only an icon: as wide as it is tall. The name is in `aria-label`. */
+.button.icon {
+  width: var(--control-height);
+  padding: 0;
+}
+
+.button.icon.small {
+  width: var(--control-height-sm);
 }
 
 .button:disabled,
@@ -563,8 +767,20 @@ input[type="radio"]:checked:disabled {
   outline-offset: 0;
 }
 
+/* The count of a segment (issue #314): after its label, quieter. */
+.segment-count {
+  margin-left: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: var(--muted);
+}
+
+.segmented button:disabled .segment-count {
+  color: var(--faint);
+}
+
 /* Pill (D42): a short state next to a name. Neutral with no variant; color only for the state
-   (accent, ok, danger). */
+   (accent, ok, warning, danger). */
 .pill {
   box-sizing: border-box;
   display: inline-flex;
@@ -591,6 +807,11 @@ input[type="radio"]:checked:disabled {
   color: var(--ok-text);
 }
 
+.pill.warning {
+  background: var(--warning-soft);
+  color: var(--warning-text);
+}
+
 .pill.danger {
   background: var(--danger-soft);
   color: var(--danger);
@@ -599,7 +820,7 @@ input[type="radio"]:checked:disabled {
 /* Options (issue #231): a centered column of sections, at most 720px wide. Each section is a
    title and one or more cards; each row of a card has label and description on the left and
    the control right next to them, so the eye does not travel across the whole window. The
-   panel does not change `display`: the tabs' `hidden` attribute must keep hiding it. */
+   column sits inside the panel, which scrolls (`.options-scroll`). */
 .options-page {
   max-width: 720px;
   margin: 0 auto;
@@ -895,6 +1116,7 @@ label.setting-label {
 
 .row-menu-item {
   font: inherit;
+  white-space: nowrap;
   padding: 6px 10px;
   border: none;
   border-radius: calc(var(--radius) - 2px);
@@ -917,6 +1139,23 @@ label.setting-label {
 .row-menu-item[aria-disabled="true"] {
   color: var(--faint);
   cursor: default;
+}
+
+/* A checkable item (issue #314): the mark sits at the end and keeps its place when off, so
+   the labels of the menu stay aligned. */
+.row-menu-item[role="menuitemcheckbox"] {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.row-menu-item[role="menuitemcheckbox"]::after {
+  content: "✓";
+  visibility: hidden;
+}
+
+.row-menu-item[aria-checked="true"]::after {
+  visibility: visible;
 }
 
 /* Found installations: a subtitle with "Scan again", then the rows with their "Add"; game
@@ -1025,8 +1264,8 @@ label.setting-label {
 
 /* Addons */
 
-/* The Installed tab title (issue #230): "Addons" at --text-xl with the count next to it, not
-   the uppercase label of the other sections. */
+/* The Installed tab title (issue #230): "Addons" at --text-xl, not the uppercase label of the
+   other sections. The installation and the counts are in the status line below it. */
 .addons-title {
   font-size: var(--text-xl);
   text-transform: none;
@@ -1034,17 +1273,36 @@ label.setting-label {
   color: var(--text);
 }
 
-.addons-count {
-  margin-left: var(--space-2);
-  font-size: var(--text-base);
-  font-weight: var(--weight-regular);
-  letter-spacing: 0;
+.addons-header {
+  gap: var(--space-4);
+  margin-bottom: var(--space-1);
+}
+
+/* The status line under the title (issue #314): installation, counts and time of the check, or
+   the selection; then what the automatic updates did, with its problems and Undo (issue #203).
+   Plain text, color only for the selection and for errors. */
+.status-line {
+  margin: 0 0 var(--space-4);
   color: var(--muted);
 }
 
-.addons-header {
-  gap: var(--space-4);
-  margin-bottom: var(--space-4);
+.status-line p,
+.status-line ul {
+  margin: 0;
+}
+
+.status-line ul {
+  padding-left: 18px;
+  font-size: var(--text-xs);
+}
+
+.status-line .link.error {
+  color: var(--danger);
+}
+
+.status-selection {
+  color: var(--accent);
+  font-weight: var(--weight-strong);
 }
 
 .count {
@@ -1133,9 +1391,11 @@ label.setting-label {
   cursor: default;
 }
 
+/* The box of a table: it scrolls in both directions when the table does not fit (in Installed
+   it is the tab's scrolling region). */
 .table-wrap {
   container-type: inline-size;
-  overflow-x: auto;
+  overflow: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -1143,7 +1403,10 @@ label.setting-label {
 
 .addon-table {
   width: 100%;
-  border-collapse: collapse;
+  /* Separate borders, with no gap: the border of a sticky header travels with its cell, while
+     a collapsed one belongs to the table and scrolls away. */
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: var(--text-base);
 }
 
@@ -1151,12 +1414,17 @@ label.setting-label {
 .addon-table td {
   /* A long text without spaces wraps instead of widening the table beyond the window. */
   overflow-wrap: anywhere;
-  padding: var(--space-2) 14px;
+  padding: var(--cell-pad-y) var(--cell-pad-x);
   text-align: left;
   vertical-align: top;
 }
 
+/* The column headers stay at the top of the scrolling region, opaque, above the rows. */
 .addon-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
   font-size: var(--text-xs);
   font-weight: var(--weight-strong);
   text-transform: uppercase;
@@ -1191,8 +1459,46 @@ label.setting-label {
   color: var(--accent);
 }
 
+/* The Installed table (D48, issue #313): four columns, Addon, Version, Source and Status. Below
+   this width the table keeps its columns readable and scrolls sideways inside `.table-wrap`. */
+.installed-table {
+  min-width: 40rem;
+}
+
+/* The Addon cell: the chevron, then the title with its pills and, on the lines below, the
+   author and the row error, aligned with the title. */
+.addon-cell {
+  display: flex;
+  align-items: flex-start;
+}
+
+.addon-main {
+  min-width: 0;
+}
+
 .addon-title {
   font-weight: var(--weight-strong);
+}
+
+.addon-author {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* Version: tabular numerals, so the versions line up down the column; the version an update
+   leads to is in the accent text color. */
+.version-cell {
+  font-variant-numeric: tabular-nums;
+}
+
+.version-latest {
+  color: var(--accent);
+}
+
+/* Status: the update control and the state pills sit on the right edge of the table. */
+.addon-table .status-cell {
+  text-align: right;
 }
 
 .addon-error {
@@ -1271,44 +1577,11 @@ label.setting-label {
   vertical-align: middle;
 }
 
-/* The automatic update row between the title and the Installed filters (issue #203): a bar of
-   its own, understated, color only for errors (issue #230). */
-.auto-update-line {
-  margin: 0 0 var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.auto-update-line p,
-.auto-update-line ul {
-  margin: 0;
-}
-
-.auto-update-line ul {
-  padding-left: 18px;
-}
-
-.auto-update-line .link.error {
-  color: var(--danger);
-}
-
-.auto-update-undo {
-  margin-top: var(--space-1);
-  color: var(--text);
-}
-
-.update-summary p,
-.update-summary ul,
 .install-summary p,
 .install-summary ul {
   margin: 0;
 }
 
-.update-summary ul,
 .install-summary ul {
   padding-left: 18px;
   font-size: var(--text-xs);
@@ -1321,20 +1594,17 @@ label.setting-label {
   color: var(--muted);
 }
 
-/* Folder groups: the row opens with a click and shows the other folders below. */
+/* Expanded rows: the row opens with a click or with its chevron and shows its details and,
+   for a multi-folder addon, the other folders below. */
 
 .addon-table tr.expandable {
   cursor: pointer;
 }
 
-.chevron,
-.chevron-space {
-  display: inline-block;
+.chevron {
+  flex: none;
   width: 1.1em;
   margin-right: var(--space-1);
-}
-
-.chevron {
   padding: 0;
   border: none;
   background: none;
@@ -1343,10 +1613,9 @@ label.setting-label {
   cursor: pointer;
 }
 
-.addon-table tr.open td {
-  border-bottom: none;
-}
-
+/* The dividers are the top borders of the cells (see `.addon-table`): the details and the
+   sub-rows have none, so an open addon reads as one block down to the next addon. */
+.addon-table tbody tr.details-row td,
 .addon-table tbody tr.sub-row td {
   border-top: none;
   padding-top: var(--space-1);
@@ -1354,9 +1623,45 @@ label.setting-label {
   color: var(--muted);
 }
 
+.addon-table tbody tr.details-row td {
+  padding-top: 0;
+  padding-bottom: var(--space-2);
+}
+
+/* The details are part of the row above, not a row of their own to point at. */
+.addon-table tbody tr.details-row:hover {
+  background: none;
+}
+
+/* Folder, Interface, Modified and Notes: label and value on two columns, aligned with the
+   title above. */
+.addon-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 0 calc(1.1em + var(--space-1));
+  font-size: var(--text-xs);
+}
+
+.addon-details dd {
+  margin: 0;
+  color: var(--text);
+}
+
+/* A long list of folders wraps instead of widening the table. */
+.addon-details .mono {
+  white-space: normal;
+}
+
 .sub-title {
   display: inline-block;
   padding-left: calc(1.1em + var(--space-1));
+}
+
+/* The folder of a sub-row, next to its title. */
+.sub-folder {
+  margin-left: var(--space-2);
+  white-space: normal;
 }
 
 .sub-title::before {
@@ -1366,10 +1671,8 @@ label.setting-label {
 /* Narrow table (small window): less space between columns, so the headers, which do not wrap,
    fit in the width instead of making the bottom scrollbar appear. */
 @container (max-width: 960px) {
-  .addon-table th,
-  .addon-table td {
-    padding-left: 7px;
-    padding-right: 7px;
+  .addon-table {
+    --cell-pad-x: 7px;
   }
 
   .addon-table th {
@@ -1500,8 +1803,7 @@ label.setting-label {
 }
 
 /* Rows of uniform height (issue #229): every cell is vertically centered and the row is as
-   tall as one with the name, the pills below and the summary on two lines. The height of a
-   table cell is a minimum. */
+   tall as one with the name and the pills below. The height of a table cell is a minimum. */
 .catalog-table td {
   height: 62px;
   box-sizing: border-box;
@@ -1526,21 +1828,32 @@ label.setting-label {
   margin-top: 2px;
 }
 
-/* The actions column, always visible and aligned to the right. */
+/* The actions column, always visible: a fixed width, wide enough for the progress bar with its
+   phase, and the content aligned to the right, so the right edge is even whatever the row
+   shows (issue #316). */
 .catalog-table .actions-cell {
-  width: 1%;
+  width: 11rem;
+  min-width: 11rem;
   text-align: right;
   white-space: nowrap;
 }
 
-/* The summary takes at most two lines; the full text is in the tooltip. */
-.summary {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+/* The summary column takes the width the others leave: a cell with `max-width: 0` does not
+   grow with its content, so the text is clipped instead of widening the table. In a narrow
+   window it is the column that gives way, header included, and the actions stay in view. */
+.catalog-table .summary-cell {
+  width: 100%;
+  max-width: 0;
   overflow: hidden;
-  max-width: 36rem;
+  text-overflow: ellipsis;
+}
+
+/* The summary on a single line, shortened with "…": the full text is in the tooltip. */
+.catalog-table .summary {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
 }
 
@@ -1566,6 +1879,22 @@ label.setting-label {
   gap: var(--space-2);
 }
 
+/* The scrolling region of Search: the card is this box, and the table's own box inside it is
+   plain, so the headers stick to the region and "Load more" is the last thing scrolled to. */
+.results-scroll {
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.results-scroll .table-wrap {
+  overflow: visible;
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
 .load-more {
   display: flex;
   align-items: center;
@@ -1575,15 +1904,110 @@ label.setting-label {
   font-size: var(--text-base);
 }
 
-/* Addon detail: it takes the place of the results in the Search tab. */
+/* At the end of the scrolled results it is the card's last row. */
+.results-scroll .load-more {
+  margin-top: 0;
+  padding: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+/* Addon detail in the Search tab. It takes the place of the results, with "Back to results";
+   where the Search area is wide enough it opens in a panel next to them (D48, issue #317).
+   The choice is a container query on the Search area, not on the window, and nothing in the
+   code knows the width: `.with-detail` only says that a detail is open. The results and the
+   panel are the two scrolling regions that already exist, side by side: each scrolls on its
+   own.
+   Where a container also gets layout containment it becomes the containing block of its
+   `position: fixed` descendants and a stacking context. Nothing inside the Search area or the
+   detail relies on either: the gallery shows the large image in place, and the app's fixed
+   overlays (`.zip-drop`, `.context-menu`) and the `.row-menu-list` popover are rendered
+   outside `.search-page`. An overlay added inside it must be rendered outside it too. */
+.search-page {
+  container: search / inline-size;
+}
+
+.search-page.with-detail {
+  flex-direction: row;
+  gap: var(--space-5);
+}
+
+.search-page > .search-results,
+.detail-scroll {
+  min-width: 0;
+}
+
+.search-page.with-detail > .search-results {
+  display: none;
+}
+
+/* The detail measures itself: its two columns and its header follow the width it gets, in
+   the panel as in the whole tab. */
+.detail-scroll {
+  container: detail / inline-size;
+}
 
 .detail {
   max-width: 72rem;
 }
 
+.detail-nav {
+  display: flex;
+}
+
 .back {
   margin-bottom: 20px;
   font-size: var(--text-base);
+}
+
+/* The panel's close button: only side by side. */
+.detail-close {
+  display: none;
+  margin-bottom: var(--space-2);
+}
+
+@container search (min-width: 1100px) {
+  .search-page.with-detail > .search-results {
+    display: flex;
+  }
+
+  /* The panel is a card like the results', as tall as the tab. */
+  .search-page > .detail-scroll {
+    flex: 0 0 clamp(26rem, 38%, 34rem);
+    box-sizing: border-box;
+    /* Its own padding, plus the height of the status area while it shows (see above). */
+    padding: var(--space-4) var(--space-4) calc(var(--space-4) + var(--status-area-height, 0px));
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+
+  .detail-nav {
+    justify-content: flex-end;
+  }
+
+  .back {
+    display: none;
+  }
+
+  .detail-close {
+    display: inline-flex;
+  }
+
+  /* The results next to the panel: the summary and the author give way, and the name takes
+     the width they leave, shortened with "…" like the summary was. */
+  .with-detail .catalog-table .summary-cell,
+  .with-detail .catalog-table .author-cell {
+    display: none;
+  }
+
+  .with-detail .catalog-table .name-cell {
+    width: 100%;
+    max-width: 0;
+  }
+
+  .with-detail .catalog-name {
+    max-width: none;
+  }
 }
 
 .detail-header {
@@ -1666,8 +2090,9 @@ label.setting-label {
   gap: var(--space-2);
 }
 
-/* Description on the left, files and dependencies in a narrow column on the right; in the small
-   window a single column. */
+/* Description on the left, files and dependencies in a narrow column on the right; in a narrow
+   detail (a small window, or the panel next to the results) a single column. 736px is the
+   width the detail has in an 800px window. */
 .detail-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
@@ -1675,9 +2100,20 @@ label.setting-label {
   align-items: start;
 }
 
-@media (max-width: 800px) {
+@container detail (max-width: 736px) {
   .detail-body {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Narrower still, the header's actions go below the name instead of squeezing it. */
+@container detail (max-width: 560px) {
+  .detail-header {
+    flex-wrap: wrap;
+  }
+
+  .detail-actions {
+    flex-basis: 100%;
   }
 }
 
@@ -1980,18 +2416,6 @@ label.setting-label {
 
 .addon-table tbody tr.selected td:first-child {
   box-shadow: inset 2px 0 0 var(--accent);
-}
-
-.selection-status {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-base);
-}
-
-.selection-status .count {
-  color: var(--accent);
-  font-weight: var(--weight-strong);
 }
 
 .context-menu {

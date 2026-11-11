@@ -61,17 +61,22 @@ function status(
 const available = (name: string) => ({ source: "github" as const, key: name, name, latest: file });
 
 describe("statusLine in notify", () => {
-  it("counts the available updates with the check time", () => {
+  it("adds nothing for available updates: the status line already counts them", () => {
     const s = status("notify", [report({ available: [available("A"), available("B")] })]);
-    const line = statusLine(s, "retail", "notify", clock);
-    assert.equal(line?.text, "2 updates available · checked @T1");
-    assert.equal(line?.problemText, null);
-    assert.equal(line?.undo, null);
+    assert.equal(statusLine(s, "retail", "notify", clock), null);
   });
 
-  it("uses the singular for one update", () => {
-    const s = status("notify", [report({ available: [available("A")] })]);
-    assert.equal(statusLine(s, "retail", "notify", clock)?.text, "1 update available · checked @T1");
+  it("keeps the problems of a round, with no text of its own", () => {
+    const s = status("notify", [
+      report({
+        available: [available("A")],
+        skipped: [outcome("B", "skipped", "Not distributable.")],
+      }),
+    ]);
+    const line = statusLine(s, "retail", "notify", clock);
+    assert.equal(line?.text, null);
+    assert.equal(line?.problemText, "1 skipped");
+    assert.equal(line?.undo, null);
   });
 
   it("shows nothing when the round found nothing", () => {
@@ -94,7 +99,7 @@ describe("statusLine in install", () => {
     const s = status("install", [
       report({ updated: [outcome("A", "updated"), outcome("B", "updated")] }),
     ]);
-    assert.equal(statusLine(s, "retail", "install", clock)?.text, "Auto-updated 2 addons · @T1");
+    assert.equal(statusLine(s, "retail", "install", clock)?.text, "auto-updated 2 addons at @T1");
   });
 
   it("names failures and skips, with the reasons for the detail", () => {
@@ -110,7 +115,7 @@ describe("statusLine in install", () => {
       }),
     ]);
     const line = statusLine(s, "retail", "install", clock);
-    assert.equal(line?.text, "Auto-updated 1 addon · @T1");
+    assert.equal(line?.text, "auto-updated 1 addon at @T1");
     assert.equal(line?.problemText, "2 failed · 1 skipped");
     assert.equal(line?.failed, true);
     assert.deepEqual(line?.problems, [
@@ -125,14 +130,14 @@ describe("statusLine in install", () => {
       report({ errors: [{ source: null, key: null, name: "Folder", message: "Unknown." }] }),
     ]);
     const line = statusLine(s, "retail", "install", clock);
-    assert.equal(line?.text, "Checked @T1");
+    assert.equal(line?.text, null);
     assert.equal(line?.problemText, "1 failed");
   });
 
   it("reports a failed check", () => {
     const s = status("install", [report({ checkError: "No network." })]);
     const line = statusLine(s, "retail", "install", clock);
-    assert.equal(line?.text, "Automatic check failed · @T1");
+    assert.equal(line?.text, "automatic check failed at @T1");
     assert.deepEqual(line?.problems, [{ name: "Check", message: "No network.", kind: "failed" }]);
   });
 
@@ -151,7 +156,7 @@ describe("statusLine in install", () => {
       status(null, [], { undoable: [undo] }),
     ]) {
       const line = statusLine(s, "retail", "install", clock);
-      assert.equal(line?.text, "Auto-updated 3 addons · @T0");
+      assert.equal(line?.text, "auto-updated 3 addons at @T0");
       assert.deepEqual(line?.undo, undo);
     }
   });
@@ -167,7 +172,7 @@ describe("statusLine after an Undo", () => {
   it("shows a newer round again", () => {
     assert.equal(
       statusLine(undone, "retail", "install", clock, "T-old")?.text,
-      "Auto-updated 1 addon · @T1",
+      "auto-updated 1 addon at @T1",
     );
   });
 });
@@ -192,7 +197,7 @@ describe("statusLine when off", () => {
       status("install", [report({ updated: [outcome("A", "updated")] })], { undoable: [undo] }),
     ]) {
       assert.deepEqual(statusLine(s, "retail", "off", clock), {
-        text: "Auto-updated 2 addons · @T0",
+        text: "auto-updated 2 addons at @T0",
         problemText: null,
         problems: [],
         undo,
@@ -211,7 +216,7 @@ describe("statusLine when off", () => {
       for (const mode of ["notify", "install"] as const) {
         assert.equal(statusLine(status(mode, [r]), "retail", "off", clock), null);
         const line = statusLine(status(mode, [r], { undoable: [undo] }), "retail", "off", clock);
-        assert.equal(line?.text, "Auto-updated 2 addons · @T0");
+        assert.equal(line?.text, "auto-updated 2 addons at @T0");
         assert.deepEqual(line?.problems, []);
         assert.equal(line?.problemText, null);
       }

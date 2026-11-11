@@ -28,6 +28,7 @@ import {
   groupAddons,
   groupUpdate,
   nextSort,
+  showCounts,
   visibleGroups,
   type AddonGroup,
   type Filters,
@@ -38,6 +39,7 @@ import { SOURCE_LABELS, projectId, sourcesIn, updateRequest, type ProjectRef } f
 import { ProgressBar, useInstallProgress } from "./ProgressBar";
 import { refreshCheck } from "./refresh";
 import {
+  checkedAtCache,
   checkGeneration,
   claimAutoCheck,
   errorCache,
@@ -45,6 +47,10 @@ import {
   updatesCache,
 } from "./updateChecks";
 import { ContextMenu } from "./ContextMenu";
+import { StatusMessage } from "../StatusArea";
+import { RowMenu, type RowMenuItem } from "../installations/RowMenu";
+import { clockTime } from "./autoUpdateStatus";
+import { primaryAction, showOptions, statusParts, updateAllLabel } from "./header";
 import {
   EXCLUDED_TITLE,
   excludedAfter,
@@ -60,6 +66,7 @@ import {
 } from "./exclusion";
 import { blockedHint, isUpdatable } from "./mirror";
 import { interfaceSummary } from "./interfaceColumn";
+import { versionCell } from "./versionColumn";
 import {
   confirmText,
   foldersOf,
@@ -73,6 +80,7 @@ import {
   selectedText,
   toggleRow,
   type MenuAction,
+  type MenuItem,
   type Selection,
 } from "./selection";
 import {
@@ -94,9 +102,9 @@ type Props = {
   /** Removal, update or reinstall have (perhaps) changed the addons on disk of the
    * `installationId` installation: the Search tab rereads its results. */
   onChanged?: (installationId: string) => void;
-  /** The automatic update row (`AutoUpdateLine`): a bar of its own between the title and the
-   * filters. */
-  autoUpdateLine?: ReactNode;
+  /** Draws the status line under the title around this tab's `summary` (`AutoUpdateLine`, which
+   * adds the automatic updates and owns their Undo); without it, the summary alone is the line. */
+  statusLine?: (summary: ReactNode) => ReactNode;
 };
 
 /**
@@ -107,7 +115,7 @@ type Props = {
 const updateRuns = new Map<string, Set<string>>();
 /** The installations whose update in progress is a reinstall (issue #149). */
 const reinstallRuns = new Set<string>();
-/** The outcome of the last update per installation, shown above the table. */
+/** The outcome of the last update per installation, shown in the status area. */
 const updateResults = new Map<string, UpdateResult>();
 
 /** `reinstall`: the outcome comes from the menu's "Reinstall", not from an update. */
@@ -116,7 +124,7 @@ type UpdateResult = ({ outcomes: UpdateOutcome[] } | { error: string }) & { rein
 /** The open menu: the row (main folder) and the point where it opens. */
 type OpenMenu = { row: string; x: number; y: number };
 
-/** The outcome of the last removal, shown above the table. */
+/** The outcome of the last removal, shown in the status area. */
 type RemovalResult =
   | { error: string }
   | { text: string; errors: { folder: string; message: string }[]; warning: string | null };
@@ -135,6 +143,20 @@ function loadVersionTypes(): Promise<VersionType[]> {
   return versionTypesRequest;
 }
 
+/** With no check result at all "Updates" has no data to act on: the filter goes back to "All". */
+function withoutUpdatesFilter(filters: Filters): Filters {
+  return filters.show === "updates" ? { ...filters, show: "all" } : filters;
+}
+
+/** The context menu's actions that the header offers for the selection (issue #314). */
+type BulkAction = Exclude<MenuAction, "select" | "clear">;
+
+function isBulk(item: MenuItem): item is MenuItem & { action: BulkAction } {
+  return item.action !== "select" && item.action !== "clear";
+}
+
+const BUSY_REASON = "Wait for the current operation to finish.";
+
 function byFolder(updates: AddonUpdate[]): Map<string, AddonUpdate> {
   return new Map(updates.map((update) => [update.folder, update]));
 }
@@ -143,6 +165,13 @@ type Load =
   | { state: "loading" }
   | { state: "error"; message: string }
   | { state: "ready"; addons: InstalledAddon[] };
+
+/** The sort menu of the toolbar, in menu order (issue #313). */
+const SORT_OPTIONS: readonly { key: SortKey; label: string }[] = [
+  { key: "title", label: "Title" },
+  { key: "author", label: "Author" },
+  { key: "modified", label: "Modified" },
+];
 
 const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium" });
 
@@ -159,12 +188,12 @@ export function AddonTable({
   onInstallZip,
   zipBusy = false,
   onChanged,
-  autoUpdateLine,
+  statusLine,
 }: Props) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<Sort>(defaultSort);
-  // Open groups (by main folder): the other folders appear below the row.
+  // Open rows (by main folder): the details and the other folders appear below the row.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   function toggle(folder: string) {
@@ -176,8 +205,10 @@ export function AddonTable({
     });
   }
   // The last valid result stays visible even during a new check, so the table and the
-  // "Only with updates" filter do not empty while waiting.
+  // "Updates" filter do not empty while waiting.
   const [updates, setUpdates] = useState<Map<string, AddonUpdate> | undefined>();
+  // When that result was read (ISO 8601): the "checked HH:MM" of the status line.
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
   // The component does not remount when changing installation: every response, automatic or
@@ -196,10 +227,13 @@ export function AddonTable({
         // Dropped while in flight (`forgetUpdateChecks`): a newer check follows and owns the
         // cache and the screen, so this older result touches neither.
         if (checkGeneration(id) !== generation) return;
+        const at = new Date().toISOString();
         updatesCache.set(id, result);
+        checkedAtCache.set(id, at);
         errorCache.delete(id);
         if (currentId.current !== id) return;
         setUpdates(byFolder(result));
+        setCheckedAt(at);
         setChecking(false);
       })
       .catch((err) => {
@@ -209,7 +243,7 @@ export function AddonTable({
         setCheckError(errorMessage(err));
         setChecking(false);
         // With no results at all the filter has no data to act on: it is removed.
-        if (!updatesCache.has(id)) setFilters((f) => ({ ...f, onlyUpdates: false }));
+        if (!updatesCache.has(id)) setFilters(withoutUpdatesFilter);
       });
   }, [installation.id]);
 
@@ -217,6 +251,7 @@ export function AddonTable({
   useEffect(() => {
     const cached = updatesCache.get(installation.id);
     setUpdates(cached ? byFolder(cached) : undefined);
+    setCheckedAt(checkedAtCache.get(installation.id) ?? null);
     setChecking(false);
     setCheckError(errorCache.get(installation.id) ?? null);
     if (claimAutoCheck(installation.id)) void runCheck();
@@ -245,8 +280,10 @@ export function AddonTable({
         // check that follows (`rescan` or `runCheck`) owns the cache and the statuses.
         if (checkGeneration(id) !== generation) return;
         const check = refreshCheck(result);
+        const at = new Date().toISOString();
         if (check.error === null) {
           updatesCache.set(id, check.updates);
+          checkedAtCache.set(id, at);
           errorCache.delete(id);
         } else {
           errorCache.set(id, check.error);
@@ -254,18 +291,19 @@ export function AddonTable({
         if (currentId.current !== id) return;
         if (check.error === null) {
           setUpdates(byFolder(check.updates));
+          setCheckedAt(at);
         } else {
           // As in `runCheck`: the last valid result stays visible next to the error, so a failed
           // check (no network) does not remove all the statuses. After an update
           // `updateProjects` has already emptied the cache, so nothing stale remains there.
           setCheckError(check.error);
           // With no results at all the filter has no data to act on: it is removed.
-          if (!updatesCache.has(id)) setFilters((f) => ({ ...f, onlyUpdates: false }));
+          if (!updatesCache.has(id)) setFilters(withoutUpdatesFilter);
         }
       })
       .catch((err) => {
         if (currentId.current !== id) return;
-        // A read error does not remove the table already shown: it is reported above.
+        // A read error does not remove the table already shown: it goes to the status area.
         setLoad((previous) =>
           previous.state === "ready" ? previous : { state: "error", message: errorMessage(err) },
         );
@@ -551,6 +589,11 @@ export function AddonTable({
     () => visibleGroups(groups, filters, sort, updates, shownExcluded),
     [groups, filters, sort, updates, shownExcluded],
   );
+  // The counts of the "All / Updates / Errors" filter: the rows each choice would show.
+  const counts = useMemo(
+    () => showCounts(groups, filters, updates, shownExcluded),
+    [groups, filters, updates, shownExcluded],
+  );
   // Held projects (issue #291) are left out of both counts, read on the same state as the rows.
   const updateCount = countUpdates(groups, updates, shownExcluded);
   // "Update all" counts the projects the app can update on its own: one per group, without
@@ -620,7 +663,7 @@ export function AddonTable({
     }
   }
 
-  function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, row: string, hasOthers: boolean) {
+  function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, row: string) {
     // The controls inside the row (links, version menu, buttons) keep their keys.
     if (event.target !== event.currentTarget) return;
     const element = event.currentTarget;
@@ -631,7 +674,7 @@ export function AddonTable({
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       if (selection !== null) setSelection((previous) => toggleRow(previous, row));
-      else if (hasOthers) toggle(row);
+      else toggle(row);
     } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       const rows = [
         ...(element.parentElement?.querySelectorAll<HTMLElement>("tr[data-row]") ?? []),
@@ -648,32 +691,30 @@ export function AddonTable({
   function chooseAction(action: MenuAction) {
     if (!menu) return;
     const targets = menuTargets(groups, selection, menu.row);
+    // Focus goes back to the row, except for Remove: there it goes to the confirmation bar.
+    closeMenu(action !== "remove");
+    if (action === "select") setSelection((previous) => selectRow(previous, menu.row));
+    else runAction(action, targets);
+  }
+
+  /** An action of the context menu or, for the selection, of the header (issue #314). */
+  function runAction(action: Exclude<MenuAction, "select">, targets: AddonGroup[]) {
     switch (action) {
-      case "select":
-        setSelection((previous) => selectRow(previous, menu.row));
-        closeMenu(true);
-        break;
       case "clear":
         setSelection(null);
-        closeMenu(true);
         break;
       case "reinstall":
-        closeMenu(true);
         updateProjects(reinstallProjects(targets, updates), true);
         break;
       case "update":
-        closeMenu(true);
         updateProjects(heldUpdateProjects(targets, updates, excluded));
         break;
       case "autoUpdate": {
         const projects = exclusionProjects(targets, updates);
-        closeMenu(true);
         void saveExclusion(projects, exclusionChoice(projects, excluded));
         break;
       }
       case "remove":
-        // Focus goes to the confirmation bar, not to the row.
-        closeMenu(false);
         setConfirming(targets);
         break;
     }
@@ -703,6 +744,85 @@ export function AddonTable({
     setFilters((previous) => ({ ...previous, ...patch }));
   }
 
+  // The header (issue #314): one primary action, the rest secondary or behind the "⋯" menu.
+  const primary = primaryAction({
+    selecting: selection !== null,
+    running,
+    updatable: updatableIds.length,
+  });
+  const selected = selection !== null ? groups.filter((g) => selection.has(g.main.folder)) : [];
+  // The bulk actions are the context menu's items for the selection, with the same reasons
+  // when they are off; "Clear selection" is in the status line.
+  const bulkActions = selection !== null ? menuItems(selected, true, menuState).filter(isBulk) : [];
+  const reloadReason = rescanning
+    ? "The addons are being reloaded."
+    : busy
+      ? BUSY_REASON
+      : load.state === "loading"
+        ? "Wait for the addons to be loaded."
+        : null;
+  const moreItems: RowMenuItem[] = [
+    ...(onInstallZip
+      ? [
+          {
+            label: "Install from zip…",
+            hint: "Install an addon zip downloaded from a website; you can also drop it into the window",
+            disabledReason: zipBusy
+              ? "Wait for the zip to be installed."
+              : busy
+                ? BUSY_REASON
+                : null,
+            onSelect: onInstallZip,
+          },
+        ]
+      : []),
+    {
+      label: rescanning ? "Reloading…" : "Reload addons",
+      hint: "Reads the Interface/AddOns folder again",
+      disabledReason: reloadReason,
+      onSelect: () => void rescan(true),
+    },
+    {
+      label: "Hide LoadOnDemand modules",
+      checked: filters.hideLoadOnDemand,
+      onSelect: () => update({ hideLoadOnDemand: !filters.hideLoadOnDemand }),
+    },
+  ];
+  // The status line: the installation, then the selection or the counts of the list.
+  const summary = (
+    <>
+      {/* The installation labels the section together with the title. */}
+      <span id="addons-installation">{installation.name}</span>
+      {selection !== null ? (
+        <>
+          {" · "}
+          <span className="status-selection">{selectedText(selection)}</span>{" "}
+          <button
+            className="link inline"
+            aria-label="Clear selection"
+            onClick={() => setSelection(null)}
+          >
+            Clear
+          </button>
+        </>
+      ) : (
+        load.state === "ready" &&
+        statusParts({
+          total: groups.length,
+          visible: visible.length,
+          // Unknown while the held addons are not read: no count that may include them.
+          toUpdate: updateCount,
+          checked: updates && checkedAt !== null ? clockTime(checkedAt) : null,
+        })
+          .map((part) => ` · ${part}`)
+          .join("")
+      )}
+    </>
+  );
+
+  const ascending = sort.direction === "asc";
+  const sortLabel = SORT_OPTIONS.find((option) => option.key === sort.key)?.label ?? "";
+
   function header(key: SortKey, label: string) {
     const active = sort.key === key;
     const ariaSort = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
@@ -719,100 +839,105 @@ export function AddonTable({
   }
 
   return (
-    <section ref={sectionRef} className="addons" aria-labelledby="addons-title">
+    <section
+      ref={sectionRef}
+      className="addons"
+      aria-labelledby="addons-title addons-installation"
+    >
       <header className="section-header addons-header">
         <h2 id="addons-title" className="addons-title">
           Addons
-          {/* The installation stays in the title: the section is labelled by this text. */}
-          <span className="addons-count">
-            {installation.name}
-            {load.state === "ready" &&
-              ` · ${visible.length === groups.length ? groups.length : `${visible.length} of ${groups.length}`} ${groups.length === 1 ? "addon" : "addons"}`}
-            {/* Unknown while the held addons are not read: no count that may include them. */}
-            {load.state === "ready" &&
-              updateCount !== null &&
-              updateCount > 0 &&
-              ` · ${updateCount} to update`}
-          </span>
         </h2>
         <div className="section-actions">
-          {selection !== null && (
-            <span className="selection-status">
-              <span className="count">{selectedText(selection)}</span>
-              <button className="link" onClick={() => setSelection(null)}>
-                Clear selection
-              </button>
-            </span>
-          )}
-          {onInstallZip && (
-            <button
-              className="button secondary"
-              onClick={onInstallZip}
-              disabled={zipBusy || busy}
-              title="Install an addon zip downloaded from a website; you can also drop it into the window"
-            >
-              Install from zip…
-            </button>
-          )}
           <button
-            className="button secondary"
-            onClick={() => void rescan(true)}
-            disabled={rescanning || busy || load.state === "loading"}
-            title="Reads the Interface/AddOns folder again"
+            className={primary === "check" ? "button" : "button secondary"}
+            onClick={() => void runCheck()}
+            disabled={checking || busy}
           >
-            {rescanning ? "Reloading…" : "Reload addons"}
+            {checking ? "Checking…" : "Check for updates"}
           </button>
-          {/* A single primary button (D20, D42): "Update all" is soft like the rows'
-              Update buttons. */}
-          {(running || updatableIds.length > 0) && (
+          {/* A single primary button (D20, D42): "Update all" while there is something to
+              update, otherwise the check above. */}
+          {primary === "updateAll" && (
             <button
-              className="button soft"
+              className="button"
               onClick={() => updateProjects(updatableIds)}
               disabled={busy || checking || versionSaving !== null || heldUnknown !== null}
               title={running ? undefined : (heldUnknown ?? undefined)}
             >
-              {running
-                ? position > 0
-                  ? `${reinstalling ? "Reinstalling" : "Updating"} ${position} of ${updating.size}`
-                  : reinstalling
-                    ? "Reinstalling…"
-                    : "Updating…"
-                : heldUnknown !== null
-                  ? // A count that could still include held addons is not shown.
-                    "Update all"
-                  : `Update all (${updatableIds.length})`}
+              {updateAllLabel({
+                running,
+                reinstalling,
+                position,
+                total: updating.size,
+                updatable: updatableIds.length,
+                heldUnknown: heldUnknown !== null,
+              })}
             </button>
           )}
-          <button className="button" onClick={() => void runCheck()} disabled={checking || busy}>
-            {checking ? "Checking…" : "Check for updates"}
-          </button>
+          {/* With a selection the bulk actions take the primary place. */}
+          {primary === "selection" &&
+            bulkActions.map((item) => (
+              <button
+                key={item.action}
+                className="button secondary"
+                disabled={item.disabledReason !== null}
+                title={item.disabledReason ?? undefined}
+                onClick={(event) => {
+                  // "Cancel" in the removal confirmation brings focus back here.
+                  returnFocus.current = event.currentTarget;
+                  runAction(item.action, selected);
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          <RowMenu
+            label="More actions"
+            items={moreItems}
+            triggerClassName="button secondary icon"
+          />
         </div>
       </header>
 
-      {autoUpdateLine}
+      {statusLine ? (
+        statusLine(summary)
+      ) : (
+        <div className="status-line">
+          <p>{summary}</p>
+        </div>
+      )}
 
+      {/* The messages are drawn in the status area (issue #315), not here: one that appears or
+          goes away does not move the table. Each one stays until it is dismissed or its owner
+          state changes. */}
       {checkError && (
-        <p className="message error" role="alert">
+        <StatusMessage
+          error
+          onDismiss={() => {
+            // Dismissed for the installation, not only for this visit.
+            errorCache.delete(installation.id);
+            setCheckError(null);
+          }}
+        >
           {checkError}
-        </p>
+        </StatusMessage>
       )}
       {rescanError && (
-        <p className="message error" role="alert">
+        <StatusMessage error onDismiss={() => setRescanError(null)}>
           {rescanError}
-        </p>
+        </StatusMessage>
       )}
+      {/* "Dismiss" only hides this one: the error still keeps "Update all" off. */}
       {excludedError && (
-        <p className="message error" role="alert">
+        <StatusMessage key={excludedError} error>
           Could not read the held addons: {excludedError}
-        </p>
+        </StatusMessage>
       )}
       {exclusionError && (
-        <p className="message error" role="alert">
-          {exclusionError}{" "}
-          <button className="link subtle" onClick={() => setExclusionError(null)}>
-            Dismiss
-          </button>
-        </p>
+        <StatusMessage error onDismiss={() => setExclusionError(null)}>
+          {exclusionError}
+        </StatusMessage>
       )}
       {confirming && (
         <div
@@ -846,16 +971,26 @@ export function AddonTable({
         </div>
       )}
       {removing && (
-        <p className="message muted" role="status">
-          Removing…
-        </p>
+        <StatusMessage progress role="status">
+          <span className="muted">Removing…</span>
+        </StatusMessage>
       )}
-      {removalResult && <RemovalSummary result={removalResult} />}
-      {updateResult && <UpdateSummary result={updateResult} />}
+      {removalResult && (
+        <RemovalSummary result={removalResult} onDismiss={() => setRemovalResult(null)} />
+      )}
+      {updateResult && (
+        <UpdateSummary
+          result={updateResult}
+          onDismiss={() => {
+            updateResults.delete(installation.id);
+            setUpdateResult(null);
+          }}
+        />
+      )}
       {versionTypesError && (
-        <p className="message error" role="alert">
+        <StatusMessage error onDismiss={() => setVersionTypesError(null)}>
           Could not load the game versions: {versionTypesError}
-        </p>
+        </StatusMessage>
       )}
 
       {load.state === "loading" && <p className="muted">Loading addons…</p>}
@@ -895,14 +1030,6 @@ export function AddonTable({
                 </option>
               ))}
             </select>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={filters.hideLoadOnDemand}
-                onChange={(event) => update({ hideLoadOnDemand: event.target.checked })}
-              />
-              Hide LoadOnDemand modules
-            </label>
             {sources.length > 1 && (
               <select
                 className="select"
@@ -920,128 +1047,151 @@ export function AddonTable({
                 ))}
               </select>
             )}
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={filters.onlyErrors}
-                onChange={(event) => update({ onlyErrors: event.target.checked })}
-              />
-              Only with errors
-            </label>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={filters.onlyUpdates}
-                disabled={!updates}
-                onChange={(event) => update({ onlyUpdates: event.target.checked })}
-              />
-              Only with updates
-            </label>
+            <div className="segmented" role="group" aria-label="Show">
+              {showOptions(counts, updates !== undefined).map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  aria-pressed={filters.show === option.id}
+                  disabled={option.disabled}
+                  onClick={() => update({ show: option.id })}
+                >
+                  {option.label}
+                  {option.count !== null && <span className="segment-count">{option.count}</span>}
+                </button>
+              ))}
+            </div>
+            <div className="sort-control">
+              <select
+                className="select"
+                aria-label="Sort by"
+                value={sort.key}
+                onChange={(event) => setSort(nextSort(sort, event.target.value as SortKey))}
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="direction"
+                aria-label={`${sortLabel}, ${ascending ? "ascending" : "descending"}. Reverse order`}
+                title={ascending ? "Ascending" : "Descending"}
+                onClick={() => setSort(nextSort(sort, sort.key))}
+              >
+                {ascending ? "↑" : "↓"}
+              </button>
+            </div>
           </div>
 
           {visible.length === 0 ? (
             <p className="empty">No addons match the search or filters: clear them to see every addon.</p>
           ) : (
             <div className="table-wrap">
-              <table className="addon-table">
+              <table className="addon-table installed-table">
                 <thead>
                   <tr>
-                    {header("title", "Title")}
-                    <th>Folder</th>
+                    {header("title", "Addon")}
                     <th>Version</th>
-                    {header("author", "Author")}
-                    <th>Interface</th>
-                    {header("modified", "Modified")}
-                    <th>CurseForge</th>
-                    <th>Update</th>
+                    <th>Source</th>
+                    <th className="status-cell">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {visible.map(({ main: addon, others }) => {
                     const error = addon.error ?? others.find((o) => o.error)?.error ?? null;
                     const update = groupUpdate({ main: addon, others }, updates);
-                    const hasOthers = others.length > 0;
-                    const open = hasOthers && expanded.has(addon.folder);
+                    const open = expanded.has(addon.folder);
                     const isSelected = selection?.has(addon.folder) ?? false;
+                    const version = versionCell(addon.version, update);
                     const classes = [
+                      "expandable",
                       error ? "has-error" : "",
-                      hasOthers || selection !== null ? "expandable" : "",
-                      open ? "open" : "",
                       isSelected ? "selected" : "",
-                    ].join(" ");
+                    ]
+                      .filter(Boolean)
+                      .join(" ");
                     return (
                       <Fragment key={addon.folder}>
                         <tr
                           data-row={addon.folder}
-                          className={classes.replace(/\s+/g, " ").trim() || undefined}
+                          className={classes}
                           tabIndex={addon.folder === tabStop ? 0 : -1}
                           aria-selected={selection !== null ? isSelected : undefined}
                           onFocus={(event) => {
                             if (event.target === event.currentTarget) setFocusRow(addon.folder);
                           }}
-                          onClick={
-                            selection !== null
-                              ? (event) => {
-                                  // A control inside the row (link, version menu, buttons)
-                                  // performs its action and does not change the selection.
-                                  if (isControl(event.target, event.currentTarget)) return;
-                                  setSelection((previous) => toggleRow(previous, addon.folder));
-                                }
-                              : hasOthers
-                                ? () => toggle(addon.folder)
-                                : undefined
-                          }
+                          onClick={(event) => {
+                            // A control inside the row (link, version menu, buttons)
+                            // performs its action and neither selects nor opens the row.
+                            if (isControl(event.target, event.currentTarget)) return;
+                            if (selection !== null) {
+                              setSelection((previous) => toggleRow(previous, addon.folder));
+                            } else {
+                              toggle(addon.folder);
+                            }
+                          }}
                           onContextMenu={(event) => onRowContextMenu(event, addon.folder)}
-                          onKeyDown={(event) => onRowKeyDown(event, addon.folder, hasOthers)}
+                          onKeyDown={(event) => onRowKeyDown(event, addon.folder)}
                         >
                           <td>
-                            {hasOthers ? (
+                            <div className="addon-cell">
                               <button
                                 className="chevron"
                                 aria-expanded={open}
-                                aria-label={`${open ? "Hide" : "Show"} the folders of ${displayTitle(addon)}`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  toggle(addon.folder);
-                                }}
+                                aria-label={`${open ? "Hide" : "Show"} the details of ${displayTitle(addon)}`}
+                                onClick={() => toggle(addon.folder)}
                               >
                                 {open ? "▾" : "▸"}
                               </button>
-                            ) : (
-                              <span className="chevron-space" />
-                            )}
-                            <span className="addon-title" title={addon.notes ?? undefined}>
-                              {displayTitle(addon)}
-                            </span>
-                            {/* `aria-selected` on a table row is not read by every screen
-                                reader: the state is also in the row's text. */}
-                            {isSelected && <span className="visually-hidden"> (selected)</span>}
-                            {isExcluded(update, shownExcluded) && (
-                              <span className="pill addon-pill" title={EXCLUDED_TITLE}>
-                                Held
-                              </span>
-                            )}
-                            {error && <span className="addon-error">{error}</span>}
+                              <div className="addon-main">
+                                <span className="addon-title" title={addon.notes ?? undefined}>
+                                  {displayTitle(addon)}
+                                </span>
+                                {/* A collapsed row still says the addon has more folders: the
+                                    names are in the tooltip and, for screen readers, in the
+                                    text (a span without a role does not always read a label). */}
+                                {others.length > 0 && (
+                                  <span
+                                    className="more-folders"
+                                    title={others.map((o) => o.folder).join(", ")}
+                                  >
+                                    <span aria-hidden="true">+{others.length}</span>
+                                    <span className="visually-hidden">
+                                      {" "}
+                                      and {others.length} more{" "}
+                                      {others.length === 1 ? "folder" : "folders"}:{" "}
+                                      {others.map((o) => o.folder).join(", ")}
+                                    </span>
+                                  </span>
+                                )}
+                                {/* `aria-selected` on a table row is not read by every screen
+                                    reader: the state is also in the row's text. */}
+                                {isSelected && <span className="visually-hidden"> (selected)</span>}
+                                {isExcluded(update, shownExcluded) && (
+                                  <span className="pill addon-pill" title={EXCLUDED_TITLE}>
+                                    Held
+                                  </span>
+                                )}
+                                {addon.author && (
+                                  <span className="addon-author">{addon.author}</span>
+                                )}
+                                {error && <span className="addon-error">{error}</span>}
+                              </div>
+                            </div>
                           </td>
-                          <td className="mono">
-                            {addon.folder}
-                            {hasOthers && (
-                              <span
-                                className="more-folders"
-                                aria-label={`and ${others.length} more ${others.length === 1 ? "folder" : "folders"}: ${others.map((o) => o.folder).join(", ")}`}
-                              >
-                                +{others.length}
-                              </span>
+                          <td className="version-cell">
+                            {version.installed}
+                            {version.latest !== null && (
+                              <>
+                                {" "}
+                                <span aria-hidden="true">→</span>
+                                <span className="visually-hidden">update available:</span>{" "}
+                                <span className="version-latest">{version.latest}</span>
+                              </>
                             )}
                           </td>
-                          <td>{addon.version ?? "—"}</td>
-                          <td>
-                            <span className="clip" title={addon.author ?? undefined}>
-                              {addon.author ?? "—"}
-                            </span>
-                          </td>
-                          <InterfaceCell versions={addon.interface} flavor={installation.flavor} />
-                          <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
                           <ProjectCell
                             update={update}
                             versionTypes={versionTypes}
@@ -1075,6 +1225,29 @@ export function AddonTable({
                             onUpdate={updateProjects}
                           />
                         </tr>
+                        {open && (
+                          <tr className="details-row">
+                            <td colSpan={4}>
+                              <dl className="addon-details">
+                                <dt>{others.length > 0 ? "Folders" : "Folder"}</dt>
+                                <dd className="mono">
+                                  {[addon, ...others].map((a) => a.folder).join(", ")}
+                                </dd>
+                                <dt>Interface</dt>
+                                <dd>
+                                  <InterfaceValue
+                                    versions={addon.interface}
+                                    flavor={installation.flavor}
+                                  />
+                                </dd>
+                                <dt>Modified</dt>
+                                <dd>{formatModified(addon.modifiedMs)}</dd>
+                                <dt>Notes</dt>
+                                <dd>{addon.notes?.trim() || "—"}</dd>
+                              </dl>
+                            </td>
+                          </tr>
+                        )}
                         {open &&
                           others.map((other) => (
                             <tr
@@ -1085,24 +1258,22 @@ export function AddonTable({
                                 <span className="sub-title" title={other.notes ?? undefined}>
                                   {displayTitle(other)}
                                 </span>
+                                <span className="sub-folder mono">{other.folder}</span>
                                 {other.error && (
                                   <span className="addon-error">{other.error}</span>
                                 )}
                               </td>
-                              <td className="mono">{other.folder}</td>
-                              <td>{other.version ?? "—"}</td>
-                              <td>
-                                <span className="clip" title={other.author ?? undefined}>
-                                  {other.author ?? "—"}
-                                </span>
+                              <td className="version-cell">
+                                {versionCell(other.version).installed}
                               </td>
-                              <InterfaceCell
-                                versions={other.interface}
-                                flavor={installation.flavor}
-                              />
-                              <td className="nowrap">{formatModified(other.modifiedMs)}</td>
-                              <td />
-                              <td />
+                              <td colSpan={2}>
+                                <InterfaceValue
+                                  versions={other.interface}
+                                  flavor={installation.flavor}
+                                />
+                                {" · "}
+                                {formatModified(other.modifiedMs)}
+                              </td>
                             </tr>
                           ))}
                       </Fragment>
@@ -1146,17 +1317,17 @@ function menuTitle(groups: AddonGroup[], row: string): string {
 }
 
 /** Summary of the last removal, with the reason for each folder not removed. */
-function RemovalSummary({ result }: { result: RemovalResult }) {
+function RemovalSummary({ result, onDismiss }: { result: RemovalResult; onDismiss: () => void }) {
   if ("error" in result) {
     return (
-      <p className="message error" role="alert">
+      <StatusMessage error onDismiss={onDismiss}>
         Remove failed: {result.error}
-      </p>
+      </StatusMessage>
     );
   }
   const problem = result.errors.length > 0 || result.warning !== null;
   return (
-    <div className="message update-summary" role={problem ? "alert" : "status"}>
+    <StatusMessage role={problem ? "alert" : "status"} onDismiss={onDismiss}>
       <p>{result.text}</p>
       {result.warning && <p className="error">{result.warning}</p>}
       {result.errors.length > 0 && (
@@ -1168,7 +1339,7 @@ function RemovalSummary({ result }: { result: RemovalResult }) {
           ))}
         </ul>
       )}
-    </div>
+    </StatusMessage>
   );
 }
 
@@ -1323,7 +1494,7 @@ function UpdateCell({
 }: UpdateCellProps) {
   if (updating) {
     return (
-      <td className="nowrap">
+      <td className="status-cell nowrap">
         <ProgressBar
           value={progressPercent(progress)}
           label={progressLabel(progress, reinstalling ? "Reinstalling…" : "Updating…")}
@@ -1332,11 +1503,11 @@ function UpdateCell({
       </td>
     );
   }
-  if (!update) return <td className="muted">{checking ? "…" : ""}</td>;
+  if (!update) return <td className="status-cell muted">{checking ? "…" : ""}</td>;
   switch (update.status) {
     case "updateAvailable":
       return (
-        <td className="nowrap" title={installedTitle(update, update.latest.date)}>
+        <td className="status-cell nowrap" title={installedTitle(update, update.latest.date)}>
           {/* A held project the app cannot install keeps the pill below: the menu has no
               update for it, so the held tooltip would promise one. */}
           {held && isUpdatable(update) ? (
@@ -1364,7 +1535,7 @@ function UpdateCell({
       );
     case "upToDate":
       return (
-        <td className="nowrap" title={installedTitle(update)}>
+        <td className="status-cell nowrap" title={installedTitle(update)}>
           <span className="pill ok addon-pill">Up to date</span>
         </td>
       );
@@ -1379,7 +1550,7 @@ function UpdateCell({
       );
     case "error":
       return (
-        <td className="nowrap">
+        <td className="status-cell nowrap">
           {/* The full message in the tooltip; for screen reader users also in the text. */}
           <span className="pill danger addon-pill" title={update.message}>
             Error<span className="visually-hidden">: {update.message}</span>
@@ -1387,16 +1558,16 @@ function UpdateCell({
         </td>
       );
     case "notMatched":
-      return <td />;
+      return <td className="status-cell" />;
   }
 }
 
 /** A single interface version and the rest as `+N`; the full list in the tooltip. */
-function InterfaceCell({ versions, flavor }: { versions: number[]; flavor: string }) {
+function InterfaceValue({ versions, flavor }: { versions: number[]; flavor: string }) {
   const summary = interfaceSummary(versions, flavor);
-  if (!summary) return <td className="mono">—</td>;
+  if (!summary) return <span className="mono">—</span>;
   return (
-    <td className="mono" title={summary.title}>
+    <span className="mono" title={summary.title}>
       {summary.shown}
       {summary.more > 0 && (
         <span className="more-folders">
@@ -1408,7 +1579,7 @@ function InterfaceCell({ versions, flavor }: { versions: number[]; flavor: strin
           </span>
         </span>
       )}
-    </td>
+    </span>
   );
 }
 
@@ -1420,12 +1591,12 @@ function installedTitle(update: AddonUpdate, latestDate?: string): string | unde
 }
 
 /** Summary of the last update, with the reason for each project skipped or in error. */
-function UpdateSummary({ result }: { result: UpdateResult }) {
+function UpdateSummary({ result, onDismiss }: { result: UpdateResult; onDismiss: () => void }) {
   if ("error" in result) {
     return (
-      <p className="message error" role="alert">
+      <StatusMessage error onDismiss={onDismiss}>
         {result.reinstall ? "Reinstall failed" : "Update failed"}: {result.error}
-      </p>
+      </StatusMessage>
     );
   }
   const count = (status: UpdateOutcome["status"]) =>
@@ -1441,7 +1612,7 @@ function UpdateSummary({ result }: { result: UpdateResult }) {
   // An updated project appears only with a message (for example "Installed from GitHub").
   const details = result.outcomes.filter((o) => o.status !== "updated" || o.message);
   return (
-    <div className="message update-summary" role="status">
+    <StatusMessage onDismiss={onDismiss}>
       <p>
         {parts.length > 0
           ? parts.join(", ")
@@ -1462,6 +1633,6 @@ function UpdateSummary({ result }: { result: UpdateResult }) {
           ))}
         </ul>
       )}
-    </div>
+    </StatusMessage>
   );
 }
