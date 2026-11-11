@@ -237,7 +237,8 @@ h2 {
    as the window. Header and footer never scroll; the content takes what is left and each tab
    scrolls inside its own region:
    - Installed: `.table-wrap` (the table);
-   - Search: `.results-scroll` (the results and "Load more") and `.detail-scroll` (the detail);
+   - Search: `.results-scroll` (the results and "Load more") and `.detail-scroll` (the detail,
+     in place of the results or, in a wide window, in a panel next to them: issue #317);
    - Options: `.options-scroll` (the whole panel).
    Every box between `.app-main` and a scrolling region is a column with `min-height: 0`, so
    the region gets the height left by what sits above it. In a window too short for that, the
@@ -1725,15 +1726,97 @@ label.setting-label {
   border-top: 1px solid var(--border);
 }
 
-/* Addon detail: it takes the place of the results in the Search tab. */
+/* Addon detail in the Search tab. It takes the place of the results, with "Back to results";
+   where the Search area is wide enough it opens in a panel next to them (D48, issue #317).
+   The choice is a container query on the Search area, not on the window, and nothing in the
+   code knows the width: `.with-detail` only says that a detail is open. The results and the
+   panel are the two scrolling regions that already exist, side by side: each scrolls on its
+   own. */
+.search-page {
+  container: search / inline-size;
+}
+
+.search-page.with-detail {
+  flex-direction: row;
+  gap: var(--space-5);
+}
+
+.search-page > .search-results,
+.detail-scroll {
+  min-width: 0;
+}
+
+.search-page.with-detail > .search-results {
+  display: none;
+}
+
+/* The detail measures itself: its two columns and its header follow the width it gets, in
+   the panel as in the whole tab. */
+.detail-scroll {
+  container: detail / inline-size;
+}
 
 .detail {
   max-width: 72rem;
 }
 
+.detail-nav {
+  display: flex;
+}
+
 .back {
   margin-bottom: 20px;
   font-size: var(--text-base);
+}
+
+/* The panel's close button: only side by side. */
+.detail-close {
+  display: none;
+  margin-bottom: var(--space-2);
+}
+
+@container search (min-width: 1100px) {
+  .search-page.with-detail > .search-results {
+    display: flex;
+  }
+
+  /* The panel is a card like the results', as tall as the tab. */
+  .search-page > .detail-scroll {
+    flex: 0 0 clamp(26rem, 38%, 34rem);
+    box-sizing: border-box;
+    padding: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+
+  .detail-nav {
+    justify-content: flex-end;
+  }
+
+  .back {
+    display: none;
+  }
+
+  .detail-close {
+    display: inline-flex;
+  }
+
+  /* The results next to the panel: the summary and the author give way, and the name takes
+     the width they leave, shortened with "…" like the summary was. */
+  .with-detail .catalog-table .summary-cell,
+  .with-detail .catalog-table .author-cell {
+    display: none;
+  }
+
+  .with-detail .catalog-table .name-cell {
+    width: 100%;
+    max-width: 0;
+  }
+
+  .with-detail .catalog-name {
+    max-width: none;
+  }
 }
 
 .detail-header {
@@ -1816,8 +1899,9 @@ label.setting-label {
   gap: var(--space-2);
 }
 
-/* Description on the left, files and dependencies in a narrow column on the right; in the small
-   window a single column. */
+/* Description on the left, files and dependencies in a narrow column on the right; in a narrow
+   detail (a small window, or the panel next to the results) a single column. 736px is the
+   width the detail has in an 800px window. */
 .detail-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
@@ -1825,9 +1909,20 @@ label.setting-label {
   align-items: start;
 }
 
-@media (max-width: 800px) {
+@container detail (max-width: 736px) {
   .detail-body {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Narrower still, the header's actions go below the name instead of squeezing it. */
+@container detail (max-width: 560px) {
+  .detail-header {
+    flex-wrap: wrap;
+  }
+
+  .detail-actions {
+    flex-basis: 100%;
   }
 }
 
