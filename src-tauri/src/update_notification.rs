@@ -10,6 +10,11 @@
 //! window is visible and focused (the user is already looking at the app), when the round has
 //! nothing to report, or when every pending update was already notified in this session and the
 //! round updated nothing. Manual updates never notify: only the automatic round calls this.
+//!
+//! A round the user requested (issue #304, the tray's "Check for updates") always reports its
+//! outcome, under the same setting and window rules: the pending updates even if already
+//! notified, "All addons are up to date" when nothing is pending, and "Could not check for
+//! updates" when nothing is pending because a check failed.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -66,9 +71,14 @@ impl Notified {
 /// `None` when the round has nothing to report (projects excluded by the user are not in
 /// `available`, so they never count) or when it updated nothing and all its pending updates are
 /// already in `notified`.
+///
+/// A `requested` round (issue #304) always has a notice: it ignores `notified` (the user asked),
+/// and with nothing to report it says "All addons are up to date", or "Could not check for
+/// updates" when an installation's check failed. The returned set is computed in the same way.
 pub fn decide(
     round: &RoundReport,
     notified: &HashSet<NotifiedUpdate>,
+    requested: bool,
 ) -> (Option<Notice>, HashSet<NotifiedUpdate>) {
     let pending: HashSet<NotifiedUpdate> = pending_projects(round)
         .map(|(report, available)| NotifiedUpdate {
@@ -86,14 +96,14 @@ pub fn decide(
             .sum(),
         AutoUpdateMode::Notify | AutoUpdateMode::Off => 0,
     };
-    let something_new = updated > 0 || !pending.is_subset(notified);
+    let something_new = requested || updated > 0 || !pending.is_subset(notified);
     let mut next = notified.clone();
     next.extend(pending);
     if !something_new {
         return (None, next);
     }
     let left = pending_updates(round);
-    let lines: Vec<String> = match round.mode {
+    let mut lines: Vec<String> = match round.mode {
         AutoUpdateMode::Notify => match left {
             0 => Vec::new(),
             1 => vec!["1 addon update available".to_owned()],
@@ -113,6 +123,17 @@ pub fn decide(
         }
         AutoUpdateMode::Off => Vec::new(),
     };
+    if requested && lines.is_empty() {
+        let check_failed = round
+            .installations
+            .iter()
+            .any(|report| report.check_error.is_some());
+        lines.push(if check_failed {
+            "Could not check for updates".to_owned()
+        } else {
+            "All addons are up to date".to_owned()
+        });
+    }
     let notice = (!lines.is_empty()).then(|| Notice {
         title: TITLE.to_owned(),
         body: lines.join("\n"),
@@ -120,9 +141,10 @@ pub fn decide(
     (notice, next)
 }
 
-/// Shows the notification for an automatic round, if [`decide`] returns one. Called by the round
-/// right after the tray is refreshed, without holding any lock of the round.
-pub fn show_round<R: Runtime>(app: &AppHandle<R>, round: &RoundReport) {
+/// Shows the notification for an automatic round, if [`decide`] returns one; `requested` for a
+/// round the user asked for. Called by the round right after the tray is refreshed, without
+/// holding any lock of the round.
+pub fn show_round<R: Runtime>(app: &AppHandle<R>, round: &RoundReport, requested: bool) {
     if !setting_on(app) || main_window_in_front(app) {
         return;
     }
@@ -131,7 +153,7 @@ pub fn show_round<R: Runtime>(app: &AppHandle<R>, round: &RoundReport) {
     };
     let notice = {
         let mut notified = state.lock();
-        let (notice, next) = decide(round, &notified);
+        let (notice, next) = decide(round, &notified, requested);
         *notified = next;
         notice
     };
@@ -240,7 +262,19 @@ mod tests {
     }
 
     fn body(round: &RoundReport, notified: &HashSet<NotifiedUpdate>) -> Option<String> {
-        let (notice, _) = decide(round, notified);
+        notice_body(round, notified, false)
+    }
+
+    fn requested_body(round: &RoundReport, notified: &HashSet<NotifiedUpdate>) -> Option<String> {
+        notice_body(round, notified, true)
+    }
+
+    fn notice_body(
+        round: &RoundReport,
+        notified: &HashSet<NotifiedUpdate>,
+        requested: bool,
+    ) -> Option<String> {
+        let (notice, _) = decide(round, notified, requested);
         notice.map(|notice| {
             assert_eq!(notice.title, "WoW-don");
             notice.body
@@ -339,10 +373,10 @@ mod tests {
             Notify,
             vec![report("retail", vec![available("1", 2), available("2", 2)])],
         );
-        let (notice, notified) = decide(&first, &HashSet::new());
+        let (notice, notified) = decide(&first, &HashSet::new(), false);
         assert!(notice.is_some());
         // The next round finds the same updates: nothing new.
-        let (notice, again) = decide(&first, &notified);
+        let (notice, again) = decide(&first, &notified, false);
         assert_eq!(notice, None);
         assert_eq!(again, notified);
         // A subset of them: nothing new either.
@@ -359,7 +393,7 @@ mod tests {
     #[test]
     fn something_new_reports_the_whole_count_again() {
         let first = round(Notify, vec![report("retail", vec![available("1", 2)])]);
-        let (_, notified) = decide(&first, &HashSet::new());
+        let (_, notified) = decide(&first, &HashSet::new(), false);
 
         // A newer file of an already-notified project is a new update.
         let newer = round(Notify, vec![report("retail", vec![available("1", 3)])]);
@@ -397,12 +431,84 @@ mod tests {
     #[test]
     fn the_notified_set_keeps_the_earlier_updates() {
         let first = round(Notify, vec![report("retail", vec![available("1", 2)])]);
-        let (_, notified) = decide(&first, &HashSet::new());
+        let (_, notified) = decide(&first, &HashSet::new(), false);
         let second = round(Notify, vec![report("retail", vec![available("2", 2)])]);
-        let (notice, notified) = decide(&second, &notified);
+        let (notice, notified) = decide(&second, &notified, false);
         assert!(notice.is_some());
         assert_eq!(notified.len(), 2);
         // The first one coming back is not new.
         assert_eq!(body(&first, &notified), None);
+    }
+
+    #[test]
+    fn a_requested_round_repeats_updates_already_notified() {
+        let first = round(
+            Notify,
+            vec![report("retail", vec![available("1", 2), available("2", 2)])],
+        );
+        let (_, notified) = decide(&first, &HashSet::new(), false);
+        assert_eq!(body(&first, &notified), None);
+        assert_eq!(
+            requested_body(&first, &notified).as_deref(),
+            Some("2 addon updates available")
+        );
+        // The set still records them, and a later scheduled round stays silent.
+        let (_, after) = decide(&first, &notified, true);
+        assert_eq!(after, notified);
+        assert_eq!(body(&first, &after), None);
+        // An update first reported by a requested round is not repeated by a scheduled one.
+        let fresh = round(Notify, vec![report("retail", vec![available("3", 2)])]);
+        let (_, after) = decide(&fresh, &HashSet::new(), true);
+        assert_eq!(body(&fresh, &after), None);
+    }
+
+    #[test]
+    fn a_requested_round_with_nothing_pending_says_all_is_up_to_date() {
+        let none = HashSet::new();
+        assert_eq!(
+            requested_body(&round(Notify, Vec::new()), &none).as_deref(),
+            Some("All addons are up to date")
+        );
+        assert_eq!(
+            requested_body(&round(Notify, vec![report("retail", Vec::new())]), &none).as_deref(),
+            Some("All addons are up to date")
+        );
+        // Install mode (the tray's "Update all", issue #305) uses the same text.
+        let all_updated = round(
+            Install,
+            vec![with_updated(
+                report("retail", vec![available("1", 2)]),
+                &["1"],
+            )],
+        );
+        assert_eq!(
+            requested_body(&all_updated, &none).as_deref(),
+            Some("1 addon updated")
+        );
+        assert_eq!(
+            requested_body(&round(Install, vec![report("retail", Vec::new())]), &none).as_deref(),
+            Some("All addons are up to date")
+        );
+    }
+
+    #[test]
+    fn a_requested_round_whose_check_failed_does_not_claim_up_to_date() {
+        let mut failed = report("retail", Vec::new());
+        failed.check_error = Some("The source did not answer.".to_owned());
+        assert_eq!(
+            requested_body(&round(Notify, vec![failed.clone()]), &HashSet::new()).as_deref(),
+            Some("Could not check for updates")
+        );
+        // A scheduled round with a failed check stays silent, as before.
+        assert_eq!(
+            body(&round(Notify, vec![failed.clone()]), &HashSet::new()),
+            None
+        );
+        // Updates found elsewhere are still reported.
+        let found = report("classic", vec![available("1", 2)]);
+        assert_eq!(
+            requested_body(&round(Notify, vec![failed, found]), &HashSet::new()).as_deref(),
+            Some("1 addon update available")
+        );
     }
 }

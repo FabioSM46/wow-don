@@ -1,9 +1,9 @@
 //! Tray icon and the "Close to tray" option (issue #158, D35).
 //!
-//! At startup [`create`] builds the icon with the "Show WoW-don" / "Quit" menu. If creation
-//! fails (on Linux, for example, without the AppIndicator library) the error is written to stderr
-//! and [`TrayStatus`] stays off; on Linux the icon counts as available only if something on the
-//! session bus shows it. Without a visible icon the X quits the app even with `closeToTray`
+//! At startup [`create`] builds the icon with the "Show WoW-don" / "Check for updates" / "Quit"
+//! menu. If creation fails (on Linux, for example, without the AppIndicator library) the error
+//! is written to stderr and [`TrayStatus`] stays off; on Linux the icon counts as available only
+//! if something on the session bus shows it. Without a visible icon the X quits the app even with `closeToTray`
 //! on, so the user is never left with a hidden window and no icon to reopen it.
 //!
 //! [`on_window_event`] intercepts the closing of the main window; [`on_run_event`]
@@ -12,6 +12,11 @@
 //! After every automatic round (D41, issue #202) [`show_round`] puts a non-clickable
 //! "N updates available" item above "Show WoW-don" and repeats it in the tooltip; text and tooltip
 //! come from the pure function [`round_summary`]. Without an icon nothing happens.
+//!
+//! "Check for updates" (issue #304) asks the automatic-update thread for an immediate check-only
+//! round ([`AutoUpdate::request_round`] in `notify` mode, whatever the saved mode). While that
+//! round is queued or running the item reads "Checking for updates…" and is disabled; the menu's
+//! texts come from the pure function [`menu_text`].
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,8 +25,8 @@ use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
 
-use crate::auto_update::{AvailableUpdate, InstallationReport, RoundReport};
-use crate::store::AppSettingsStore;
+use crate::auto_update::{AutoUpdate, AvailableUpdate, InstallationReport, RoundReport};
+use crate::store::{AppSettingsStore, AutoUpdateMode};
 
 /// The label of the main window (the one in `tauri.conf.json`, without `label`).
 pub(crate) const MAIN_WINDOW: &str = "main";
@@ -32,6 +37,7 @@ const TRAY_ID: &str = "wow-don";
 const MENU_SHOW: &str = "show";
 const MENU_QUIT: &str = "quit";
 const MENU_UPDATES: &str = "updates";
+const MENU_CHECK: &str = "check";
 const TOOLTIP: &str = "WoW-don";
 
 /// Whether the tray icon was created. State managed by Tauri, read by `get_settings`
@@ -79,7 +85,7 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .default_window_icon()
         .cloned()
         .ok_or_else(|| "the app has no icon".to_owned())?;
-    let menu = menu(app, None).map_err(|error| error.to_string())?;
+    let menu = menu(app, &menu_text(None, false)).map_err(|error| error.to_string())?;
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip(TOOLTIP)
@@ -94,21 +100,51 @@ fn build<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
-/// The tray menu: "Show WoW-don" and "Quit", with the non-clickable `updates` item above them
-/// when there is one.
-fn menu<R: Runtime>(app: &AppHandle<R>, updates: Option<&str>) -> tauri::Result<Menu<R>> {
+/// The tray menu: "Show WoW-don", "Check for updates" and "Quit", with the non-clickable
+/// `updates` item above them when there is one.
+fn menu<R: Runtime>(app: &AppHandle<R>, text: &MenuText) -> tauri::Result<Menu<R>> {
     let mut builder = MenuBuilder::new(app);
-    if let Some(text) = updates {
-        let item = MenuItemBuilder::with_id(MENU_UPDATES, text)
+    if let Some(updates) = &text.updates {
+        let item = MenuItemBuilder::with_id(MENU_UPDATES, updates)
             .enabled(false)
             .build(app)?;
         builder = builder.item(&item).separator();
     }
+    let check = MenuItemBuilder::with_id(MENU_CHECK, text.check)
+        .enabled(text.check_enabled)
+        .build(app)?;
     builder
         .text(MENU_SHOW, "Show WoW-don")
+        .item(&check)
         .separator()
         .text(MENU_QUIT, "Quit")
         .build()
+}
+
+/// The texts of the tray menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuText {
+    /// The non-clickable "N updates available" item; `None` without updates.
+    pub updates: Option<String>,
+    /// The "Check for updates" item.
+    pub check: &'static str,
+    /// Whether "Check for updates" can be clicked: not while a requested round is queued or
+    /// running.
+    pub check_enabled: bool,
+}
+
+/// The menu after `round` (or before any round), with `checking` when a requested round is
+/// queued or running.
+pub fn menu_text(round: Option<&RoundReport>, checking: bool) -> MenuText {
+    MenuText {
+        updates: round_summary(round).menu_item,
+        check: if checking {
+            "Checking for updates\u{2026}"
+        } else {
+            "Check for updates"
+        },
+        check_enabled: !checking,
+    }
 }
 
 /// Text of the menu item and tooltip after an automatic round.
@@ -178,7 +214,11 @@ pub fn show_round<R: Runtime>(app: &AppHandle<R>, round: Option<&RoundReport>) {
         return;
     };
     let summary = round_summary(round);
-    if let Ok(menu) = menu(app, summary.menu_item.as_deref()) {
+    // Read before touching the tray, with the status lock already released.
+    let checking = app
+        .try_state::<AutoUpdate>()
+        .is_some_and(|state| state.requested().is_some());
+    if let Ok(menu) = menu(app, &menu_text(round, checking)) {
         let _ = tray.set_menu(Some(menu));
     }
     let _ = tray.set_tooltip(Some(summary.tooltip));
@@ -187,6 +227,13 @@ pub fn show_round<R: Runtime>(app: &AppHandle<R>, round: Option<&RoundReport>) {
 fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match event.id().as_ref() {
         MENU_SHOW => show_main_window(app),
+        // Only queues the round: the automatic-update thread refreshes the menu to "Checking for
+        // updates…" and runs it. A click while one is queued is ignored.
+        MENU_CHECK => {
+            if let Some(state) = app.try_state::<AutoUpdate>() {
+                state.request_round(AutoUpdateMode::Notify);
+            }
+        }
         // `exit` emits `RunEvent::Exit`, where tauri-plugin-window-state writes the window
         // state (D28) also when the window is hidden.
         MENU_QUIT => app.exit(0),
@@ -502,6 +549,36 @@ mod tests {
         assert_eq!(
             round_summary(Some(&round(Install, vec![report(3, 3)]))),
             plain
+        );
+    }
+
+    #[test]
+    fn the_check_item_reads_checking_and_is_disabled_while_a_round_is_requested() {
+        use crate::store::AutoUpdateMode::Notify;
+        let idle = |updates: Option<&str>| MenuText {
+            updates: updates.map(str::to_owned),
+            check: "Check for updates",
+            check_enabled: true,
+        };
+        let checking = |updates: Option<&str>| MenuText {
+            updates: updates.map(str::to_owned),
+            check: "Checking for updates\u{2026}",
+            check_enabled: false,
+        };
+        assert_eq!(menu_text(None, false), idle(None));
+        assert_eq!(menu_text(None, true), checking(None));
+        let none = round(Notify, vec![report(0, 0)]);
+        assert_eq!(menu_text(Some(&none), false), idle(None));
+        assert_eq!(menu_text(Some(&none), true), checking(None));
+        // The count of the last round stays in view while the check runs.
+        let three = round(Notify, vec![report(3, 0)]);
+        assert_eq!(
+            menu_text(Some(&three), false),
+            idle(Some("3 updates available"))
+        );
+        assert_eq!(
+            menu_text(Some(&three), true),
+            checking(Some("3 updates available"))
         );
     }
 
