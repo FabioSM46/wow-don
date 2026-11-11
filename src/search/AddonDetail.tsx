@@ -96,10 +96,35 @@ export function AddonDetailView({
   }
   useEffect(focusLeave, [addon.id]);
   // A resize across the layout threshold hides the focused one: focus moves to the other
-  // instead of being lost.
-  function onLeaveBlur(event: FocusEvent<HTMLButtonElement>) {
-    if (event.relatedTarget === null && event.currentTarget.offsetParent === null) focusLeave();
+  // instead of being lost. `lastLeave` is the one that last held the focus, until the focus
+  // moves to another element. Engines differ on when a focused element that loses its box
+  // stops being the focused one, so there are two triggers with the same test: its blur, and
+  // an observer on the detail, whose width changes with the layout and which runs after
+  // that layout, whether the hidden button still has the focus or the page already took it.
+  const lastLeave = useRef<HTMLButtonElement | null>(null);
+  const rootRef = useRef<HTMLElement>(null);
+  function restoreLeaveFocus() {
+    const last = lastLeave.current;
+    if (last === null || last.offsetParent !== null) return;
+    const focused = document.activeElement;
+    if (focused === last || focused === document.body || focused === null) focusLeave();
   }
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const observer = new ResizeObserver(restoreLeaveFocus);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, []);
+  const leaveFocus = {
+    onFocus: (event: FocusEvent<HTMLButtonElement>) => {
+      lastLeave.current = event.currentTarget;
+    },
+    onBlur: (event: FocusEvent<HTMLButtonElement>) => {
+      if (event.relatedTarget !== null) lastLeave.current = null;
+      else if (event.currentTarget.offsetParent === null) focusLeave();
+    },
+  };
 
   useEffect(() => {
     if (!active) return;
@@ -122,9 +147,9 @@ export function AddonDetailView({
   const name = shown.name || `#${shown.id}`;
 
   return (
-    <article className="detail" aria-label={`${name} details`}>
+    <article ref={rootRef} className="detail" aria-label={`${name} details`}>
       <div className="detail-nav">
-        <button ref={backRef} className="link inline back" onClick={onBack} onBlur={onLeaveBlur}>
+        <button ref={backRef} className="link inline back" onClick={onBack} {...leaveFocus}>
           ← Back to results
         </button>
         <button
@@ -133,7 +158,7 @@ export function AddonDetailView({
           aria-label="Close details"
           title="Close details"
           onClick={onBack}
-          onBlur={onLeaveBlur}
+          {...leaveFocus}
         >
           <CloseIcon />
         </button>

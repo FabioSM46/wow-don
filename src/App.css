@@ -1801,7 +1801,12 @@ label.setting-label {
    The choice is a container query on the Search area, not on the window, and nothing in the
    code knows the width: `.with-detail` only says that a detail is open. The results and the
    panel are the two scrolling regions that already exist, side by side: each scrolls on its
-   own. */
+   own.
+   Where a container also gets layout containment it becomes the containing block of its
+   `position: fixed` descendants and a stacking context. Nothing inside the Search area or the
+   detail relies on either: the gallery shows the large image in place, and the app's fixed
+   overlays (`.zip-drop`, `.context-menu`) and the `.row-menu-list` popover are rendered
+   outside `.search-page`. An overlay added inside it must be rendered outside it too. */
 .search-page {
   container: search / inline-size;
 }
