@@ -47,6 +47,7 @@ import {
   updatesCache,
 } from "./updateChecks";
 import { ContextMenu } from "./ContextMenu";
+import { StatusMessage } from "../StatusArea";
 import { RowMenu, type RowMenuItem } from "../installations/RowMenu";
 import { clockTime } from "./autoUpdateStatus";
 import { primaryAction, showOptions, statusParts, updateAllLabel } from "./header";
@@ -114,7 +115,7 @@ type Props = {
 const updateRuns = new Map<string, Set<string>>();
 /** The installations whose update in progress is a reinstall (issue #149). */
 const reinstallRuns = new Set<string>();
-/** The outcome of the last update per installation, shown above the table. */
+/** The outcome of the last update per installation, shown in the status area. */
 const updateResults = new Map<string, UpdateResult>();
 
 /** `reinstall`: the outcome comes from the menu's "Reinstall", not from an update. */
@@ -123,7 +124,7 @@ type UpdateResult = ({ outcomes: UpdateOutcome[] } | { error: string }) & { rein
 /** The open menu: the row (main folder) and the point where it opens. */
 type OpenMenu = { row: string; x: number; y: number };
 
-/** The outcome of the last removal, shown above the table. */
+/** The outcome of the last removal, shown in the status area. */
 type RemovalResult =
   | { error: string }
   | { text: string; errors: { folder: string; message: string }[]; warning: string | null };
@@ -302,7 +303,7 @@ export function AddonTable({
       })
       .catch((err) => {
         if (currentId.current !== id) return;
-        // A read error does not remove the table already shown: it is reported above.
+        // A read error does not remove the table already shown: it goes to the status area.
         setLoad((previous) =>
           previous.state === "ready" ? previous : { state: "error", message: errorMessage(err) },
         );
@@ -907,28 +908,34 @@ export function AddonTable({
         </div>
       )}
 
+      {/* The messages are drawn in the status area (issue #315), not here: one that appears or
+          goes away does not move the table. Each one stays until it is dismissed or its owner
+          state changes. */}
       {checkError && (
-        <p className="message error" role="alert">
+        <StatusMessage
+          error
+          onDismiss={() => {
+            // Dismissed for the installation, not only for this visit.
+            errorCache.delete(installation.id);
+            setCheckError(null);
+          }}
+        >
           {checkError}
-        </p>
+        </StatusMessage>
       )}
       {rescanError && (
-        <p className="message error" role="alert">
+        <StatusMessage error onDismiss={() => setRescanError(null)}>
           {rescanError}
-        </p>
+        </StatusMessage>
       )}
+      {/* "Dismiss" only hides this one: the error still keeps "Update all" off. */}
       {excludedError && (
-        <p className="message error" role="alert">
-          Could not read the held addons: {excludedError}
-        </p>
+        <StatusMessage error>Could not read the held addons: {excludedError}</StatusMessage>
       )}
       {exclusionError && (
-        <p className="message error" role="alert">
-          {exclusionError}{" "}
-          <button className="link subtle" onClick={() => setExclusionError(null)}>
-            Dismiss
-          </button>
-        </p>
+        <StatusMessage error onDismiss={() => setExclusionError(null)}>
+          {exclusionError}
+        </StatusMessage>
       )}
       {confirming && (
         <div
@@ -962,16 +969,26 @@ export function AddonTable({
         </div>
       )}
       {removing && (
-        <p className="message muted" role="status">
-          Removing…
-        </p>
+        <StatusMessage progress role="status">
+          <span className="muted">Removing…</span>
+        </StatusMessage>
       )}
-      {removalResult && <RemovalSummary result={removalResult} />}
-      {updateResult && <UpdateSummary result={updateResult} />}
+      {removalResult && (
+        <RemovalSummary result={removalResult} onDismiss={() => setRemovalResult(null)} />
+      )}
+      {updateResult && (
+        <UpdateSummary
+          result={updateResult}
+          onDismiss={() => {
+            updateResults.delete(installation.id);
+            setUpdateResult(null);
+          }}
+        />
+      )}
       {versionTypesError && (
-        <p className="message error" role="alert">
+        <StatusMessage error onDismiss={() => setVersionTypesError(null)}>
           Could not load the game versions: {versionTypesError}
-        </p>
+        </StatusMessage>
       )}
 
       {load.state === "loading" && <p className="muted">Loading addons…</p>}
@@ -1298,17 +1315,17 @@ function menuTitle(groups: AddonGroup[], row: string): string {
 }
 
 /** Summary of the last removal, with the reason for each folder not removed. */
-function RemovalSummary({ result }: { result: RemovalResult }) {
+function RemovalSummary({ result, onDismiss }: { result: RemovalResult; onDismiss: () => void }) {
   if ("error" in result) {
     return (
-      <p className="message error" role="alert">
+      <StatusMessage error onDismiss={onDismiss}>
         Remove failed: {result.error}
-      </p>
+      </StatusMessage>
     );
   }
   const problem = result.errors.length > 0 || result.warning !== null;
   return (
-    <div className="message update-summary" role={problem ? "alert" : "status"}>
+    <StatusMessage role={problem ? "alert" : "status"} onDismiss={onDismiss}>
       <p>{result.text}</p>
       {result.warning && <p className="error">{result.warning}</p>}
       {result.errors.length > 0 && (
@@ -1320,7 +1337,7 @@ function RemovalSummary({ result }: { result: RemovalResult }) {
           ))}
         </ul>
       )}
-    </div>
+    </StatusMessage>
   );
 }
 
@@ -1572,12 +1589,12 @@ function installedTitle(update: AddonUpdate, latestDate?: string): string | unde
 }
 
 /** Summary of the last update, with the reason for each project skipped or in error. */
-function UpdateSummary({ result }: { result: UpdateResult }) {
+function UpdateSummary({ result, onDismiss }: { result: UpdateResult; onDismiss: () => void }) {
   if ("error" in result) {
     return (
-      <p className="message error" role="alert">
+      <StatusMessage error onDismiss={onDismiss}>
         {result.reinstall ? "Reinstall failed" : "Update failed"}: {result.error}
-      </p>
+      </StatusMessage>
     );
   }
   const count = (status: UpdateOutcome["status"]) =>
@@ -1593,7 +1610,7 @@ function UpdateSummary({ result }: { result: UpdateResult }) {
   // An updated project appears only with a message (for example "Installed from GitHub").
   const details = result.outcomes.filter((o) => o.status !== "updated" || o.message);
   return (
-    <div className="message update-summary" role="status">
+    <StatusMessage onDismiss={onDismiss}>
       <p>
         {parts.length > 0
           ? parts.join(", ")
@@ -1614,6 +1631,6 @@ function UpdateSummary({ result }: { result: UpdateResult }) {
           ))}
         </ul>
       )}
-    </div>
+    </StatusMessage>
   );
 }

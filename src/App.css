@@ -16,6 +16,9 @@
    - Fixed shell (D48, issue #312): --scroll-min-height 192px, the least height of a region
      that scrolls on its own (.table-wrap in Installed, .results-scroll in Search). Below it
      the region stops shrinking and the whole .app-main scrolls instead.
+   - Status area (D48, issue #315): --status-area-height is not a token but a measure, set on
+     .app by src/StatusArea.tsx while the area shows messages; the scrolling regions add it to
+     their bottom padding.
    - Colors: --bg (page), --surface (cards, fields), --surface-2 (muted background, disabled
      controls), --border (dividers, table rows, cards: not controls), --border-strong (the
      border of every control: fields, menus, textarea, checkbox, radio, switch when off,
@@ -330,6 +333,15 @@ h2 {
   min-height: var(--scroll-min-height);
 }
 
+/* The status area lies over the end of the content (see `.status-area`): while it shows, a
+   scrolling region ends with as much padding as the area is tall, so its last row scrolls
+   clear of it. The padding is at the end of the scrolled content: nothing above it moves. */
+.addons > .table-wrap,
+.results-scroll,
+.detail-scroll {
+  padding-bottom: var(--status-area-height, 0px);
+}
+
 .detail-scroll,
 .options-scroll {
   overflow-y: auto;
@@ -344,7 +356,71 @@ h2 {
    the scrollbar sits on the window's edge and the last card scrolls up to the footer. */
 .options-scroll {
   margin: 0 calc(-1 * var(--space-6)) calc(-1 * var(--space-6));
-  padding: 0 var(--space-6) var(--space-6);
+  padding: 0 var(--space-6) calc(var(--space-6) + var(--status-area-height, 0px));
+}
+
+/* The status area (D48, issue #315): the one place for errors, progress and results, at the
+   bottom of the content and above the footer. It is laid over the content instead of taking a
+   row of the shell, so a message that appears or goes away moves nothing: the anchor is a
+   row of no height between content and footer, and the area grows upwards from it. Messages
+   stack in the order they appeared, newest last; beyond a third of the window the area
+   scrolls. It sits above the sticky column headers and below menus and the zip overlay. */
+.status-anchor {
+  position: relative;
+  flex: none;
+  height: 0;
+}
+
+.status-area {
+  position: absolute;
+  right: var(--space-6);
+  bottom: 0;
+  left: var(--space-6);
+  z-index: 10;
+  box-sizing: border-box;
+  max-height: calc(100vh / 3);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--menu-shadow);
+}
+
+/* Nothing to show: no message, or only those of a tab that is not in view. */
+.status-area:not(:has(> .status-message:not([hidden]))),
+.status-message[hidden] {
+  display: none;
+}
+
+.status-message {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.status-message:not([hidden]) ~ .status-message:not([hidden]) {
+  border-top: 1px solid var(--border);
+}
+
+.status-message-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.status-message-body p,
+.status-message-body ul {
+  margin: 0;
+}
+
+.status-message-body ul {
+  padding-left: 18px;
+  font-size: var(--text-xs);
+}
+
+.status-message > .link {
+  flex: none;
 }
 
 /* Tabs: text only; the active tab has a thin line in the accent color, resting on the header's
@@ -1206,11 +1282,6 @@ label.setting-label {
   font-weight: var(--weight-strong);
 }
 
-.status-line-undo {
-  margin-top: var(--space-1);
-  color: var(--text);
-}
-
 .count {
   font-size: var(--text-xs);
 }
@@ -1483,14 +1554,11 @@ label.setting-label {
   vertical-align: middle;
 }
 
-.update-summary p,
-.update-summary ul,
 .install-summary p,
 .install-summary ul {
   margin: 0;
 }
 
-.update-summary ul,
 .install-summary ul {
   padding-left: 18px;
   font-size: var(--text-xs);

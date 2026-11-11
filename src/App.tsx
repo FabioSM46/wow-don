@@ -15,6 +15,7 @@ import { AddonTable } from "./addons/AddonTable";
 import { forgetUpdateChecks } from "./addons/updateChecks";
 import { APP_UPDATE_EVENT, appUpdateNotice } from "./appUpdate";
 import { AppUpdateNotice } from "./AppUpdateNotice";
+import { StatusArea, StatusAreaProvider, StatusMessage } from "./StatusArea";
 import { AutoUpdateLine } from "./addons/AutoUpdateLine";
 import {
   AUTO_UPDATE_EVENT,
@@ -95,6 +96,8 @@ function App() {
   const [zipProgress, setZipProgress] = useState<InstallProgress | undefined>(undefined);
   const zipRunning = useRef(false);
   const [zipMessage, setZipMessage] = useState<{ text: string; error: boolean } | null>(null);
+  // The element of the status area (issue #315), where the messages of every owner are drawn.
+  const [statusArea, setStatusArea] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     if (theme !== null) applyTheme(document.documentElement, theme);
@@ -361,28 +364,30 @@ function App() {
       </header>
 
       <main className="app-main">
-        {error && (
-          <p className="message error" role="alert">
-            {error}
-          </p>
-        )}
+        {/* The app's own messages go to the status area whatever the tab: a zip can be dropped
+            on any of them. "Dismiss" only hides the load error: the state behind it stays. */}
+        <StatusAreaProvider element={statusArea}>
+          {error && (
+            <StatusMessage key={error} error>
+              {error}
+            </StatusMessage>
+          )}
+          {zipBusy && (
+            <StatusMessage progress>
+              <ProgressBar
+                value={null}
+                label={progressLabel(zipProgress, "Starting…")}
+                name="Zip"
+              />
+            </StatusMessage>
+          )}
+          {zipMessage && (
+            <StatusMessage error={zipMessage.error} onDismiss={() => setZipMessage(null)}>
+              {zipMessage.text}
+            </StatusMessage>
+          )}
+        </StatusAreaProvider>
         {installations === null && !error && <p className="muted">Loading…</p>}
-        {zipBusy && (
-          <p className="message">
-            <ProgressBar value={null} label={progressLabel(zipProgress, "Starting…")} name="Zip" />
-          </p>
-        )}
-        {zipMessage && (
-          <p
-            className={zipMessage.error ? "message error" : "message"}
-            role={zipMessage.error ? "alert" : "status"}
-          >
-            {zipMessage.text}{" "}
-            <button className="link subtle" onClick={() => setZipMessage(null)}>
-              Dismiss
-            </button>
-          </p>
-        )}
 
         {/* The tabs stay mounted and hidden: search, filters and checks in progress are not
             lost when switching from one tab to another. */}
@@ -393,32 +398,35 @@ function App() {
           hidden={tab !== "installed"}
           className="tab-panel"
         >
-          {active && (
-            <AddonTable
-              installation={active}
-              reload={reload}
-              onInstallZip={() => void chooseZip()}
-              zipBusy={zipBusy}
-              onChanged={markSearchStale}
-              statusLine={(summary) => (
-                <AutoUpdateLine
-                  key={active.id}
-                  summary={summary}
-                  status={autoUpdateStatus}
-                  installationId={active.id}
-                  mode={autoUpdateMode}
-                  undoneRound={undoneRounds.get(active.id) ?? null}
-                  onUndone={(installationId, round) => {
-                    if (round !== null) {
-                      setUndoneRounds((previous) => new Map(previous).set(installationId, round));
-                    }
-                    setInstalledStale(true);
-                    markSearchStale(installationId);
-                  }}
-                />
-              )}
-            />
-          )}
+          {/* The messages of the Installed tab show only while the tab does. */}
+          <StatusAreaProvider element={statusArea} hidden={tab !== "installed"}>
+            {active && (
+              <AddonTable
+                installation={active}
+                reload={reload}
+                onInstallZip={() => void chooseZip()}
+                zipBusy={zipBusy}
+                onChanged={markSearchStale}
+                statusLine={(summary) => (
+                  <AutoUpdateLine
+                    key={active.id}
+                    summary={summary}
+                    status={autoUpdateStatus}
+                    installationId={active.id}
+                    mode={autoUpdateMode}
+                    undoneRound={undoneRounds.get(active.id) ?? null}
+                    onUndone={(installationId, round) => {
+                      if (round !== null) {
+                        setUndoneRounds((previous) => new Map(previous).set(installationId, round));
+                      }
+                      setInstalledStale(true);
+                      markSearchStale(installationId);
+                    }}
+                  />
+                )}
+              />
+            )}
+          </StatusAreaProvider>
           {installations !== null && installations.length === 0 && (
             <p className="empty">
               No installations yet. Add one in{" "}
@@ -504,6 +512,8 @@ function App() {
           </div>
         </div>
       </main>
+
+      <StatusArea onElement={setStatusArea} />
 
       <ZipDrop target={active?.name ?? null} onDrop={(paths) => void installZip(paths)} />
 
