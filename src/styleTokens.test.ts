@@ -230,3 +230,36 @@ describe("App.css warning and table density tokens (D48)", () => {
     assert.equal(/(?<![-\w])padding/.test(narrow), false, narrow);
   });
 });
+
+describe("App.css scrolling regions (D48)", () => {
+  /** Every rule of the sheet as its selectors and its declarations. */
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selectors: match[1].split(",").map((selector) => selector.trim()),
+    declarations: declarations(match[2]),
+  }));
+
+  it("makes every scrolling region the containing block of its content", () => {
+    const scrolling = new Set(
+      rules
+        .filter((rule) =>
+          rule.declarations.some((d) => /^overflow(-x|-y)?:\s*(auto|scroll)\b/.test(d)),
+        )
+        .flatMap((rule) => rule.selectors),
+    );
+    const positioned = new Set(
+      rules
+        .filter((rule) =>
+          rule.declarations.some((d) => /^position:\s*(relative|absolute|fixed|sticky)$/.test(d)),
+        )
+        .flatMap((rule) => rule.selectors),
+    );
+    assert.equal(scrolling.size >= 5, true, "the scrolling regions were not found");
+    for (const selector of scrolling) {
+      assert.equal(
+        positioned.has(selector),
+        true,
+        `${selector} scrolls but is not positioned: absolutely positioned content escapes it`,
+      );
+    }
+  });
+});
