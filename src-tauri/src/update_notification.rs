@@ -472,6 +472,32 @@ mod tests {
     }
 
     #[test]
+    fn a_requested_install_round_reports_its_outcome_even_if_already_notified() {
+        // The tray's "Update all" (issue #305): the pending updates were already notified by a
+        // scheduled round.
+        let three = vec![available("1", 2), available("2", 2), available("3", 2)];
+        let checked = round(Notify, vec![report("retail", three.clone())]);
+        let (_, notified) = decide(&checked, &HashSet::new(), false);
+
+        // Updated and failed.
+        let both = round(
+            Install,
+            vec![with_updated(report("retail", three.clone()), &["1", "2"])],
+        );
+        assert_eq!(
+            requested_body(&both, &notified).as_deref(),
+            Some("2 addons updated\n1 could not be updated")
+        );
+        // Failed only: a scheduled round would stay silent, the requested one reports it.
+        let failed_only = round(Install, vec![report("retail", three)]);
+        assert_eq!(body(&failed_only, &notified), None);
+        assert_eq!(
+            requested_body(&failed_only, &notified).as_deref(),
+            Some("3 could not be updated")
+        );
+    }
+
+    #[test]
     fn a_requested_round_with_nothing_pending_says_all_is_up_to_date() {
         let none = HashSet::new();
         assert_eq!(
