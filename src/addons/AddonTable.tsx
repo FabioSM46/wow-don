@@ -60,6 +60,7 @@ import {
 } from "./exclusion";
 import { blockedHint, isUpdatable } from "./mirror";
 import { interfaceSummary } from "./interfaceColumn";
+import { versionCell } from "./versionColumn";
 import {
   confirmText,
   foldersOf,
@@ -144,6 +145,13 @@ type Load =
   | { state: "error"; message: string }
   | { state: "ready"; addons: InstalledAddon[] };
 
+/** The sort menu of the toolbar, in menu order (issue #313). */
+const SORT_OPTIONS: readonly { key: SortKey; label: string }[] = [
+  { key: "title", label: "Title" },
+  { key: "author", label: "Author" },
+  { key: "modified", label: "Modified" },
+];
+
 const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium" });
 
 /** `format` throws an exception on an invalid date: an odd `mtime` shows "—". */
@@ -164,7 +172,7 @@ export function AddonTable({
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [sort, setSort] = useState<Sort>(defaultSort);
-  // Open groups (by main folder): the other folders appear below the row.
+  // Open rows (by main folder): the details and the other folders appear below the row.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   function toggle(folder: string) {
@@ -620,7 +628,7 @@ export function AddonTable({
     }
   }
 
-  function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, row: string, hasOthers: boolean) {
+  function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, row: string) {
     // The controls inside the row (links, version menu, buttons) keep their keys.
     if (event.target !== event.currentTarget) return;
     const element = event.currentTarget;
@@ -631,7 +639,7 @@ export function AddonTable({
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       if (selection !== null) setSelection((previous) => toggleRow(previous, row));
-      else if (hasOthers) toggle(row);
+      else toggle(row);
     } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       const rows = [
         ...(element.parentElement?.querySelectorAll<HTMLElement>("tr[data-row]") ?? []),
@@ -702,6 +710,9 @@ export function AddonTable({
   function update(patch: Partial<Filters>) {
     setFilters((previous) => ({ ...previous, ...patch }));
   }
+
+  const ascending = sort.direction === "asc";
+  const sortLabel = SORT_OPTIONS.find((option) => option.key === sort.key)?.label ?? "";
 
   function header(key: SortKey, label: string) {
     const active = sort.key === key;
@@ -937,111 +948,120 @@ export function AddonTable({
               />
               Only with updates
             </label>
+            <div className="sort-control">
+              <select
+                className="select"
+                aria-label="Sort by"
+                value={sort.key}
+                onChange={(event) => setSort(nextSort(sort, event.target.value as SortKey))}
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="direction"
+                aria-label={`${sortLabel}, ${ascending ? "ascending" : "descending"}. Reverse order`}
+                title={ascending ? "Ascending" : "Descending"}
+                onClick={() => setSort(nextSort(sort, sort.key))}
+              >
+                {ascending ? "↑" : "↓"}
+              </button>
+            </div>
           </div>
 
           {visible.length === 0 ? (
             <p className="empty">No addons match the search or filters: clear them to see every addon.</p>
           ) : (
             <div className="table-wrap">
-              <table className="addon-table">
+              <table className="addon-table installed-table">
                 <thead>
                   <tr>
-                    {header("title", "Title")}
-                    <th>Folder</th>
+                    {header("title", "Addon")}
                     <th>Version</th>
-                    {header("author", "Author")}
-                    <th>Interface</th>
-                    {header("modified", "Modified")}
-                    <th>CurseForge</th>
-                    <th>Update</th>
+                    <th>Source</th>
+                    <th className="status-cell">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {visible.map(({ main: addon, others }) => {
                     const error = addon.error ?? others.find((o) => o.error)?.error ?? null;
                     const update = groupUpdate({ main: addon, others }, updates);
-                    const hasOthers = others.length > 0;
-                    const open = hasOthers && expanded.has(addon.folder);
+                    const open = expanded.has(addon.folder);
                     const isSelected = selection?.has(addon.folder) ?? false;
+                    const version = versionCell(addon.version, update);
                     const classes = [
+                      "expandable",
                       error ? "has-error" : "",
-                      hasOthers || selection !== null ? "expandable" : "",
-                      open ? "open" : "",
                       isSelected ? "selected" : "",
-                    ].join(" ");
+                    ]
+                      .filter(Boolean)
+                      .join(" ");
                     return (
                       <Fragment key={addon.folder}>
                         <tr
                           data-row={addon.folder}
-                          className={classes.replace(/\s+/g, " ").trim() || undefined}
+                          className={classes}
                           tabIndex={addon.folder === tabStop ? 0 : -1}
                           aria-selected={selection !== null ? isSelected : undefined}
                           onFocus={(event) => {
                             if (event.target === event.currentTarget) setFocusRow(addon.folder);
                           }}
-                          onClick={
-                            selection !== null
-                              ? (event) => {
-                                  // A control inside the row (link, version menu, buttons)
-                                  // performs its action and does not change the selection.
-                                  if (isControl(event.target, event.currentTarget)) return;
-                                  setSelection((previous) => toggleRow(previous, addon.folder));
-                                }
-                              : hasOthers
-                                ? () => toggle(addon.folder)
-                                : undefined
-                          }
+                          onClick={(event) => {
+                            // A control inside the row (link, version menu, buttons)
+                            // performs its action and neither selects nor opens the row.
+                            if (isControl(event.target, event.currentTarget)) return;
+                            if (selection !== null) {
+                              setSelection((previous) => toggleRow(previous, addon.folder));
+                            } else {
+                              toggle(addon.folder);
+                            }
+                          }}
                           onContextMenu={(event) => onRowContextMenu(event, addon.folder)}
-                          onKeyDown={(event) => onRowKeyDown(event, addon.folder, hasOthers)}
+                          onKeyDown={(event) => onRowKeyDown(event, addon.folder)}
                         >
                           <td>
-                            {hasOthers ? (
+                            <div className="addon-cell">
                               <button
                                 className="chevron"
                                 aria-expanded={open}
-                                aria-label={`${open ? "Hide" : "Show"} the folders of ${displayTitle(addon)}`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  toggle(addon.folder);
-                                }}
+                                aria-label={`${open ? "Hide" : "Show"} the details of ${displayTitle(addon)}`}
+                                onClick={() => toggle(addon.folder)}
                               >
                                 {open ? "▾" : "▸"}
                               </button>
-                            ) : (
-                              <span className="chevron-space" />
-                            )}
-                            <span className="addon-title" title={addon.notes ?? undefined}>
-                              {displayTitle(addon)}
-                            </span>
-                            {/* `aria-selected` on a table row is not read by every screen
-                                reader: the state is also in the row's text. */}
-                            {isSelected && <span className="visually-hidden"> (selected)</span>}
-                            {isExcluded(update, shownExcluded) && (
-                              <span className="pill addon-pill" title={EXCLUDED_TITLE}>
-                                Held
-                              </span>
-                            )}
-                            {error && <span className="addon-error">{error}</span>}
+                              <div className="addon-main">
+                                <span className="addon-title" title={addon.notes ?? undefined}>
+                                  {displayTitle(addon)}
+                                </span>
+                                {/* `aria-selected` on a table row is not read by every screen
+                                    reader: the state is also in the row's text. */}
+                                {isSelected && <span className="visually-hidden"> (selected)</span>}
+                                {isExcluded(update, shownExcluded) && (
+                                  <span className="pill addon-pill" title={EXCLUDED_TITLE}>
+                                    Held
+                                  </span>
+                                )}
+                                {addon.author && (
+                                  <span className="addon-author">{addon.author}</span>
+                                )}
+                                {error && <span className="addon-error">{error}</span>}
+                              </div>
+                            </div>
                           </td>
-                          <td className="mono">
-                            {addon.folder}
-                            {hasOthers && (
-                              <span
-                                className="more-folders"
-                                aria-label={`and ${others.length} more ${others.length === 1 ? "folder" : "folders"}: ${others.map((o) => o.folder).join(", ")}`}
-                              >
-                                +{others.length}
-                              </span>
+                          <td className="version-cell">
+                            {version.installed}
+                            {version.latest !== null && (
+                              <>
+                                {" "}
+                                <span aria-hidden="true">→</span>
+                                <span className="visually-hidden">update available:</span>{" "}
+                                <span className="version-latest">{version.latest}</span>
+                              </>
                             )}
                           </td>
-                          <td>{addon.version ?? "—"}</td>
-                          <td>
-                            <span className="clip" title={addon.author ?? undefined}>
-                              {addon.author ?? "—"}
-                            </span>
-                          </td>
-                          <InterfaceCell versions={addon.interface} flavor={installation.flavor} />
-                          <td className="nowrap">{formatModified(addon.modifiedMs)}</td>
                           <ProjectCell
                             update={update}
                             versionTypes={versionTypes}
@@ -1075,6 +1095,29 @@ export function AddonTable({
                             onUpdate={updateProjects}
                           />
                         </tr>
+                        {open && (
+                          <tr className="details-row">
+                            <td colSpan={4}>
+                              <dl className="addon-details">
+                                <dt>{others.length > 0 ? "Folders" : "Folder"}</dt>
+                                <dd className="mono">
+                                  {[addon, ...others].map((a) => a.folder).join(", ")}
+                                </dd>
+                                <dt>Interface</dt>
+                                <dd>
+                                  <InterfaceValue
+                                    versions={addon.interface}
+                                    flavor={installation.flavor}
+                                  />
+                                </dd>
+                                <dt>Modified</dt>
+                                <dd>{formatModified(addon.modifiedMs)}</dd>
+                                <dt>Notes</dt>
+                                <dd>{addon.notes?.trim() || "—"}</dd>
+                              </dl>
+                            </td>
+                          </tr>
+                        )}
                         {open &&
                           others.map((other) => (
                             <tr
@@ -1085,24 +1128,22 @@ export function AddonTable({
                                 <span className="sub-title" title={other.notes ?? undefined}>
                                   {displayTitle(other)}
                                 </span>
+                                <span className="sub-folder mono">{other.folder}</span>
                                 {other.error && (
                                   <span className="addon-error">{other.error}</span>
                                 )}
                               </td>
-                              <td className="mono">{other.folder}</td>
-                              <td>{other.version ?? "—"}</td>
-                              <td>
-                                <span className="clip" title={other.author ?? undefined}>
-                                  {other.author ?? "—"}
-                                </span>
+                              <td className="version-cell">
+                                {versionCell(other.version).installed}
                               </td>
-                              <InterfaceCell
-                                versions={other.interface}
-                                flavor={installation.flavor}
-                              />
-                              <td className="nowrap">{formatModified(other.modifiedMs)}</td>
-                              <td />
-                              <td />
+                              <td colSpan={2}>
+                                <InterfaceValue
+                                  versions={other.interface}
+                                  flavor={installation.flavor}
+                                />
+                                {" · "}
+                                {formatModified(other.modifiedMs)}
+                              </td>
                             </tr>
                           ))}
                       </Fragment>
@@ -1323,7 +1364,7 @@ function UpdateCell({
 }: UpdateCellProps) {
   if (updating) {
     return (
-      <td className="nowrap">
+      <td className="status-cell nowrap">
         <ProgressBar
           value={progressPercent(progress)}
           label={progressLabel(progress, reinstalling ? "Reinstalling…" : "Updating…")}
@@ -1332,11 +1373,11 @@ function UpdateCell({
       </td>
     );
   }
-  if (!update) return <td className="muted">{checking ? "…" : ""}</td>;
+  if (!update) return <td className="status-cell muted">{checking ? "…" : ""}</td>;
   switch (update.status) {
     case "updateAvailable":
       return (
-        <td className="nowrap" title={installedTitle(update, update.latest.date)}>
+        <td className="status-cell nowrap" title={installedTitle(update, update.latest.date)}>
           {/* A held project the app cannot install keeps the pill below: the menu has no
               update for it, so the held tooltip would promise one. */}
           {held && isUpdatable(update) ? (
@@ -1364,7 +1405,7 @@ function UpdateCell({
       );
     case "upToDate":
       return (
-        <td className="nowrap" title={installedTitle(update)}>
+        <td className="status-cell nowrap" title={installedTitle(update)}>
           <span className="pill ok addon-pill">Up to date</span>
         </td>
       );
@@ -1379,7 +1420,7 @@ function UpdateCell({
       );
     case "error":
       return (
-        <td className="nowrap">
+        <td className="status-cell nowrap">
           {/* The full message in the tooltip; for screen reader users also in the text. */}
           <span className="pill danger addon-pill" title={update.message}>
             Error<span className="visually-hidden">: {update.message}</span>
@@ -1387,16 +1428,16 @@ function UpdateCell({
         </td>
       );
     case "notMatched":
-      return <td />;
+      return <td className="status-cell" />;
   }
 }
 
 /** A single interface version and the rest as `+N`; the full list in the tooltip. */
-function InterfaceCell({ versions, flavor }: { versions: number[]; flavor: string }) {
+function InterfaceValue({ versions, flavor }: { versions: number[]; flavor: string }) {
   const summary = interfaceSummary(versions, flavor);
-  if (!summary) return <td className="mono">—</td>;
+  if (!summary) return <span className="mono">—</span>;
   return (
-    <td className="mono" title={summary.title}>
+    <span className="mono" title={summary.title}>
       {summary.shown}
       {summary.more > 0 && (
         <span className="more-folders">
@@ -1408,7 +1449,7 @@ function InterfaceCell({ versions, flavor }: { versions: number[]; flavor: strin
           </span>
         </span>
       )}
-    </td>
+    </span>
   );
 }
 
