@@ -1,5 +1,6 @@
 // The GitHub mirror of blocked CurseForge projects in the Installed tab (D34, issue #165):
-// the label next to the project, whether Update is enabled and whether Reinstall can help.
+// the label next to the project, whether Update is enabled, the CurseForge page to get a blocked
+// update from and whether Reinstall can help.
 // Pure functions, no React or I/O.
 
 import type { AddonUpdate } from "../api";
@@ -47,6 +48,30 @@ export function blockedHint(update: AddonUpdate | undefined): BlockedHint | null
 export function isUpdatable(update: AddonUpdate): boolean {
   if (update.status !== "updateAvailable" || !update.project) return false;
   return update.project.allowModDistribution || mirrorOf(update) !== null;
+}
+
+/** The Status action of a blocked update the app cannot install (issue #332). */
+export type WebsiteUpdate = { label: string; title: string; url: string };
+
+/**
+ * The CurseForge page to get an update from by hand: a CurseForge project whose author blocks
+ * third-party downloads (D13), with no usable GitHub mirror and a page to open. The label
+ * names the file and the site; the tooltip says why and what to do next, with the mirror's
+ * reason when the check gave one. `null` for every other row.
+ */
+export function websiteUpdate(update: AddonUpdate | undefined): WebsiteUpdate | null {
+  const project = update?.project;
+  if (!update || update.status !== "updateAvailable" || !project) return null;
+  if (project.source !== "curseforge" || project.allowModDistribution) return null;
+  if (mirrorOf(update) || !project.url) return null;
+  const name = update.latest.name;
+  const why = `The author doesn't allow downloads from other apps. Get ${name} on CurseForge, then drop the zip into this window.`;
+  const reason = update.githubMirrorReason?.trim();
+  return {
+    label: `Get ${name} on CurseForge`,
+    title: reason ? `${why}\nGitHub: ${reason}` : why,
+    url: project.url,
+  };
 }
 
 /**

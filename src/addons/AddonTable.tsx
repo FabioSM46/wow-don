@@ -64,7 +64,7 @@ import {
   updatableProjects,
   updateCount as countUpdates,
 } from "./exclusion";
-import { blockedHint, isUpdatable } from "./mirror";
+import { blockedHint, isUpdatable, websiteUpdate } from "./mirror";
 import { interfaceSummary } from "./interfaceColumn";
 import { versionCell } from "./versionColumn";
 import {
@@ -1105,6 +1105,7 @@ export function AddonTable({
                     const open = expanded.has(addon.folder);
                     const isSelected = selection?.has(addon.folder) ?? false;
                     const version = versionCell(addon.version, update);
+                    const held = isExcluded(update, shownExcluded);
                     const classes = [
                       "expandable",
                       error ? "has-error" : "",
@@ -1169,7 +1170,7 @@ export function AddonTable({
                                 {/* `aria-selected` on a table row is not read by every screen
                                     reader: the state is also in the row's text. */}
                                 {isSelected && <span className="visually-hidden"> (selected)</span>}
-                                {isExcluded(update, shownExcluded) && (
+                                {held && (
                                   <span className="pill addon-pill" title={EXCLUDED_TITLE}>
                                     Held
                                   </span>
@@ -1208,6 +1209,7 @@ export function AddonTable({
                                 : undefined
                             }
                             locked={versionSaving !== null || busy || checking}
+                            hideBlockedHint={showsWebsiteUpdate(update, held)}
                             onVersionChange={changeVersion}
                           />
                           <UpdateCell
@@ -1220,7 +1222,7 @@ export function AddonTable({
                             progress={
                               update?.project ? progress.get(projectId(update.project)) : undefined
                             }
-                            held={isExcluded(update, shownExcluded)}
+                            held={held}
                             disabled={busy || checking || versionSaving !== null}
                             onUpdate={updateProjects}
                           />
@@ -1383,6 +1385,8 @@ type ProjectCellProps = {
    * of the page after every choice.
    */
   locked: boolean;
+  /** The Status cell already says the project is website only (issue #332): no hint here. */
+  hideBlockedHint: boolean;
   onVersionChange: (modId: number, versionType: number | null) => void;
 };
 
@@ -1392,6 +1396,7 @@ function ProjectCell({
   saving,
   versionError,
   locked,
+  hideBlockedHint,
   onVersionChange,
 }: ProjectCellProps) {
   const project = update?.project;
@@ -1399,7 +1404,7 @@ function ProjectCell({
   const override = update?.versionOverride ?? null;
   const selected = saving ? saving.versionType : override;
   // "website only" or, with the mirror found by the check, "via GitHub" (issue #165).
-  const blocked = blockedHint(update);
+  const blocked = hideBlockedHint ? null : blockedHint(update);
   return (
     <td>
       {project.url ? (
@@ -1504,6 +1509,7 @@ function UpdateCell({
     );
   }
   if (!update) return <td className="status-cell muted">{checking ? "…" : ""}</td>;
+  const website = websiteUpdate(update);
   switch (update.status) {
     case "updateAvailable":
       return (
@@ -1527,6 +1533,18 @@ function UpdateCell({
               }}
             >
               Update to {update.latest.name}
+            </button>
+          ) : website && !held ? (
+            <button
+              className="button secondary small row-update"
+              title={website.title}
+              onClick={(event) => {
+                // The button does not open, close or select the row.
+                event.stopPropagation();
+                void openUrl(website.url);
+              }}
+            >
+              {website.label} <span aria-hidden="true">↗</span>
             </button>
           ) : (
             <span className="pill accent addon-pill">{update.latest.name}</span>
@@ -1581,6 +1599,14 @@ function InterfaceValue({ versions, flavor }: { versions: number[]; flavor: stri
       )}
     </span>
   );
+}
+
+/**
+ * The Status cell offers the CurseForge page for a blocked update (issue #332). A held project
+ * keeps its pill: the hold says not to update it.
+ */
+function showsWebsiteUpdate(update: AddonUpdate | undefined, held: boolean): boolean {
+  return !held && websiteUpdate(update) !== null;
 }
 
 /** The status concerns the project: the tooltip says which file of the project is installed. */

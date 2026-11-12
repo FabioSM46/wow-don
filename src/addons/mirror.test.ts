@@ -9,6 +9,7 @@ import {
   blockedHint,
   isUpdatable,
   reinstallBlockedReason,
+  websiteUpdate,
 } from "./mirror.ts";
 
 const latest = { id: 2, name: "Alpha-2.zip", date: "2026-10-01T00:00:00Z" };
@@ -98,5 +99,43 @@ describe("reinstallBlockedReason", () => {
       "CurseForge blocks third-party downloads and the GitHub copy cannot be used: The latest GitHub release (v1) is not the CurseForge file (Alpha-2.zip).",
     );
     assert.equal(/limit of 60 requests/.test(reinstallBlockedReason(limited)!), true);
+  });
+});
+
+describe("websiteUpdate", () => {
+  const url = "https://www.curseforge.com/wow/addons/alpha";
+  const withUrl = (u: AddonUpdate): AddonUpdate => ({ ...u, project: { ...u.project!, url } });
+
+  it("opens CurseForge for a blocked update without a mirror", () => {
+    assert.deepEqual(websiteUpdate(withUrl(update(false, "updateAvailable"))), {
+      label: "Get Alpha-2.zip on CurseForge",
+      title:
+        "The author doesn't allow downloads from other apps. Get Alpha-2.zip on CurseForge, then drop the zip into this window.",
+      url,
+    });
+  });
+
+  it("adds the mirror's reason on its own line", () => {
+    const action = websiteUpdate(withUrl(different));
+    assert.equal(
+      action?.title.endsWith(
+        "\nGitHub: The latest GitHub release (v1) is not the CurseForge file (Alpha-2.zip).",
+      ),
+      true,
+    );
+  });
+
+  it("is null without a page, with a mirror, when downloadable or up to date", () => {
+    assert.equal(websiteUpdate(update(false, "updateAvailable")), null);
+    assert.equal(websiteUpdate(withUrl(withMirror)), null);
+    assert.equal(websiteUpdate(withUrl(update(true, "updateAvailable"))), null);
+    assert.equal(websiteUpdate(withUrl(update(false, "upToDate"))), null);
+    assert.equal(websiteUpdate(undefined), null);
+  });
+
+  it("is null for a project of another source", () => {
+    const other = withUrl(update(false, "updateAvailable"));
+    const project = { ...other.project!, source: "wowinterface" as const };
+    assert.equal(websiteUpdate({ ...other, project }), null);
   });
 });
