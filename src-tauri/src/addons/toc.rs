@@ -469,6 +469,20 @@ mod tests {
             Some("Foo-Vanilla.toc")
         );
         assert_eq!(select_toc("Foo", &files, "classic"), Some("Foo-Mists.toc"));
+        let forever = names(&[
+            "Foo.toc",
+            "Foo-Mainline.toc",
+            "Foo-Camelot.toc",
+            "Foo-Forever.toc",
+        ]);
+        assert_eq!(
+            select_toc("Foo", &forever, "forever"),
+            Some("Foo-Forever.toc")
+        );
+        assert_eq!(
+            select_toc("Foo", &forever, "classic_beta"),
+            Some("Foo-Forever.toc")
+        );
         let tbc = names(&["Foo.toc", "Foo-BCC.toc", "Foo-TBC.toc"]);
         assert_eq!(select_toc("Foo", &tbc, "anniversary"), Some("Foo-TBC.toc"));
         let retail = names(&["Foo.toc", "Foo-Mainline.toc", "Foo-Standard.toc"]);
