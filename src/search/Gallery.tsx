@@ -27,6 +27,9 @@ export function Gallery({ screenshots, active }: Props) {
   const thumbRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const closeRef = useRef<HTMLButtonElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
+  // Where the last press in the viewer started: a click is dispatched on the common ancestor
+  // of press and release, so a text selection released over the backdrop must not close it.
+  const pressTarget = useRef<EventTarget | null>(null);
   const lastOpen = useRef<number | null>(null);
   const count = screenshots.length;
   const isOpen = open !== null;
@@ -91,10 +94,12 @@ export function Gallery({ screenshots, active }: Props) {
     return <p className="empty">This addon has no screenshots.</p>;
   }
 
-  // Only a click on the empty space around the image closes the viewer, not one on the image,
-  // the arrows or the caption.
+  // Only a click that starts and ends on the empty space around the image closes the viewer,
+  // not one on the image, the arrows or the caption, nor a drag that ends outside them.
   function closeOnBackdrop(event: MouseEvent<HTMLElement>) {
-    if (event.target === event.currentTarget) setOpen(null);
+    if (event.target === event.currentTarget && pressTarget.current === event.currentTarget) {
+      setOpen(null);
+    }
   }
 
   let viewer = null;
@@ -109,6 +114,9 @@ export function Gallery({ screenshots, active }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        onMouseDown={(event) => {
+          pressTarget.current = event.target;
+        }}
         onClick={closeOnBackdrop}
       >
         <div className="gallery-viewer-bar">
@@ -148,7 +156,8 @@ export function Gallery({ screenshots, active }: Props) {
             ›
           </button>
         </div>
-        <div className="gallery-caption">
+        {/* Focusable, so that a long description can be scrolled with the keyboard. */}
+        <div className="gallery-caption" tabIndex={0} role="region" aria-label="Description">
           <p className="gallery-title">{title}</p>
           {/* Plain text: React shows it as text, never as HTML. */}
           {description && <p className="gallery-description">{description}</p>}

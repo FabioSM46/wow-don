@@ -2274,6 +2274,12 @@ label.setting-label {
   flex: none;
   max-height: 25vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.gallery-caption:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .gallery-title {
