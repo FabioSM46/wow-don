@@ -17,7 +17,7 @@ body:
     attributes:
       label: WoW-don version
       description: It is in the bottom-left corner of the app.
-      placeholder: "0.5.0"
+      placeholder: "0.5.1"
     validations:
       required: true
 
