@@ -175,8 +175,10 @@ fn normalize_flavor(flavor: &str) -> String {
 }
 
 /// Hyphenated suffixes used by older clients and still present in many addons.
-/// The wiki page documents only the `_` separator: these count as a fallback, after
-/// every `_` suffix and before the file without a suffix.
+/// The wiki page documents only the `_` separator: hyphenated files count as a fallback,
+/// after every `_` suffix and before the file without a suffix. The flavor's game-type
+/// suffixes are tried with a hyphen first (Questie ships `QuestieTrace-Camelot.toc`), then
+/// these; each list ends with the family suffix, as [`toc_suffixes`] does.
 fn legacy_suffixes(flavor: &str) -> &'static [&'static str] {
     let flavor = normalize_flavor(flavor);
     match toc_suffixes(&flavor).last() {
@@ -185,6 +187,15 @@ fn legacy_suffixes(flavor: &str) -> &'static [&'static str] {
         Some(&"Classic") => &["WOTLKC", "Classic"],
         _ => &["Mainline"],
     }
+}
+
+/// The flavor's suffixes without the family one (`Mainline` or `Classic`), which is always
+/// the last. With a hyphen they come before [`legacy_suffixes`], whose list ends with the
+/// family: a game-type suffix (`-Camelot`, `-TBC`, `-BCC`) beats the family one (`-Classic`).
+fn game_type_suffixes(flavor: &str) -> &'static [&'static str] {
+    toc_suffixes(flavor)
+        .split_last()
+        .map_or(&[], |(_family, game_types)| game_types)
 }
 
 /// Picks the `.toc` of an addon folder for the given flavor. `addon_dir` is the folder's
@@ -201,8 +212,9 @@ pub fn select_toc<'a>(addon_dir: &str, file_names: &'a [String], flavor: &str) -
         .iter()
         .map(|suffix| format!("{addon_dir}_{suffix}.toc"))
         .chain(
-            legacy_suffixes(flavor)
+            game_type_suffixes(flavor)
                 .iter()
+                .chain(legacy_suffixes(flavor))
                 .map(|suffix| format!("{addon_dir}-{suffix}.toc")),
         )
         .chain(std::iter::once(format!("{addon_dir}.toc")))
@@ -429,6 +441,66 @@ mod tests {
             select_toc("Foo", &both, "classic_era"),
             Some("Foo_Classic.toc")
         );
+    }
+
+    #[test]
+    fn every_flavor_suffix_is_accepted_with_a_hyphen() {
+        let questie_trace = names(&["QuestieTrace-Camelot.toc", "QuestieTrace-Classic.toc"]);
+        assert_eq!(
+            select_toc("QuestieTrace", &questie_trace, "forever"),
+            Some("QuestieTrace-Camelot.toc")
+        );
+        assert_eq!(
+            select_toc("QuestieTrace", &questie_trace, "classic_beta"),
+            Some("QuestieTrace-Camelot.toc")
+        );
+        assert_eq!(
+            select_toc("QuestieTrace", &questie_trace, "classic_era"),
+            Some("QuestieTrace-Classic.toc")
+        );
+        let files = names(&[
+            "Foo.toc",
+            "Foo-Vanilla.toc",
+            "Foo-Classic.toc",
+            "Foo-Mists.toc",
+        ]);
+        assert_eq!(
+            select_toc("Foo", &files, "classic_era"),
+            Some("Foo-Vanilla.toc")
+        );
+        assert_eq!(select_toc("Foo", &files, "classic"), Some("Foo-Mists.toc"));
+        let forever = names(&[
+            "Foo.toc",
+            "Foo-Mainline.toc",
+            "Foo-Camelot.toc",
+            "Foo-Forever.toc",
+        ]);
+        assert_eq!(
+            select_toc("Foo", &forever, "forever"),
+            Some("Foo-Forever.toc")
+        );
+        assert_eq!(
+            select_toc("Foo", &forever, "classic_beta"),
+            Some("Foo-Forever.toc")
+        );
+        let tbc = names(&["Foo.toc", "Foo-BCC.toc", "Foo-TBC.toc"]);
+        assert_eq!(select_toc("Foo", &tbc, "anniversary"), Some("Foo-TBC.toc"));
+        let retail = names(&["Foo.toc", "Foo-Mainline.toc", "Foo-Standard.toc"]);
+        assert_eq!(
+            select_toc("Foo", &retail, "retail"),
+            Some("Foo-Standard.toc")
+        );
+    }
+
+    #[test]
+    fn an_underscore_file_wins_over_any_hyphenated_one() {
+        let files = names(&["Foo-Forever.toc", "Foo_Mainline.toc"]);
+        assert_eq!(
+            select_toc("Foo", &files, "forever"),
+            Some("Foo_Mainline.toc")
+        );
+        let same = names(&["Foo-Camelot.toc", "Foo_Camelot.toc"]);
+        assert_eq!(select_toc("Foo", &same, "forever"), Some("Foo_Camelot.toc"));
     }
 
     #[test]
