@@ -1919,9 +1919,9 @@ label.setting-label {
    own.
    Where a container also gets layout containment it becomes the containing block of its
    `position: fixed` descendants and a stacking context. Nothing inside the Search area or the
-   detail relies on either: the gallery shows the large image in place, and the app's fixed
-   overlays (`.zip-drop`, `.context-menu`) and the `.row-menu-list` popover are rendered
-   outside `.search-page`. An overlay added inside it must be rendered outside it too. */
+   detail relies on either: the app's fixed overlays (`.zip-drop`, `.context-menu`, the
+   gallery's `.gallery-viewer`) and the `.row-menu-list` popover are rendered outside
+   `.search-page`. An overlay added inside it must be rendered outside it too. */
 .search-page {
   container: search / inline-size;
 }
@@ -2142,7 +2142,8 @@ label.setting-label {
   margin: 0;
 }
 
-/* Gallery (issue #168): thumbnails in a regular grid, the large image in their place. */
+/* Gallery (issue #168): thumbnails in a regular grid; the large image opens in a viewer that
+   covers the window (issue #340), above everything but the context menu. */
 .gallery-grid {
   list-style: none;
   margin: 0;
@@ -2192,36 +2193,54 @@ label.setting-label {
 }
 
 .gallery-placeholder-large {
-  flex: 1;
-  min-height: 16rem;
   font-size: var(--text-base);
 }
 
 .gallery-viewer {
-  margin: 0;
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  background: var(--viewer-bg);
 }
 
 .gallery-viewer-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--space-2);
   font-size: var(--text-base);
 }
 
 .gallery-stage {
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-2);
-  border-radius: var(--radius-lg);
-  background: var(--viewer-bg);
+}
+
+/* The image keeps its proportions and is never enlarged beyond its own size: the frame is
+   the space left by the bar, the arrows and the caption, and the image is centred in it. */
+.gallery-frame {
+  position: relative;
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+}
+
+.gallery-frame > .gallery-image,
+.gallery-frame > .gallery-placeholder {
+  position: absolute;
+  inset: 0;
+  margin: auto;
 }
 
 .gallery-image {
-  flex: 1;
-  min-width: 0;
-  max-height: 60vh;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
 }
 
@@ -2251,7 +2270,10 @@ label.setting-label {
 }
 
 .gallery-caption {
-  margin-top: var(--space-3);
+  position: relative;
+  flex: none;
+  max-height: 25vh;
+  overflow-y: auto;
 }
 
 .gallery-title {
