@@ -30,6 +30,7 @@
 //!
 //! Blocking: it must be called off the main thread.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
@@ -967,19 +968,28 @@ impl Owners<'_> {
     /// the direct ones (issue #346): the file requires the owner through other dependencies, or
     /// the owner's file (the one in its record, otherwise the one the app would choose) requires
     /// this project, directly or through others. It asks CurseForge, so it is called only for
-    /// an owner nothing else accepts; what cannot be read counts as no dependency.
+    /// an owner nothing else accepts; what cannot be read counts as no dependency. `read` keeps
+    /// the dependencies already asked for this zip: each project is read at most once, whatever
+    /// the number of owners and of paths that reach it.
     fn tied(
         &self,
         installation: &Installation,
         records: &InstalledRecords,
         file: &File,
         owner: u32,
+        read: &RefCell<HashMap<u32, Vec<u32>>>,
     ) -> bool {
         let required_by = |id: u32| {
+            if let Some(known) = read.borrow().get(&id) {
+                return known.clone();
+            }
             let installed = records.get(&id).map(|record| record.file_id);
-            self.fetcher
+            let required = self
+                .fetcher
                 .required(installation, id, installed, self.version_type)
-                .unwrap_or_default()
+                .unwrap_or_default();
+            read.borrow_mut().insert(id, required.clone());
+            required
         };
         reaches(required_dependencies(file), owner, &required_by)
             || reaches(required_by(owner), file.mod_id, &required_by)
@@ -1109,12 +1119,13 @@ fn install_staged(
     let mut provider = None;
     // The owners already asked about: several folders often have the same one.
     let mut tied: HashMap<u32, bool> = HashMap::new();
+    let read = RefCell::new(HashMap::new());
     for (folder, owner) in foreign {
         let accepted = owners.session.contains_key(&owner)
             || required.contains(&owner)
             || *tied
                 .entry(owner)
-                .or_insert_with(|| owners.tied(installation, records, file, owner));
+                .or_insert_with(|| owners.tied(installation, records, file, owner, &read));
         if !accepted {
             return Err(format!(
                 "The folder \"{folder}\" belongs to another installed addon ({}): nothing was changed.",
@@ -2185,6 +2196,43 @@ mod tests {
         assert!(written.is_empty());
         assert_eq!(names(&fx.addons), ["Lib"]);
         assert_eq!(lib_lua(&fx, "Lib"), "old");
+    }
+
+    #[test]
+    fn a_project_reached_by_two_paths_is_read_once() {
+        let fx = fixture();
+        write_folder(&fx.addons, "Lib", "## Title: Lib\n");
+        write_folder(&fx.addons, "Other", "## Title: Other\n");
+        // Projects 5 and 6 own a folder each. The parent requires 2 and 3, which both require 4,
+        // and the owner 5 requires 2 as well: the walk from the parent and the walk from the
+        // owner pass through the same projects, and neither reaches the other end.
+        let records =
+            InstalledRecords::from([(5, record(50, &["Lib"])), (6, record(60, &["Other"]))]);
+        let mut routes = graph(&[
+            (1, &[(2, REQUIRED), (3, REQUIRED)]),
+            (2, &[(4, REQUIRED)]),
+            (3, &[(4, REQUIRED)]),
+            (4, &[]),
+            (5, &[(2, REQUIRED)]),
+            (6, &[]),
+        ]);
+        routes.zips.insert(
+            download_url(10),
+            zip_of(&[("Lib/Lib.lua", "bundled"), ("Other/Other.lua", "bundled")]),
+        );
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, _) = install_all(&fx, routes, &records, 1, None);
+
+        assert_eq!(summary(&outcomes), [(1, Failed, None)]);
+        let requests = log.requests.lock().unwrap();
+        for id in 2..=5 {
+            let file = format!("/v1/mods/{id}/files/");
+            let read = requests.iter().filter(|url| url.contains(&file)).count();
+            assert_eq!(read, 1, "project {id}: {requests:?}");
+        }
+        // The first refusal ends the install: the second owner is never asked about.
+        assert!(!requests.iter().any(|url| url.contains("/v1/mods/6/files/")));
     }
 
     #[test]
