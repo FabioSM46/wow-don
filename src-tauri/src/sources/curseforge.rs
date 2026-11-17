@@ -1547,10 +1547,19 @@ mod tests {
             while !request.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap() == 1 {
                 request.push(byte[0]);
             }
+            let request = String::from_utf8_lossy(&request).to_lowercase();
+            // The body is read too: closing a connection with unread bytes resets it on
+            // Windows, and the client then sees an error instead of the response.
+            let length = request
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let _ = stream.read_exact(&mut vec![0u8; length]);
             // The client may close before reading everything (limit exceeded).
             let _ = stream.write_all(&response);
             let _ = stream.flush();
-            String::from_utf8_lossy(&request).to_lowercase()
+            request
         });
         (address, handle)
     }
