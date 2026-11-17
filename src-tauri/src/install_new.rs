@@ -8,7 +8,13 @@
 //! - a zip folder that already exists and belongs to another project (in the records of
 //!   `installed-addons.json` or, without records, by the `## X-Curse-Project-ID` of its `.toc`)
 //!   makes the installation fail; an existing folder with neither record nor project id
-//!   (installed by hand) is replaced.
+//!   (installed by hand) is replaced;
+//! - unless that other project is tied to this one by the installation itself (issue #342): a
+//!   project installed earlier in the same call (an addon that ships its own library, then
+//!   the library as its required dependency) or a required dependency of the file being
+//!   installed (the library installed on its own first). Such a folder stays as it is and with
+//!   its owner; the rest of the zip is installed, and a zip with nothing left is skipped as
+//!   already included.
 //!
 //! As in WowUp, after a successful installation the file's dependencies with
 //! `relationType = 3` (RequiredDependency) are installed, and recursively theirs, with the same
@@ -31,6 +37,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use serde::Serialize;
 
 use crate::catalog;
+use crate::install;
 use crate::installations::Installation;
 use crate::parallel;
 use crate::progress::{Phase, Progress, ProgressSink, Reporter};
@@ -179,6 +186,7 @@ pub(crate) fn install_addon_with(
         version_type,
         records: records.clone(),
         installed,
+        session: HashMap::new(),
         record,
         progress,
     };
@@ -578,6 +586,9 @@ struct Installer<'a> {
     records: InstalledRecords,
     /// The installed projects, updated after each successful installation.
     installed: HashSet<u32>,
+    /// The projects installed by this call, with their names: a folder of theirs found in a
+    /// later zip is already provided (issue #342).
+    session: HashMap<u32, String>,
     record: &'a mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
     /// Where to report the progress of each installed project (issue #127).
     progress: &'a ProgressSink<'a>,
@@ -609,11 +620,16 @@ impl Installer<'_> {
             &mut self.records,
             &fetched,
             &project.name,
+            &Owners {
+                session: &self.session,
+                fetcher: self.fetcher,
+            },
             self.record,
             &reporter,
         );
         if result.0.status == InstallStatus::Installed {
             self.installed.insert(project.id);
+            self.session.insert(project.id, project.name.clone());
             // A Beta chosen by the app, not by the user in the detail: the outcome says so.
             if file_id.is_none() && fetched.file.release_type == RELEASE_TYPE_BETA {
                 result.0.message.get_or_insert_with(|| {
@@ -868,27 +884,60 @@ fn latest_file(project: &Mod, version_type: u32, allow_beta: bool) -> Option<u32
     .map(|index| index.file_id)
 }
 
+/// What the installer knows about the projects that can own a folder of a zip.
+struct Owners<'a> {
+    /// The projects installed earlier in the same call, with their names.
+    session: &'a HashMap<u32, String>,
+    fetcher: &'a dyn Fetcher,
+}
+
+impl Owners<'_> {
+    /// How a message names project `id`: its name, from this call or from one request to
+    /// CurseForge, or its id when the name cannot be read. A failed request changes no outcome.
+    fn label(&self, id: u32) -> String {
+        let name = self.session.get(&id).cloned().or_else(|| {
+            let mods = self.fetcher.mods(&[id]).ok()?;
+            mods.into_iter().find(|m| m.id == id).map(|m| m.name)
+        });
+        match name {
+            Some(name) if !name.trim().is_empty() => name,
+            _ => format!("CurseForge project {id}"),
+        }
+    }
+}
+
+/// What [`install_staged`] did with a zip.
+enum Staged {
+    /// The folders now in `AddOns`, which belong to the project.
+    Installed(Vec<String>),
+    /// Nothing was installed: every folder of the zip is already there, provided by this project.
+    Included(u32),
+}
+
 /// Installs the already downloaded zip of `fetched` (from CurseForge or, for a blocked project,
 /// from its GitHub mirror), rejecting other projects' folders, then records it both with
 /// `record` and in the local `records` (even if `record` fails: the folders are on disk and
 /// belong to the project). On a successful installation it also returns the file's required
-/// dependencies.
+/// dependencies. A zip whose folders are all provided by a project tied to this one (see
+/// [`install_staged`]) is skipped, without a record and without following its dependencies.
+#[allow(clippy::too_many_arguments)]
 fn install_fetched(
     installation: &Installation,
     records: &mut InstalledRecords,
     fetched: &Fetched,
     name: &str,
+    owners: &Owners<'_>,
     record: &mut dyn FnMut(u32, InstalledRecord) -> Result<(), String>,
     reporter: &Reporter<'_>,
 ) -> (InstallOutcome, Vec<u32>) {
     let file = &fetched.file;
     let mod_id = file.mod_id;
-    let addons_dir = installation.path.join("Interface").join("AddOns");
-    let flavor = installation.flavor.as_str();
-    let check =
-        |folders: &[String]| check_foreign_folders(&addons_dir, flavor, records, mod_id, folders);
-    let folders = match updates::install_bytes(&fetched.zip, &addons_dir, &[], &check, reporter) {
-        Ok(folders) => folders,
+    let folders = match install_staged(installation, records, fetched, owners, reporter) {
+        Ok(Staged::Installed(folders)) => folders,
+        Ok(Staged::Included(owner)) => {
+            let message = format!("Already included in {}.", owners.label(owner));
+            return (InstallOutcome::skipped(mod_id, name, &message), Vec::new());
+        }
         Err(message) => return (InstallOutcome::error(mod_id, name, message), Vec::new()),
     };
     let installed = InstalledRecord {
@@ -928,21 +977,72 @@ fn required_dependencies(file: &File) -> Vec<u32> {
         .collect()
 }
 
-/// Rejects the zip if one of its folders already exists in `AddOns` and belongs to another
-/// project: a record says so, or, for a folder without a record, the
+/// Extracts the zip of `fetched` into staging and moves its folders into `AddOns`, like
+/// `updates::install_bytes`, deciding first what to do with the folders that already exist and
+/// belong to another project ([`foreign_folders`]):
+/// - the owner was installed earlier in the same call, or is a required dependency of this
+///   file: the folder on disk stays as it is and with its owner, and the zip's copy is dropped;
+/// - any other owner: the zip is rejected and `AddOns` stays as it was.
+///
+/// The folders returned are those installed, without the ones left to their owner.
+fn install_staged(
+    installation: &Installation,
+    records: &InstalledRecords,
+    fetched: &Fetched,
+    owners: &Owners<'_>,
+    reporter: &Reporter<'_>,
+) -> Result<Staged, String> {
+    let file = &fetched.file;
+    let addons_dir = installation.path.join("Interface").join("AddOns");
+    reporter.phase(Phase::Extracting);
+    let staging = install::WorkDir::staging(&addons_dir)?;
+    let mut folders = install::extract(&fetched.zip, staging.path())?;
+    let foreign = foreign_folders(
+        &addons_dir,
+        &installation.flavor,
+        records,
+        file.mod_id,
+        &folders,
+    )?;
+    let required = required_dependencies(file);
+    let mut provider = None;
+    for (folder, owner) in foreign {
+        if !owners.session.contains_key(&owner) && !required.contains(&owner) {
+            return Err(format!(
+                "The folder \"{folder}\" belongs to another installed addon ({}): nothing was changed.",
+                owners.label(owner)
+            ));
+        }
+        fs::remove_dir_all(staging.path().join(&folder)).map_err(|error| {
+            format!("Could not prepare the addon's folders ({}).", error.kind())
+        })?;
+        folders.retain(|name| *name != folder);
+        provider.get_or_insert(owner);
+    }
+    if let (true, Some(owner)) = (folders.is_empty(), provider) {
+        return Ok(Staged::Included(owner));
+    }
+    reporter.phase(Phase::Installing);
+    install::replace(&addons_dir, staging.path(), &[])?;
+    Ok(Staged::Installed(folders))
+}
+
+/// The zip folders that already exist in `AddOns` and belong to another project, each with
+/// its owner: a record says so, or, for a folder without a record, the
 /// `## X-Curse-Project-ID` of its `.toc` for the flavor (the same rule as
-/// [`catalog::installed_projects`]). A folder with neither record nor id is replaced. Names
-/// are compared ignoring case, as the game does. An `AddOns` folder
+/// [`catalog::installed_projects`]). A folder with neither record nor id is not listed, and
+/// is replaced. Names are compared ignoring case, as the game does. An `AddOns` folder
 /// that does not exist counts as empty; an unreadable one makes the installation fail, because it
 /// would be impossible to know what is being replaced.
-fn check_foreign_folders(
+fn foreign_folders(
     addons_dir: &Path,
     flavor: &str,
     records: &InstalledRecords,
     mod_id: u32,
     folders: &[String],
-) -> Result<(), String> {
+) -> Result<Vec<(String, u32)>, String> {
     let on_disk = folder_names(addons_dir)?;
+    let mut foreign = Vec::new();
     for folder in folders {
         let lower = folder.to_lowercase();
         let Some(disk_name) = on_disk.get(&lower) else {
@@ -961,12 +1061,10 @@ fn check_foreign_folders(
             recorded.into_iter().find(|id| *id != mod_id)
         };
         if let Some(owner) = owner {
-            return Err(format!(
-                "The folder \"{folder}\" belongs to another installed addon (CurseForge project {owner}): nothing was changed."
-            ));
+            foreign.push((folder.clone(), owner));
         }
     }
-    Ok(())
+    Ok(foreign)
 }
 
 /// The folders in `AddOns`: lowercase name → name on disk.
@@ -1684,6 +1782,208 @@ mod tests {
         );
     }
 
+    /// [`graph`] of a parent (project 1) that requires a library (project 2), with the Retail
+    /// zips given: the case of an addon that ships its own library (issue #342).
+    fn bundled(parent: &[(&str, &str)], library: &[(&str, &str)]) -> Routes {
+        let mut routes = graph(&[(1, &[(2, REQUIRED)]), (2, &[])]);
+        routes.zips.insert(download_url(10), zip_of(parent));
+        routes.zips.insert(download_url(20), zip_of(library));
+        routes
+    }
+
+    const PARENT_ZIP: &[(&str, &str)] = &[("Parent/Parent.toc", ""), ("Lib/Lib.lua", "bundled")];
+
+    fn lib_lua(fx: &Fixture, folder: &str) -> String {
+        let dir = fx.addons.join(folder);
+        fs::read_to_string(dir.join(format!("{folder}.lua"))).unwrap()
+    }
+
+    #[test]
+    fn a_dependency_bundled_by_its_parent_is_already_included() {
+        let fx = fixture();
+        let routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+
+        let (outcomes, written) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [(1, Installed, None), (2, Skipped, Some(1))]
+        );
+        assert_eq!(
+            outcomes[1].message.as_deref(),
+            Some("Already included in Project 1.")
+        );
+        assert_eq!(outcomes[1].name, "Project 2");
+        assert_eq!(names(&fx.addons), ["Lib", "Parent"]);
+        assert_eq!(lib_lua(&fx, "Lib"), "bundled");
+        assert_eq!(written, [(1, record(10, &["Parent", "Lib"]))]);
+        assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
+    }
+
+    #[test]
+    fn a_bundled_dependency_is_recognised_ignoring_case() {
+        let fx = fixture();
+        let routes = bundled(PARENT_ZIP, &[("lib/lib.lua", "own")]);
+
+        let (outcomes, written) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [(1, Installed, None), (2, Skipped, Some(1))]
+        );
+        assert_eq!(names(&fx.addons), ["Lib", "Parent"]);
+        assert_eq!(lib_lua(&fx, "Lib"), "bundled");
+        assert_eq!(written.len(), 1);
+    }
+
+    #[test]
+    fn a_dependency_installs_the_folders_its_parent_does_not_bundle() {
+        let fx = fixture();
+        let routes = bundled(
+            PARENT_ZIP,
+            &[("Lib/Lib.lua", "own"), ("LibExtra/LibExtra.lua", "own")],
+        );
+
+        let (outcomes, written) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [(1, Installed, None), (2, Installed, Some(1))]
+        );
+        assert_eq!(names(&fx.addons), ["Lib", "LibExtra", "Parent"]);
+        assert_eq!(lib_lua(&fx, "Lib"), "bundled");
+        assert_eq!(
+            written,
+            [
+                (1, record(10, &["Parent", "Lib"])),
+                (2, record(20, &["LibExtra"]))
+            ]
+        );
+    }
+
+    #[test]
+    fn a_parent_leaves_the_folder_of_its_installed_dependency_alone() {
+        let fx = fixture();
+        write_folder(&fx.addons, "lib", "## Title: Lib\n");
+        let records = InstalledRecords::from([(2, record(20, &["lib"]))]);
+        let routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, written) = install_all(&fx, routes, &records, 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [(1, Installed, None), (2, Skipped, Some(1))]
+        );
+        assert_eq!(outcomes[1].message.as_deref(), Some("Already installed."));
+        assert_eq!(names(&fx.addons), ["Parent", "lib"]);
+        assert_eq!(lib_lua(&fx, "lib"), "old");
+        assert_eq!(written, [(1, record(10, &["Parent"]))]);
+        assert_eq!(*log.downloads.lock().unwrap(), [download_url(10)]);
+        assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
+    }
+
+    #[test]
+    fn a_parent_leaves_the_unrecorded_folder_of_its_dependency_alone() {
+        let fx = fixture();
+        // No record: the `.toc` says `Lib` belongs to project 2, the required dependency.
+        write_folder(&fx.addons, "Lib", "## X-Curse-Project-ID: 2\n");
+        let routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+
+        let (outcomes, written) = install_all(&fx, routes, &InstalledRecords::new(), 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [(1, Installed, None), (2, Skipped, Some(1))]
+        );
+        assert_eq!(outcomes[1].message.as_deref(), Some("Already installed."));
+        assert_eq!(lib_lua(&fx, "Lib"), "old");
+        assert_eq!(written, [(1, record(10, &["Parent"]))]);
+    }
+
+    #[test]
+    fn a_project_whose_folders_all_belong_to_its_dependency_is_already_included() {
+        let fx = fixture();
+        write_folder(&fx.addons, "Lib", "## Title: Lib\n");
+        let records = InstalledRecords::from([(2, record(20, &["Lib"]))]);
+        let routes = bundled(&[("Lib/Lib.lua", "bundled")], &[("Lib/Lib.lua", "own")]);
+
+        let (outcomes, written) = install_all(&fx, routes, &records, 1, None);
+
+        assert_eq!(summary(&outcomes), [(1, Skipped, None)]);
+        assert_eq!(
+            outcomes[0].message.as_deref(),
+            Some("Already included in Project 2.")
+        );
+        assert_eq!(lib_lua(&fx, "Lib"), "old");
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn a_folder_of_an_unrelated_project_is_refused_naming_the_addon() {
+        let fx = fixture();
+        write_folder(&fx.addons, "Lib", "## Title: Lib\n");
+        // Project 3 owns `Lib`, and the parent does not require it.
+        let records = InstalledRecords::from([(3, record(30, &["Lib"]))]);
+        let mut routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+        routes.projects.push(project(3, Some(true)));
+
+        let (outcomes, written) = install_all(&fx, routes, &records, 1, None);
+
+        assert_eq!(summary(&outcomes), [(1, Failed, None)]);
+        assert_eq!(
+            outcomes[0].message.as_deref(),
+            Some(
+                "The folder \"Lib\" belongs to another installed addon (Project 3): nothing was changed."
+            )
+        );
+        assert!(written.is_empty());
+        assert_eq!(names(&fx.addons), ["Lib"]);
+        assert_eq!(lib_lua(&fx, "Lib"), "old");
+        assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
+    }
+
+    #[test]
+    fn an_owner_whose_name_cannot_be_read_is_named_by_its_id() {
+        let fx = fixture();
+        write_folder(&fx.addons, "Lib", "## Title: Lib\n");
+        let records = InstalledRecords::from([(3, record(30, &["Lib"]))]);
+        // CurseForge does not know project 3: the lookup of its name finds nothing.
+        let routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+
+        let (outcomes, _) = install_all(&fx, routes, &records, 1, None);
+
+        assert_eq!(summary(&outcomes), [(1, Failed, None)]);
+        assert_eq!(
+            outcomes[0].message.as_deref(),
+            Some(
+                "The folder \"Lib\" belongs to another installed addon (CurseForge project 3): nothing was changed."
+            )
+        );
+        assert_eq!(lib_lua(&fx, "Lib"), "old");
+    }
+
+    #[test]
+    fn an_import_sees_a_bundled_dependency_as_already_included() {
+        let fx = fixture();
+        let routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+
+        let (outcomes, _, _) = two_phases(
+            &fx,
+            routes,
+            &[1],
+            InstalledRecords::new(),
+            &VersionOverrides::new(),
+        );
+
+        assert_eq!(
+            outcomes,
+            [vec![(1, Installed, None), (2, Skipped, Some(1))]]
+        );
+        assert_eq!(names(&fx.addons), ["Lib", "Parent"]);
+        assert_eq!(lib_lua(&fx, "Lib"), "bundled");
+    }
+
     #[test]
     fn optional_dependencies_tools_and_libraries_are_ignored() {
         let fx = fixture();
@@ -1922,10 +2222,11 @@ mod tests {
     }
 
     #[test]
-    fn a_just_installed_dependency_owns_its_folders() {
+    fn a_folder_of_a_just_installed_dependency_is_already_included() {
         let fx = fixture();
         let mut routes = graph(&[(1, &[(2, REQUIRED), (3, REQUIRED)]), (2, &[]), (3, &[])]);
-        // 2 and 3 carry the same folder: after 2, `Lib` is registered as its own.
+        // 2 and 3 carry the same folder: after 2, `Lib` is registered as its own, and 3 has
+        // nothing left to install (issue #342).
         for id in [2, 3] {
             routes
                 .zips
@@ -1939,12 +2240,17 @@ mod tests {
             [
                 (1, Installed, None),
                 (2, Installed, Some(1)),
-                (3, Failed, Some(1))
+                (3, Skipped, Some(1))
             ]
         );
-        let message = outcomes[2].message.as_deref().unwrap();
-        assert!(message.contains("project 2"), "{message}");
-        assert_eq!(written.len(), 2);
+        assert_eq!(
+            outcomes[2].message.as_deref(),
+            Some("Already included in Project 2.")
+        );
+        assert_eq!(
+            written,
+            [(1, record(10, &["P1"])), (2, record(20, &["Lib"]))]
+        );
     }
 
     #[test]
