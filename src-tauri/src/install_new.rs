@@ -12,7 +12,9 @@
 //! - unless that other project is tied to this one by the installation itself (issue #342): a
 //!   project installed earlier in the same call (an addon that ships its own library, then
 //!   the library as its required dependency) or a required dependency of the file being
-//!   installed (the library installed on its own first). Such a folder stays as it is and with
+//!   installed (the library installed on its own first), also through other required
+//!   dependencies, or an owner whose own file requires this project (the library chosen on its
+//!   own after the addon that ships it, issue #346). Such a folder stays as it is and with
 //!   its owner; the rest of the zip is installed, and a zip with nothing left is skipped as
 //!   already included.
 //!
@@ -28,6 +30,7 @@
 //!
 //! Blocking: it must be called off the main thread.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
@@ -328,6 +331,17 @@ pub(crate) trait Fetcher {
         reporter: &Reporter<'_>,
     ) -> Result<Fetched, InstallOutcome>;
 
+    /// The required dependencies of a file that is not being installed (issue #346): the file
+    /// `file_id` of project `mod_id` or, without it, the file the app would choose for
+    /// `version_type`. `Err` if the project or the file cannot be read.
+    fn required(
+        &self,
+        installation: &Installation,
+        mod_id: u32,
+        file_id: Option<u32>,
+        version_type: Option<u32>,
+    ) -> Result<Vec<u32>, String>;
+
     /// Whether reading the chosen project is announced with `checking`: not when the first phase
     /// of an import has already done it.
     fn announces(&self) -> bool {
@@ -399,6 +413,35 @@ impl<T: Transport> Fetcher for Live<'_, T> {
         reporter: &Reporter<'_>,
     ) -> Result<Fetched, InstallOutcome> {
         self.fetch_known(installation, project, version_type, file_id, None, reporter)
+    }
+
+    fn required(
+        &self,
+        installation: &Installation,
+        mod_id: u32,
+        file_id: Option<u32>,
+        version_type: Option<u32>,
+    ) -> Result<Vec<u32>, String> {
+        let project = self
+            .mods(&[mod_id])?
+            .into_iter()
+            .find(|m| m.id == mod_id)
+            .ok_or_else(|| "Addon not found on CurseForge.".to_owned())?;
+        let file = chosen_file(
+            installation,
+            self.client,
+            &project,
+            version_type,
+            self.allow_beta,
+            file_id,
+            None,
+        )
+        .map_err(|error| match error {
+            FileError::Skipped(message)
+            | FileError::Unsupported(message)
+            | FileError::Error(message) => message,
+        })?;
+        Ok(required_dependencies(&file))
     }
 }
 
@@ -571,6 +614,17 @@ impl<T: Transport> Fetcher for Cached<'_, T> {
             .fetch(installation, project, version_type, file_id, reporter)
     }
 
+    fn required(
+        &self,
+        installation: &Installation,
+        mod_id: u32,
+        file_id: Option<u32>,
+        version_type: Option<u32>,
+    ) -> Result<Vec<u32>, String> {
+        self.live
+            .required(installation, mod_id, file_id, version_type)
+    }
+
     fn announces(&self) -> bool {
         false
     }
@@ -623,6 +677,7 @@ impl Installer<'_> {
             &Owners {
                 session: &self.session,
                 fetcher: self.fetcher,
+                version_type: self.version_type,
             },
             self.record,
             &reporter,
@@ -889,6 +944,8 @@ struct Owners<'a> {
     /// The projects installed earlier in the same call, with their names.
     session: &'a HashMap<u32, String>,
     fetcher: &'a dyn Fetcher,
+    /// The game version of the chosen project, for the files the app would choose.
+    version_type: Option<u32>,
 }
 
 impl Owners<'_> {
@@ -904,6 +961,59 @@ impl Owners<'_> {
             _ => format!("CurseForge project {id}"),
         }
     }
+}
+
+impl Owners<'_> {
+    /// Whether `owner` and the `file` being installed are tied by required dependencies beyond
+    /// the direct ones (issue #346): the file requires the owner through other dependencies, or
+    /// the owner's file (the one in its record, otherwise the one the app would choose) requires
+    /// this project, directly or through others. It asks CurseForge, so it is called only for
+    /// an owner nothing else accepts; what cannot be read counts as no dependency. `read` keeps
+    /// the dependencies already asked for this zip: each project is read at most once, whatever
+    /// the number of owners and of paths that reach it.
+    fn tied(
+        &self,
+        installation: &Installation,
+        records: &InstalledRecords,
+        file: &File,
+        owner: u32,
+        read: &RefCell<HashMap<u32, Vec<u32>>>,
+    ) -> bool {
+        let required_by = |id: u32| {
+            if let Some(known) = read.borrow().get(&id) {
+                return known.clone();
+            }
+            let installed = records.get(&id).map(|record| record.file_id);
+            let required = self
+                .fetcher
+                .required(installation, id, installed, self.version_type)
+                .unwrap_or_default();
+            read.borrow_mut().insert(id, required.clone());
+            required
+        };
+        reaches(required_dependencies(file), owner, &required_by)
+            || reaches(required_by(owner), file.mod_id, &required_by)
+    }
+}
+
+/// Whether `target` is in `level` or among the required dependencies of its projects, followed
+/// like the dependency install: each project once, at most [`MAX_DEPENDENCY_DEPTH`] levels.
+fn reaches(mut level: Vec<u32>, target: u32, required_by: &dyn Fn(u32) -> Vec<u32>) -> bool {
+    let mut visited = HashSet::new();
+    for _ in 0..MAX_DEPENDENCY_DEPTH {
+        if level.contains(&target) {
+            return true;
+        }
+        level = level
+            .into_iter()
+            .filter(|id| visited.insert(*id))
+            .flat_map(required_by)
+            .collect();
+        if level.is_empty() {
+            return false;
+        }
+    }
+    false
 }
 
 /// What [`install_staged`] did with a zip.
@@ -981,7 +1091,8 @@ fn required_dependencies(file: &File) -> Vec<u32> {
 /// `updates::install_bytes`, deciding first what to do with the folders that already exist and
 /// belong to another project ([`foreign_folders`]):
 /// - the owner was installed earlier in the same call, or is a required dependency of this
-///   file: the folder on disk stays as it is and with its owner, and the zip's copy is dropped;
+///   file, or the two are tied through further required dependencies ([`Owners::tied`]): the
+///   folder on disk stays as it is and with its owner, and the zip's copy is dropped;
 /// - any other owner: the zip is rejected and `AddOns` stays as it was.
 ///
 /// The folders returned are those installed, without the ones left to their owner.
@@ -1006,8 +1117,16 @@ fn install_staged(
     )?;
     let required = required_dependencies(file);
     let mut provider = None;
+    // The owners already asked about: several folders often have the same one.
+    let mut tied: HashMap<u32, bool> = HashMap::new();
+    let read = RefCell::new(HashMap::new());
     for (folder, owner) in foreign {
-        if !owners.session.contains_key(&owner) && !required.contains(&owner) {
+        let accepted = owners.session.contains_key(&owner)
+            || required.contains(&owner)
+            || *tied
+                .entry(owner)
+                .or_insert_with(|| owners.tied(installation, records, file, owner, &read));
+        if !accepted {
             return Err(format!(
                 "The folder \"{folder}\" belongs to another installed addon ({}): nothing was changed.",
                 owners.label(owner)
@@ -1917,6 +2036,225 @@ mod tests {
         );
         assert_eq!(lib_lua(&fx, "Lib"), "old");
         assert!(written.is_empty());
+    }
+
+    /// A parent (project 1) that ships `Lib` and requires the library (project 2) through
+    /// project 3 (issue #346).
+    fn bundled_through_another() -> Routes {
+        let mut routes = graph(&[(1, &[(3, REQUIRED)]), (3, &[(2, REQUIRED)]), (2, &[])]);
+        routes.zips.insert(download_url(10), zip_of(PARENT_ZIP));
+        routes
+            .zips
+            .insert(download_url(20), zip_of(&[("Lib/Lib.lua", "own")]));
+        routes
+    }
+
+    /// The disk and the records after the parent of [`bundled`] was installed, with `Lib`
+    /// recognisable as the copy already there.
+    fn parent_installed(fx: &Fixture) -> InstalledRecords {
+        write_folder(&fx.addons, "Parent", "## Title: Parent\n");
+        write_folder(&fx.addons, "Lib", "## Title: Lib\n");
+        InstalledRecords::from([(1, record(10, &["Parent", "Lib"]))])
+    }
+
+    #[test]
+    fn a_library_chosen_after_the_addon_that_ships_it_is_already_included() {
+        let fx = fixture();
+        let records = parent_installed(&fx);
+        let routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+
+        let (outcome, written) = install(&fx, routes, &records, 2, None);
+
+        assert_eq!(outcome.status, Skipped);
+        assert_eq!(
+            outcome.message.as_deref(),
+            Some("Already included in Project 1.")
+        );
+        assert!(written.is_empty());
+        assert_eq!(names(&fx.addons), ["Lib", "Parent"]);
+        assert_eq!(lib_lua(&fx, "Lib"), "old");
+        assert_eq!(names(fx.addons.parent().unwrap()), ["AddOns"]);
+    }
+
+    #[test]
+    fn a_library_its_owner_requires_through_another_project_is_already_included() {
+        let fx = fixture();
+        let records = parent_installed(&fx);
+
+        let (outcome, written) = install(&fx, bundled_through_another(), &records, 2, None);
+
+        assert_eq!(outcome.status, Skipped, "{outcome:?}");
+        assert_eq!(
+            outcome.message.as_deref(),
+            Some("Already included in Project 1.")
+        );
+        assert!(written.is_empty());
+        assert_eq!(lib_lua(&fx, "Lib"), "old");
+    }
+
+    #[test]
+    fn a_library_of_an_unrecorded_owner_that_requires_it_is_already_included() {
+        let fx = fixture();
+        // No record: the `.toc` says `Lib` belongs to project 1, whose file requires project 2.
+        write_folder(&fx.addons, "Lib", "## X-Curse-Project-ID: 1\n");
+        let routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+
+        let (outcome, written) = install(&fx, routes, &InstalledRecords::new(), 2, None);
+
+        assert_eq!(outcome.status, Skipped, "{outcome:?}");
+        assert_eq!(
+            outcome.message.as_deref(),
+            Some("Already included in Project 1.")
+        );
+        assert!(written.is_empty());
+        assert_eq!(lib_lua(&fx, "Lib"), "old");
+    }
+
+    #[test]
+    fn a_parent_leaves_the_folder_of_a_dependency_of_its_dependency_alone() {
+        let fx = fixture();
+        write_folder(&fx.addons, "Lib", "## Title: Lib\n");
+        let records = InstalledRecords::from([(2, record(20, &["Lib"]))]);
+
+        let (outcomes, written) = install_all(&fx, bundled_through_another(), &records, 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [
+                (1, Installed, None),
+                (3, Installed, Some(1)),
+                (2, Skipped, Some(3))
+            ]
+        );
+        assert_eq!(outcomes[2].message.as_deref(), Some("Already installed."));
+        assert_eq!(names(&fx.addons), ["Lib", "P3", "Parent"]);
+        assert_eq!(lib_lua(&fx, "Lib"), "old");
+        assert_eq!(
+            written,
+            [(1, record(10, &["Parent"])), (3, record(30, &["P3"]))]
+        );
+    }
+
+    #[test]
+    fn an_import_of_a_parent_and_its_bundled_library_skips_the_library() {
+        let fx = fixture();
+        let routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+
+        let (outcomes, _, _) = two_phases(
+            &fx,
+            routes,
+            &[1, 2],
+            InstalledRecords::new(),
+            &VersionOverrides::new(),
+        );
+
+        assert_eq!(
+            outcomes,
+            [
+                vec![(1, Installed, None), (2, Skipped, Some(1))],
+                vec![(2, Skipped, None)]
+            ]
+        );
+        assert_eq!(lib_lua(&fx, "Lib"), "bundled");
+    }
+
+    #[test]
+    fn an_owner_whose_file_cannot_be_read_still_refuses_the_folder() {
+        let fx = fixture();
+        let records = parent_installed(&fx);
+        let mut routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+        // The owner's installed file would say it requires project 2, but the request fails.
+        routes.broken.push(format!("{API}/v1/mods/1/files/10"));
+
+        let (outcome, written) = install(&fx, routes, &records, 2, None);
+
+        assert_eq!(outcome.status, Failed);
+        assert_eq!(
+            outcome.message.as_deref(),
+            Some(
+                "The folder \"Lib\" belongs to another installed addon (Project 1): nothing was changed."
+            )
+        );
+        assert!(written.is_empty());
+        assert_eq!(lib_lua(&fx, "Lib"), "old");
+    }
+
+    #[test]
+    fn an_owner_tied_by_nothing_is_asked_about_and_refused() {
+        let fx = fixture();
+        write_folder(&fx.addons, "Lib", "## Title: Lib\n");
+        // Project 3 owns `Lib`: the parent does not require it, and it requires nothing.
+        let records = InstalledRecords::from([(3, record(30, &["Lib"]))]);
+        let mut routes = graph(&[(1, &[(2, REQUIRED)]), (2, &[]), (3, &[])]);
+        routes.zips.insert(download_url(10), zip_of(PARENT_ZIP));
+
+        let (outcomes, written) = install_all(&fx, routes, &records, 1, None);
+
+        assert_eq!(summary(&outcomes), [(1, Failed, None)]);
+        let message = outcomes[0].message.as_deref().unwrap();
+        assert!(message.contains("(Project 3)"), "{message}");
+        assert!(written.is_empty());
+        assert_eq!(names(&fx.addons), ["Lib"]);
+        assert_eq!(lib_lua(&fx, "Lib"), "old");
+    }
+
+    #[test]
+    fn a_project_reached_by_two_paths_is_read_once() {
+        let fx = fixture();
+        write_folder(&fx.addons, "Lib", "## Title: Lib\n");
+        write_folder(&fx.addons, "Other", "## Title: Other\n");
+        // Projects 5 and 6 own a folder each. The parent requires 2 and 3, which both require 4,
+        // and the owner 5 requires 2 as well: the walk from the parent and the walk from the
+        // owner pass through the same projects, and neither reaches the other end.
+        let records =
+            InstalledRecords::from([(5, record(50, &["Lib"])), (6, record(60, &["Other"]))]);
+        let mut routes = graph(&[
+            (1, &[(2, REQUIRED), (3, REQUIRED)]),
+            (2, &[(4, REQUIRED)]),
+            (3, &[(4, REQUIRED)]),
+            (4, &[]),
+            (5, &[(2, REQUIRED)]),
+            (6, &[]),
+        ]);
+        routes.zips.insert(
+            download_url(10),
+            zip_of(&[("Lib/Lib.lua", "bundled"), ("Other/Other.lua", "bundled")]),
+        );
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, _) = install_all(&fx, routes, &records, 1, None);
+
+        assert_eq!(summary(&outcomes), [(1, Failed, None)]);
+        let requests = log.requests.lock().unwrap();
+        for id in 2..=5 {
+            let file = format!("/v1/mods/{id}/files/");
+            let read = requests.iter().filter(|url| url.contains(&file)).count();
+            assert_eq!(read, 1, "project {id}: {requests:?}");
+        }
+        // The first refusal ends the install: the second owner is never asked about.
+        assert!(!requests.iter().any(|url| url.contains("/v1/mods/6/files/")));
+    }
+
+    #[test]
+    fn an_owner_accepted_without_asking_costs_no_request() {
+        let fx = fixture();
+        write_folder(&fx.addons, "Lib", "## Title: Lib\n");
+        let records = InstalledRecords::from([(2, record(20, &["Lib"]))]);
+        let routes = bundled(PARENT_ZIP, &[("Lib/Lib.lua", "own")]);
+        let log = Arc::clone(&routes.log);
+
+        let (outcomes, _) = install_all(&fx, routes, &records, 1, None);
+
+        assert_eq!(
+            summary(&outcomes),
+            [(1, Installed, None), (2, Skipped, Some(1))]
+        );
+        // The owner is a direct dependency: its file is never read.
+        let requests = log.requests.lock().unwrap();
+        assert!(
+            !requests.iter().any(|url| url.contains("/v1/mods/2/files/")),
+            "{requests:?}"
+        );
     }
 
     #[test]
