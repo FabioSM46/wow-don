@@ -2,12 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { errorMessage } from "../api";
 import { SettingRow, SettingsSection } from "./Setting";
-
-/** The same accounts as `.github/FUNDING.yml`. */
-export const SUPPORT_PAGES = [
-  { label: "GitHub Sponsors", url: "https://github.com/sponsors/FabioSM46" },
-  { label: "Ko-fi", url: "https://ko-fi.com/fabiosm46" },
-] as const;
+import { SUPPORT_PAGES } from "./supportLinks";
 
 /**
  * The "Support" section of Options: two buttons that open GitHub Sponsors and Ko-fi in the
