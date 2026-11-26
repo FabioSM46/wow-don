@@ -97,7 +97,7 @@ for these fields:
 A good report looks like this:
 
 ```text
-WoW-don version: 0.5.3
+WoW-don version: 0.5.4
 Operating system: Linux, Ubuntu 24.04
 How you run the game: Lutris
 Game version: Classic Era
