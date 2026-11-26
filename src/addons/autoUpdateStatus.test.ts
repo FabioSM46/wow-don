@@ -52,7 +52,14 @@ function status(
     lastRound:
       mode === null
         ? null
-        : { mode, startedAt: "T0", finishedAt: "T2", retrying: false, installations: reports },
+        : {
+            mode,
+            startedAt: "T0",
+            finishedAt: "T2",
+            retrying: false,
+            requested: false,
+            installations: reports,
+          },
     undoable: [],
     ...overrides,
   };
@@ -290,7 +297,14 @@ describe("staleUpdateChecks", () => {
     reports: InstallationReport[],
   ): AutoUpdateStatus {
     return status(mode, [], {
-      lastRound: { mode, startedAt: "T0", finishedAt, retrying: false, installations: reports },
+      lastRound: {
+        mode,
+        startedAt: "T0",
+        finishedAt,
+        retrying: false,
+        requested: false,
+        installations: reports,
+      },
     });
   }
 

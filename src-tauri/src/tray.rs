@@ -555,6 +555,7 @@ mod tests {
             started_at: "2026-10-27T10:00:00Z".to_owned(),
             finished_at: "2026-10-27T10:01:00Z".to_owned(),
             retrying: false,
+            requested: false,
             installations,
         }
     }
