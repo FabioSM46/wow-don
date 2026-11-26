@@ -32,6 +32,7 @@ import { AutoUpdateOptions } from "./options/AutoUpdateOptions";
 import { BetaOption } from "./options/BetaOption";
 import { SystemOptions } from "./options/SystemOptions";
 import { ImportExport } from "./options/ImportExport";
+import { Support } from "./options/Support";
 import { applyTheme } from "./options/theme";
 import { Search } from "./search/Search";
 import { clearStale, markStale } from "./search/stale";
@@ -510,6 +511,7 @@ function App() {
                 }}
               />
             )}
+            <Support />
           </div>
         </div>
       </main>

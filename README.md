@@ -97,7 +97,7 @@ for these fields:
 A good report looks like this:
 
 ```text
-WoW-don version: 0.5.3
+WoW-don version: 0.5.4
 Operating system: Linux, Ubuntu 24.04
 How you run the game: Lutris
 Game version: Classic Era
@@ -269,6 +269,12 @@ compiled into the app. `scripts/third-party-licenses.py` writes it before every 
 
 World of Warcraft is a trademark of Blizzard Entertainment. WoW-don is an independent
 project, neither affiliated with nor endorsed by Blizzard, CurseForge or Overwolf.
+
+## Support
+
+WoW-don is free and stays free. If it is useful to you, you can support its development through
+[GitHub Sponsors](https://github.com/sponsors/FabioSM46) or [Ko-fi](https://ko-fi.com/fabiosm46);
+the same links are in Options → Support.
 
 ## Licence
 
