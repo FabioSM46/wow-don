@@ -105,6 +105,8 @@ export type RoundReport = {
   finishedAt: string;
   /** A check failed because of the network: the next round is brought forward. */
   retrying: boolean;
+  /** Asked for from the tray ("Check for updates", "Update all"), not scheduled. */
+  requested: boolean;
   /** Only the installations that take part. */
   installations: InstallationReport[];
 };

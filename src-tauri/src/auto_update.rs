@@ -104,6 +104,10 @@ pub struct RoundReport {
     /// At least one check failed because of the network: the next round is brought forward
     /// (backoff).
     pub retrying: bool,
+    /// The user asked for the round (the tray's "Check for updates" or "Update all", issue
+    /// #304); `false` for a scheduled round. The window shows the outcome of a requested
+    /// `install` round as an update summary (issue #351).
+    pub requested: bool,
     /// One entry per participating installation, in the order of `installations.json`; those
     /// excluded entirely are not there.
     pub installations: Vec<InstallationReport>,
@@ -904,6 +908,7 @@ fn round(
             started_at,
             finished_at: iso_utc(SystemTime::now()),
             retrying,
+            requested,
             installations,
         });
         // Cleared with the new outcome: the tray below no longer shows "Checking for updates…"
@@ -1369,6 +1374,7 @@ mod tests {
             started_at: "2026-10-27T09:59:00Z".to_owned(),
             finished_at: "2026-10-27T10:01:00Z".to_owned(),
             retrying: false,
+            requested: false,
             installations,
         }
     }
@@ -1594,6 +1600,7 @@ mod tests {
                 started_at: "a".to_owned(),
                 finished_at: "b".to_owned(),
                 retrying: true,
+                requested: true,
                 installations: vec![InstallationReport {
                     installation_id: "id".to_owned(),
                     installation_name: "Retail".to_owned(),
@@ -1625,6 +1632,7 @@ mod tests {
         let round = &json["lastRound"];
         assert_eq!(round["mode"], "install");
         assert_eq!(round["retrying"], true);
+        assert_eq!(round["requested"], true);
         let installation = &round["installations"][0];
         assert_eq!(installation["installationId"], "id");
         assert_eq!(installation["checkError"], serde_json::Value::Null);
@@ -1888,6 +1896,7 @@ mod tests {
             started_at: "a".to_owned(),
             finished_at: "b".to_owned(),
             retrying: false,
+            requested: false,
             installations: vec![report],
         };
         // Only "Gamma" is left.

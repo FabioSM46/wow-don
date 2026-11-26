@@ -3,6 +3,13 @@ import { api, errorMessage, type AutoUpdateMode, type AutoUpdateStatus } from ".
 import { StatusMessage } from "../StatusArea";
 import { ProgressBar } from "./ProgressBar";
 import { describeUndo, statusLine, type StatusProblem } from "./autoUpdateStatus";
+import { traySummary } from "./traySummary";
+
+/**
+ * The tray summaries dismissed in this session, by key (installation and round). Outside the
+ * component: switching tab or installation does not bring a dismissed summary back.
+ */
+const dismissedSummaries = new Set<string>();
 
 type Props = {
   /**
@@ -31,7 +38,8 @@ type UndoResult = { text: string; problems: StatusProblem[] } | { error: string 
  * its problems inline on a click and "Undo" for an undoable round. The status comes from
  * `get_auto_update_status` and the `auto-update` event; this component owns the Undo, whose
  * progress and result are messages of the status area (issue #315): they would move the table
- * if they opened here.
+ * if they opened here. So is the summary of a round asked for with the tray's "Update all"
+ * (issue #351), which stays until it is dismissed or a newer round replaces it.
  */
 export function AutoUpdateLine({
   summary,
@@ -44,7 +52,10 @@ export function AutoUpdateLine({
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<UndoResult | null>(null);
+  // Bumped by "Dismiss" on the tray summary: the dismissed set is outside React.
+  const [, setDismissals] = useState(0);
   const line = statusLine(status, installationId, mode, undefined, undoneRound);
+  const tray = traySummary(status, installationId, undoneRound, dismissedSummaries);
 
   async function undo() {
     // The round whose outcome is being undone: the one shown now.
@@ -109,6 +120,33 @@ export function AutoUpdateLine({
         </span>
       </p>
       {line && expanded && line.problems.length > 0 && <ProblemList problems={line.problems} />}
+      {tray && (
+        <StatusMessage
+          key={tray.key}
+          error={"error" in tray}
+          onDismiss={() => {
+            dismissedSummaries.add(tray.key);
+            setDismissals((n) => n + 1);
+          }}
+        >
+          {"error" in tray ? (
+            `Update failed: ${tray.error}`
+          ) : (
+            <>
+              <p>{tray.text}</p>
+              {tray.details.length > 0 && (
+                <ul>
+                  {tray.details.map((detail, index) => (
+                    <li key={index} className={detail.failed ? "error" : "muted"}>
+                      {detail.name}: {detail.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </StatusMessage>
+      )}
       {busy && (
         <StatusMessage progress>
           <ProgressBar value={null} label="Undoing…" name="Undo" />
